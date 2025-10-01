@@ -1,26 +1,158 @@
-@import "tailwindcss";
+html {
+  scroll-behavior: smooth;
+}
+/* Einheitliche Buttons */
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/* Basis */
+.btn {
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s ease;
+}
+/* CTA: Testen */
+.btn-cta {
+  background: var(--color-accent);
+  color: #fff;
+}
+.btn-cta:hover {
+  filter: brightness(90%);
+  transform: translateY(-2px);
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+/* CTA Button: "Testen" */
+.btn-cta {
+  background: #ff6b6b; /* warme Akzentfarbe */
+  color: #fff;
+}
+.btn-cta:hover {
+  background: #e55b5b;
+  transform: translateY(-2px);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* Secondary Button: "Anmelden" */
+.btn-secondary {
+  background: #e0e0e0; /* hellgrau im Light Mode */
+  color: #333;
+}
+.btn-secondary:hover {
+  background: #d5d5d5;
+  transform: translateY(-2px);
+}
+
+/* Dark Mode Anpassungen */
+.dark .btn-secondary {
+  background: #444; /* neutrales dunkles Grau */
+  color: #fff;
+}
+.dark .btn-secondary:hover {
+  background: #555;
+}
+
+section {
+  scroll-margin-top: 100px; /* Höhe des Headers oder gewünschter Abstand */
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-poppins), sans-serif;
 }
+
+/* Basis Reset */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+body {
+  background: var(--color-bg);
+  margin: 0;
+}
+
+html, body {
+  font-family: 'Inter', sans-serif;
+  min-height: 100%;
+  background: var(--color-bg);
+  color: var(--color-text);
+  transition: background 0.3s ease, color 0.3s ease;
+}
+
+/* ------------------------------
+   Light Theme (wie vorher)
+------------------------------ */
+:root {
+  /* Light Mode */
+  --color-bg: #fdfbf7;
+  --color-text: #222;
+  --color-card: #ffffff;
+  --color-nav-bg: #f2f2f2;
+  --color-nav-text: #333;
+  --color-button-bg: #e0e0e0;
+  --color-button-text: #333;
+  --color-accent: #0066cc;      /* klares Blau */
+  --color-footer-bg: #f8f8f8;
+  --color-footer-text: #555;
+}
+
+.dark {
+  /* Dark Mode */
+  --color-bg: #121212;
+  --color-text: #f5f5f5;
+  --color-card: #1e1e1e;
+  --color-nav-bg: #2a2a2a;
+  --color-nav-text: #f5f5f5;
+  --color-button-bg: #444;
+  --color-button-text: #fff;
+  --color-accent: #4dabf7;      /* helleres Blau für Dark Mode */
+  --color-footer-bg: #181818;
+  --color-footer-text: #aaa;
+}
+
+.pastel {
+  /* Pastel Mode */
+  --color-bg: #faf6ff;
+  --color-text: #4a3f5c;
+  --color-card: #fffaff;
+  --color-nav-bg: #f0e9f9;
+  --color-nav-text: #4a3f5c;
+  --color-button-bg: #e7def6;
+  --color-button-text: #4a3f5c;
+  --color-accent: #9c6ade;      /* sanftes Lila */
+  --color-footer-bg: #f2ebfb;
+  --color-footer-text: #4a3f5c;
+}
+
+/* Basis: kompakt (wie jetzt) */
+.btn-narrow {
+  width: 150px;
+  padding: 0.5rem;
+  border-radius: 6px;
+  background: var(--color-accent);
+  color: #fff;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+/* Hover-Effekt */
+.btn-narrow:hover {
+  filter: brightness(90%);
+  transform: translateY(-2px);
+}
+
+/* Mobile: Buttons automatisch breiter */
+@media (max-width: 600px) {
+  .btn-narrow {
+    width: 100%;       /* nimmt volle Breite */
+    max-width: 250px;  /* aber nicht größer als 250px */
+    padding: 0.75rem;
+  }
+}
+
+/* ------------------------------
+   Tooltip Fix
+------------------------------ */
+
+
