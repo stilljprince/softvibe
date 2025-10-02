@@ -1,130 +1,136 @@
-html {
-  scroll-behavior: smooth;
-}
-/* Einheitliche Buttons */
-
-/* Basis */
-.btn {
-  padding: 0.5rem 1rem;
-  border-radius: 8px;
-  font-weight: 600;
-  cursor: pointer;
-  border: none;
-  transition: all 0.2s ease;
-}
-/* CTA: Testen */
-.btn-cta {
-  background: var(--color-accent);
-  color: #fff;
-}
-.btn-cta:hover {
-  filter: brightness(90%);
-  transform: translateY(-2px);
-}
-
-/* CTA Button: "Testen" */
-.btn-cta {
-  background: #ff6b6b; /* warme Akzentfarbe */
-  color: #fff;
-}
-.btn-cta:hover {
-  background: #e55b5b;
-  transform: translateY(-2px);
-}
-
-/* Secondary Button: "Anmelden" */
-.btn-secondary {
-  background: #e0e0e0; /* hellgrau im Light Mode */
-  color: #333;
-}
-.btn-secondary:hover {
-  background: #d5d5d5;
-  transform: translateY(-2px);
-}
-
-/* Dark Mode Anpassungen */
-.dark .btn-secondary {
-  background: #444; /* neutrales dunkles Grau */
-  color: #fff;
-}
-.dark .btn-secondary:hover {
-  background: #555;
-}
-
-section {
-  scroll-margin-top: 100px; /* Höhe des Headers oder gewünschter Abstand */
-}
-
-body {
-  font-family: var(--font-poppins), sans-serif;
-}
-
-/* Basis Reset */
+/* ===========================
+   Basis Reset
+=========================== */
 * {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
 }
-body {
-  background: var(--color-bg);
-  margin: 0;
-}
 
-html, body {
-  font-family: 'Inter', sans-serif;
-  min-height: 100%;
+html,
+body {
+  height: 100%;
+  width: 100%;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
   background: var(--color-bg);
   color: var(--color-text);
-  transition: background 0.3s ease, color 0.3s ease;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* ------------------------------
-   Light Theme (wie vorher)
------------------------------- */
+main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ===========================
+   Farben: Light / Dark / Pastel
+=========================== */
 :root {
-  /* Light Mode */
-  --color-bg: #fdfbf7;
+  --color-bg: #faf8f5;
   --color-text: #222;
+  --color-accent: #6a5acd; /* violett */
+  --color-nav-bg: rgba(0, 0, 0, 0.05);
+  --color-nav-text: #222;
   --color-card: #ffffff;
-  --color-nav-bg: #f2f2f2;
-  --color-nav-text: #333;
-  --color-button-bg: #e0e0e0;
-  --color-button-text: #333;
-  --color-accent: #0066cc;      /* klares Blau */
-  --color-footer-bg: #f8f8f8;
-  --color-footer-text: #555;
+  --color-button-bg: #eee;
+  --color-button-text: #222;
+  --color-input-bg: #fff;
+  --color-input-text: #222;
+  --color-input-border: #ccc;
 }
 
 .dark {
-  /* Dark Mode */
-  --color-bg: #121212;
+  --color-bg: #1a1a1a;
   --color-text: #f5f5f5;
-  --color-card: #1e1e1e;
-  --color-nav-bg: #2a2a2a;
+  --color-accent: #4da6ff; /* hellblau */
+  --color-nav-bg: rgba(255, 255, 255, 0.08);
   --color-nav-text: #f5f5f5;
-  --color-button-bg: #444;
+  --color-card: #2a2a2a;
+  --color-button-bg: #333;
   --color-button-text: #fff;
-  --color-accent: #4dabf7;      /* helleres Blau für Dark Mode */
-  --color-footer-bg: #181818;
-  --color-footer-text: #aaa;
+  --color-input-bg: #333;
+  --color-input-text: #fff;
+  --color-input-border: #555;
 }
 
 .pastel {
-  /* Pastel Mode */
-  --color-bg: #faf6ff;
-  --color-text: #4a3f5c;
-  --color-card: #fffaff;
-  --color-nav-bg: #f0e9f9;
-  --color-nav-text: #4a3f5c;
-  --color-button-bg: #e7def6;
-  --color-button-text: #4a3f5c;
-  --color-accent: #9c6ade;      /* sanftes Lila */
-  --color-footer-bg: #f2ebfb;
-  --color-footer-text: #4a3f5c;
+  --color-bg: #fdf6f9;
+  --color-text: #333;
+  --color-accent: #ff7eb9; /* pastel pink */
+  --color-nav-bg: rgba(0, 0, 0, 0.05);
+  --color-nav-text: #333;
+  --color-card: #fff;
+  --color-button-bg: #f0e6ef;
+  --color-button-text: #333;
+  --color-input-bg: #fff;
+  --color-input-text: #333;
+  --color-input-border: #ccc;
 }
 
-/* Basis: kompakt (wie jetzt) */
-.btn-narrow {
+/* ===========================
+   Buttons
+=========================== */
+button,
+a.btn,
+input[type="submit"] {
+  transition: all 0.2s ease;
+}
+
+button:hover,
+a.btn:hover,
+input[type="submit"]:hover {
+  transform: translateY(-2px);
+  filter: brightness(90%);
+}
+
+button:active,
+a.btn:active,
+input[type="submit"]:active {
+  transform: translateY(0);
+  filter: brightness(100%);
+}
+
+/* ===========================
+   Inputs & Textarea
+=========================== */
+input,
+textarea {
+  width: 100%;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--color-input-border);
+  background: var(--color-input-bg);
+  color: var(--color-input-text);
+  font-size: 1rem;
+  outline: none;
+  transition: border 0.2s ease, box-shadow 0.2s ease;
+}
+
+input:focus,
+textarea:focus {
+  border: 1px solid var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent + "20");
+}
+
+/* ===========================
+   Links
+=========================== */
+a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* ===========================
+   Kontaktformular Button
+=========================== */
+form button {
   width: 150px;
   padding: 0.5rem;
   border-radius: 6px;
@@ -134,25 +140,22 @@ html, body {
   border: none;
   cursor: pointer;
   transition: all 0.2s ease;
+  align-self: center;
 }
 
-/* Hover-Effekt */
-.btn-narrow:hover {
-  filter: brightness(90%);
-  transform: translateY(-2px);
-}
-
-/* Mobile: Buttons automatisch breiter */
-@media (max-width: 600px) {
-  .btn-narrow {
-    width: 100%;       /* nimmt volle Breite */
-    max-width: 250px;  /* aber nicht größer als 250px */
-    padding: 0.75rem;
+/* ===========================
+   Systemleisten iOS/Android
+=========================== */
+@supports (color-scheme: light dark) {
+  :root {
+    color-scheme: light dark;
   }
 }
 
-/* ------------------------------
-   Tooltip Fix
------------------------------- */
-
+html {
+  background-color: var(--color-bg);
+}
+body {
+  background-color: var(--color-bg);
+}
 

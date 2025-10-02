@@ -6,13 +6,9 @@ export const metadata: Metadata = {
   description: "AI-gestützte ASMR-Plattform",
 };
 
-// 👉 Hier gehört themeColor jetzt rein:
+// 👉 Wichtig: Next.js unterstützt `themeColor` nur noch über viewport
 export const viewport: Viewport = {
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#fdfbf7" },
-    { media: "(prefers-color-scheme: dark)", color: "#121212" },
-    { media: "(prefers-color-scheme: pastel)", color: "#faf6ff" },
-  ],
+  themeColor: "#fdfbf7", // gleiche Farbe wie dein Light-Mode-Background
 };
 
 export default function RootLayout({
@@ -23,6 +19,7 @@ export default function RootLayout({
   return (
     <html lang="de">
       <head>
+        {/* iOS spezifische Einstellungen */}
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta
           name="apple-mobile-web-app-status-bar-style"
@@ -33,4 +30,5 @@ export default function RootLayout({
     </html>
   );
 }
+
 
