@@ -196,27 +196,22 @@ export default function Home() {
                 boxShadow: "-2px 0 10px rgba(0,0,0,0.2)",
               }}
             >
-              {/* Theme Switch oben links */}
+             {/* Theme Switch Button – schließt das Menü NICHT */}
               <button
                 onClick={() => {
-                  handleToggle();
-                  closeMenu();
+                  handleToggle(); // Nur Theme ändern
                 }}
                 style={{
-                  alignSelf: "flex-start",
-                  width: "40px",
-                  height: "40px",
-                  borderRadius: "50%",
-                  background: "var(--color-button-bg)",
-                  color: "var(--color-button-text)",
+                  marginTop: "2rem",
+                  background: "transparent",
                   border: "none",
-                  cursor: "pointer",
-                  fontSize: "1.25rem",
-                  marginBottom: "1.5rem",
-                }}
-              >
-                {getThemeIcon()}
+                  textAlign: "left",
+                  fontWeight: 600,
+                 }}
+>
+                {getThemeIcon()} Theme wechseln
               </button>
+
 
               {/* Schließen oben rechts */}
               <button
@@ -428,9 +423,17 @@ export default function Home() {
         </p>
 
         <form
+
           onSubmit={async (e) => {
             e.preventDefault();
             const form = e.currentTarget;
+
+            // Honeypot check
+            if ((form.elements.namedItem("honeypot") as HTMLInputElement).value !== "") {
+              console.warn("Spam detected - ignored.");
+              return;
+            }
+
             const data = {
               name: (form.elements.namedItem("name") as HTMLInputElement).value,
               email: (form.elements.namedItem("email") as HTMLInputElement).value,
@@ -460,10 +463,36 @@ export default function Home() {
             gap: "1rem",
           }}
         >
+         <input
+            type="text"
+            name="honeypot"
+            tabIndex={-1}
+            autoComplete="off"
+            style={{ display: "none" }}
+          />
+
           <input type="text" name="name" placeholder="Dein Name" required />
           <input type="email" name="email" placeholder="Deine E-Mail" required />
           <textarea name="message" placeholder="Deine Nachricht" rows={5} required />
-          <button type="submit">Absenden</button>
+          <button
+            type="submit"
+            disabled={status === "sending"}
+            style={{
+              width: "150px",
+              padding: "0.5rem",
+              borderRadius: "6px",
+              background: status === "sending" ? "gray" : "var(--color-accent)",
+              color: "#fff",
+              fontWeight: 600,
+              border: "none",
+              cursor: status === "sending" ? "not-allowed" : "pointer",
+              transition: "all 0.2s ease",
+              alignSelf: "center",
+            }}
+          >
+            {status === "sending" ? "Senden..." : "Absenden"}
+          </button>
+
         </form>
 
         {status === "sending" && <p>⏳ Nachricht wird gesendet...</p>}
