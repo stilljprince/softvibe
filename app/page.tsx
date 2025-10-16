@@ -10,6 +10,7 @@ export default function Home() {
   const [status, setStatus] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [closing, setClosing] = useState(false);
+  const [cooldown, setCooldown] = useState(false);
 
   // Theme aus localStorage laden
   useEffect(() => {
@@ -423,17 +424,9 @@ export default function Home() {
         </p>
 
         <form
-
           onSubmit={async (e) => {
             e.preventDefault();
             const form = e.currentTarget;
-
-            // Honeypot check
-            if ((form.elements.namedItem("honeypot") as HTMLInputElement).value !== "") {
-              console.warn("Spam detected - ignored.");
-              return;
-            }
-
             const data = {
               name: (form.elements.namedItem("name") as HTMLInputElement).value,
               email: (form.elements.namedItem("email") as HTMLInputElement).value,
@@ -450,6 +443,10 @@ export default function Home() {
               if (result.success) {
                 setStatus("success");
                 form.reset();
+
+                // Cooldown starten (30 Sek)
+                setCooldown(true);
+                setTimeout(() => setCooldown(false), 30000);
               } else setStatus("error");
             } catch {
               setStatus("error");
@@ -463,41 +460,35 @@ export default function Home() {
             gap: "1rem",
           }}
         >
-         <input
-            type="text"
-            name="honeypot"
-            tabIndex={-1}
-            autoComplete="off"
-            style={{ display: "none" }}
-          />
-
           <input type="text" name="name" placeholder="Dein Name" required />
           <input type="email" name="email" placeholder="Deine E-Mail" required />
           <textarea name="message" placeholder="Deine Nachricht" rows={5} required />
           <button
             type="submit"
-            disabled={status === "sending"}
+            disabled={status === "sending" || cooldown}
             style={{
               width: "150px",
               padding: "0.5rem",
               borderRadius: "6px",
-              background: status === "sending" ? "gray" : "var(--color-accent)",
+              background: (status === "sending" || cooldown) ? "gray" : "var(--color-accent)",
               color: "#fff",
               fontWeight: 600,
               border: "none",
-              cursor: status === "sending" ? "not-allowed" : "pointer",
+              cursor: (status === "sending" || cooldown) ? "not-allowed" : "pointer",
               transition: "all 0.2s ease",
               alignSelf: "center",
             }}
           >
-            {status === "sending" ? "Senden..." : "Absenden"}
+            {status === "sending"
+              ? "Senden…"
+              : cooldown
+              ? "Bitte warten…"
+              : "Absenden"}
           </button>
-
         </form>
 
-        {status === "sending" && <p>⏳ Nachricht wird gesendet...</p>}
-        {status === "success" && <p>✅ Nachricht erfolgreich gesendet!</p>}
         {status === "error" && <p>❌ Fehler beim Senden. Bitte später nochmal versuchen.</p>}
+        {status === "success" && !cooldown && <p>✅ Nachricht erfolgreich gesendet!</p>}
       </section>
 
       {/* ====================== Footer ====================== */}
