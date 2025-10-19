@@ -174,7 +174,7 @@ export async function POST(req: Request) {
     const baseUrl = getBaseUrl();
 
     // PNG aus /public + Cache-Buster (Gmail-Cache)
-    const logoUrl = `${baseUrl}/softvibe-logo-email.png?v=1`;
+    const logoUrl = `${baseUrl}/softvibe-logo-email.png?v=1760907777`;
 
     // SMTP Transport
     const transporter = nodemailer.createTransport({
