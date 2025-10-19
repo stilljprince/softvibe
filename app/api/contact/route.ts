@@ -173,8 +173,12 @@ export async function POST(req: Request) {
     const BRAND = "SoftVibe";
     const baseUrl = getBaseUrl();
 
-    // PNG aus /public + Cache-Buster (Gmail-Cache)
-    const logoUrl = `${baseUrl}/softvibe-logo-email.png?v=1760910258`;
+    // 🔧 nur EINMAL deklarieren:
+    // bevorzugt eine öffentliche URL aus ENV (z. B. GitHub Raw/CDN),
+    // sonst Vercel/localhost mit Cache-Buster (um Gmail-Cache zu umgehen)
+    const logoUrl =
+      (process.env.EMAIL_LOGO_URL && process.env.EMAIL_LOGO_URL.trim()) ||
+      `${baseUrl}/softvibe-logo-email.png?v=${Date.now()}`;
 
     // SMTP Transport
     const transporter = nodemailer.createTransport({
@@ -218,7 +222,7 @@ export async function POST(req: Request) {
       html: adminHtml,
     });
 
-    /* ========== 2) Nutzer-Bestätigung (langer Text/Logo) ========== */
+    /* ========== 2) Nutzer-Bestätigung ========== */
     const userIntro: string[] = [
       `Hallo <strong>${name}</strong>,`,
       `danke dir, dass du uns geschrieben hast! 🙏 Deine Nachricht ist sicher bei uns gelandet und wir schauen sie uns so schnell wie möglich an.`,
@@ -259,5 +263,3 @@ export async function POST(req: Request) {
     );
   }
 }
-
-
