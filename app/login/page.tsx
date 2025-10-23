@@ -1,7 +1,6 @@
-// app/login/page.tsx
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { signIn } from "next-auth/react";
 import { useForm } from "react-hook-form";
@@ -9,9 +8,18 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { LoginSchema, type LoginInput } from "@/lib/validation/auth";
 
 export default function LoginPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: 24 }}>Lade Login…</div>}>
+      <LoginForm />
+    </Suspense>
+  );
+}
+
+function LoginForm() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const callbackUrl = searchParams.get("callbackUrl") || "/"; // Landingpage
+  const searchParams = useSearchParams(); // ✅ jetzt innerhalb von <Suspense>
+  const callbackUrl = searchParams.get("callbackUrl") || "/";
+
   const [error, setError] = useState<string | null>(null);
 
   const {
@@ -60,4 +68,3 @@ export default function LoginPage() {
     </main>
   );
 }
-
