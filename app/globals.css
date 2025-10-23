@@ -164,3 +164,263 @@ body {
   background-color: var(--color-bg);
 }
 
+/* ===== SoftVibe AuthStatus (Premium) ===== */
+:root{
+  --sv-bg: #fdfbf7;          /* deine Light-Background-Farbe */
+  --sv-text: #0f172a;        /* sehr dunkles Blau-Grau für Text */
+  --sv-muted: #e9e4dc;       /* zarte Konturen auf warmem Beige */
+  --sv-surface: #ffffff;     /* Karten-/Button-Hintergrund */
+  --sv-primary: #111827;     /* Primary (fast schwarz) */
+  --sv-primary-fore: #ffffff;
+  --sv-shadow: 0 8px 20px rgba(17,24,39,0.08);
+}
+
+.sv-bar{
+  display: inline-flex;
+  gap: 10px;
+  align-items: center;
+  background: transparent;
+}
+
+.sv-chip{
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--sv-surface);
+  border: 1px solid var(--sv-muted);
+  box-shadow: var(--sv-shadow);
+  text-decoration: none;
+  color: var(--sv-text);
+  transition: transform .08s ease, box-shadow .2s ease, background .2s ease;
+}
+.sv-chip:hover{ transform: translateY(-1px); box-shadow: 0 10px 24px rgba(17,24,39,0.1); }
+.sv-chip:active{ transform: translateY(0); }
+
+.sv-avatar{
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--sv-primary);
+  color: var(--sv-primary-fore);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .3px;
+}
+
+.sv-username{
+  max-width: 180px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+
+.sv-btn{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--sv-muted);
+  background: var(--sv-surface);
+  color: var(--sv-text);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 14px;
+  line-height: 1;
+  min-width: 120px;
+  box-shadow: var(--sv-shadow);
+  transition: transform .08s ease, box-shadow .2s ease, background .2s ease, opacity .2s ease;
+  cursor: pointer;
+}
+.sv-btn:hover{ transform: translateY(-1px); box-shadow: 0 10px 24px rgba(17,24,39,0.1); }
+.sv-btn:active{ transform: translateY(0); }
+.sv-btn:disabled{ opacity: .6; cursor: not-allowed; }
+
+.sv-btn--primary{
+  background: var(--sv-primary);
+  color: var(--sv-primary-fore);
+  border-color: var(--sv-primary);
+}
+
+/* Skeletons für Loading-State */
+.sv-skeleton{
+  height: 36px;
+  background: linear-gradient(90deg, #eee, #f8f8f8, #eee);
+  background-size: 200% 100%;
+  border-radius: 12px;
+  animation: svShine 1.2s linear infinite;
+}
+@keyframes svShine { 0%{ background-position: 0 0 } 100%{ background-position: 200% 0 } }
+
+/* ===== SoftVibe Theme Tokens ===== */
+html, body {
+  background: var(--sv-bg);
+  color: var(--sv-text);
+}
+
+/* Default (falls keine Klasse) = light */
+:root {
+  --sv-bg: #fdfbf7;
+  --sv-text: #0f172a;
+  --sv-muted: #e9e4dc;
+  --sv-surface: #ffffff;
+  --sv-primary: #111827;
+  --sv-primary-fore: #ffffff;
+  --sv-shadow: 0 8px 20px rgba(17,24,39,0.08);
+}
+
+/* Light */
+.light {
+  --sv-bg: #fdfbf7;
+  --sv-text: #0f172a;
+  --sv-muted: #e9e4dc;
+  --sv-surface: #ffffff;
+  --sv-primary: #111827;
+  --sv-primary-fore: #ffffff;
+  --sv-shadow: 0 8px 20px rgba(17,24,39,0.08);
+}
+
+/* Dark */
+.dark {
+  --sv-bg: #0b0f1a;
+  --sv-text: #f8fafc;
+  --sv-muted: #253047;
+  --sv-surface: #111827;
+  --sv-primary: #f8fafc;
+  --sv-primary-fore: #0b0f1a;
+  --sv-shadow: 0 6px 16px rgba(0,0,0,0.35);
+}
+
+/* Pastel */
+.pastel {
+  --sv-bg: #fbf7ff;
+  --sv-text: #23213a;
+  --sv-muted: #e9e4ff;
+  --sv-surface: #ffffff;
+  --sv-primary: #6b5bd2;         /* soft-violett Akzent */
+  --sv-primary-fore: #ffffff;
+  --sv-shadow: 0 8px 20px rgba(107,91,210,0.15);
+}
+
+/* ===== Topbar ===== */
+.sv-topbar{
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--sv-muted);
+  background: color-mix(in oklab, var(--sv-bg) 92%, white 8%);
+  backdrop-filter: saturate(180%) blur(6px);
+}
+
+/* ===== AuthStatus Styles ===== */
+.sv-bar{
+  display: inline-flex;
+  gap: 10px;
+  align-items: center;
+}
+
+/* Chip */
+.sv-chip{
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--sv-surface);
+  border: 1px solid var(--sv-muted);
+  box-shadow: var(--sv-shadow);
+  text-decoration: none;
+  color: var(--sv-text);
+  transition: transform .08s ease, box-shadow .2s ease, background .2s ease;
+}
+.sv-chip:hover{ transform: translateY(-1px); box-shadow: 0 10px 24px rgba(17,24,39,0.1); }
+.sv-chip:active{ transform: translateY(0); }
+
+.sv-avatar{
+  width: 28px; height: 28px; border-radius: 50%;
+  background: var(--sv-primary); color: var(--sv-primary-fore);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; letter-spacing: .3px;
+}
+
+.sv-username{
+  max-width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-weight: 600;
+}
+
+/* Buttons */
+.sv-btn{
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 10px 14px; border-radius: 12px;
+  border: 1px solid var(--sv-muted);
+  background: var(--sv-surface); color: var(--sv-text);
+  text-decoration: none; font-weight: 600; font-size: 14px; line-height: 1;
+  min-width: 120px; box-shadow: var(--sv-shadow);
+  transition: transform .08s ease, box-shadow .2s ease, background .2s ease, opacity .2s;
+  cursor: pointer;
+}
+.sv-btn:hover{ transform: translateY(-1px); box-shadow: 0 10px 24px rgba(17,24,39,0.1); }
+.sv-btn:active{ transform: translateY(0); }
+.sv-btn:disabled{ opacity: .6; cursor: not-allowed; }
+
+.sv-btn--primary{
+  background: var(--sv-primary);
+  color: var(--sv-primary-fore);
+  border-color: var(--sv-primary);
+}
+
+/* Skeleton */
+.sv-skeleton{
+  height: 36px;
+  background: linear-gradient(90deg, #eee, #f8f8f8, #eee);
+  background-size: 200% 100%;
+  border-radius: 12px;
+  animation: svShine 1.2s linear infinite;
+}
+@keyframes svShine { 0%{ background-position: 0 0 } 100%{ background-position: 200% 0 } }
+
+/* Theme Button */
+.sv-theme-btn{
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px; border-radius: 12px;
+  border: 1px solid var(--sv-muted);
+  background: var(--sv-surface); color: var(--sv-text);
+  box-shadow: var(--sv-shadow); margin-left: 10px; cursor: pointer;
+  transition: transform .08s ease, box-shadow .2s ease, background .2s ease;
+}
+.sv-theme-btn:hover{ transform: translateY(-1px); box-shadow: 0 10px 24px rgba(17,24,39,0.1); }
+
+/* Topbar slots */
+.sv-topbar__left { display:flex; align-items:center; gap:12px; }
+.sv-topbar__right { display:flex; align-items:center; gap:10px; }
+/* === SoftVibe: AuthStatus Buttons an Site-Palette anbinden === */
+.sv-btn{
+  background: var(--color-button-bg);
+  color: var(--color-button-text);
+  border: 1px solid var(--color-button-border, transparent);
+}
+.sv-btn:hover{ opacity: .95; }
+
+.sv-btn--primary{
+  background: var(--color-accent);
+  color: #fff;
+  border-color: var(--color-accent);
+}
+.sv-btn--primary:hover{ filter: brightness(0.96); }
+
+/* (Optional, nur falls der Chip nicht gut aussieht) */
+.sv-chip{
+  background: var(--color-card);
+  border: 1px solid var(--color-button-border, rgba(0,0,0,0.06));
+  color: var(--color-text);
+}

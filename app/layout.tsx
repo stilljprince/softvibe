@@ -1,34 +1,26 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import Providers from "./providers";
 
 export const metadata: Metadata = {
   title: "SoftVibe",
   description: "AI-gestützte ASMR-Plattform",
 };
 
-// 👉 Wichtig: Next.js unterstützt `themeColor` nur noch über viewport
 export const viewport: Viewport = {
-  themeColor: "#fdfbf7", // gleiche Farbe wie dein Light-Mode-Background
+  themeColor: "#fdfbf7",
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="de">
       <head>
-        {/* iOS spezifische Einstellungen */}
         <meta name="apple-mobile-web-app-capable" content="yes" />
-        <meta
-          name="apple-mobile-web-app-status-bar-style"
-          content="black-translucent"
-        />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
       </head>
-      <body>{children}</body>
+      <body>
+        <Providers>{children}</Providers>
+      </body>
     </html>
   );
 }
-
-

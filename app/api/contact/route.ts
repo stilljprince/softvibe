@@ -13,7 +13,7 @@ function getBaseUrl() {
   return "http://localhost:3000";
 }
 
-/** E-Mail-Template (Logo per absolute URL, kein CID) */
+/** E-Mail-Template */
 function renderEmail(opts: {
   brand?: string;
   logoUrl?: string;               // absolute PNG-URL
@@ -23,6 +23,7 @@ function renderEmail(opts: {
   rows?: Array<{ label: string; value: string }>;
   outro?: string;
   footerNote?: string;
+  showBrandHeading?: boolean;     // << neu: steuert Text „SoftVibe“ unter dem Logo
 }) {
   const {
     brand = "SoftVibe",
@@ -33,6 +34,7 @@ function renderEmail(opts: {
     rows = [],
     outro,
     footerNote,
+    showBrandHeading = false,     // << per Default AUS, wie gewünscht
   } = opts;
 
   const rowsHtml = rows
@@ -77,13 +79,15 @@ function renderEmail(opts: {
               <div style="text-align:center;">
                 ${
                   logoUrl
-                    ? `<img src="${logoUrl}" alt="${brand} Logo" width="120" height="40" style="display:inline-block;vertical-align:middle;margin-bottom:10px;" />`
+                    ? `<img src="${logoUrl}" alt="${brand} Logo" width="140" style="display:inline-block;vertical-align:middle;margin-bottom:10px;height:auto;" />`
                     : ""
                 }
               </div>
-              <h1 style="margin:6px 0 0 0;font-size:22px;line-height:30px;text-align:center;font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;color:#2e2a2a;">
-                ${brand}
-              </h1>
+              ${
+                showBrandHeading
+                  ? `<h1 style="margin:6px 0 0 0;font-size:22px;line-height:30px;text-align:center;font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;color:#2e2a2a;">${brand}</h1>`
+                  : ""
+              }
               ${
                 subline
                   ? `<p style="margin:4px 0 0 0;text-align:center;color:#6f6464;font-size:13px;font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;">${subline}</p>`
@@ -173,9 +177,7 @@ export async function POST(req: Request) {
     const BRAND = "SoftVibe";
     const baseUrl = getBaseUrl();
 
-    // 🔧 nur EINMAL deklarieren:
-    // bevorzugt eine öffentliche URL aus ENV (z. B. GitHub Raw/CDN),
-    // sonst Vercel/localhost mit Cache-Buster (um Gmail-Cache zu umgehen)
+    // bevorzugt öffentlich erreichbare URL aus ENV, sonst Fallback + Cache-Buster
     const logoUrl =
       (process.env.EMAIL_LOGO_URL && process.env.EMAIL_LOGO_URL.trim()) ||
       `${baseUrl}/softvibe-logo-email.png?v=${Date.now()}`;
@@ -209,6 +211,7 @@ export async function POST(req: Request) {
         { label: "Nachricht", value: message },
       ],
       outro: "Du kannst direkt auf diese E-Mail antworten, der Reply-To ist bereits korrekt gesetzt.",
+      showBrandHeading: false, // << kein „SoftVibe“-Text unter Logo
     });
 
     await transporter.sendMail({
@@ -234,16 +237,17 @@ export async function POST(req: Request) {
     const userHtml = renderEmail({
       brand: BRAND,
       logoUrl,
-      headline: "Danke für deine Nachricht bei SoftVibe ✨",
+      headline: "Danke für deine Nachricht ✨", // << ohne „…bei SoftVibe“
       introLong: userIntro,
       footerNote:
         "Diese E-Mail wurde automatisch von SoftVibe generiert. Bitte antworte nicht direkt auf diese Nachricht.",
+      showBrandHeading: false, // << kein „SoftVibe“-Text unter Logo
     });
 
     await transporter.sendMail({
       from: { name: FROM_NAME, address: FROM_ADDR! },
       to: email,
-      subject: "Danke für deine Nachricht bei SoftVibe ✨",
+      subject: "Danke für deine Nachricht bei SoftVibe ✨", // Betreff bleibt wie von dir gewünscht
       text:
         `Hallo ${name},\n\n` +
         `danke dir, dass du uns geschrieben hast! Deine Nachricht ist sicher bei uns gelandet und wir schauen sie uns so schnell wie möglich an.\n\n` +
@@ -263,3 +267,4 @@ export async function POST(req: Request) {
     );
   }
 }
+

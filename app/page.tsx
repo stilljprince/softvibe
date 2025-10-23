@@ -2,6 +2,9 @@
 
 import Image from "next/image";
 import { useEffect, useState } from "react";
+import AuthStatus from "@/components/AuthStatus";
+import { useSession } from "next-auth/react";
+import { useRouter } from "next/navigation";
 
 type Theme = "light" | "dark" | "pastel";
 
@@ -11,6 +14,9 @@ export default function Home() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [closing, setClosing] = useState(false);
   const [cooldown, setCooldown] = useState(false);
+const { data } = useSession();
+const loggedIn = !!data?.user;
+const router = useRouter();
 
   // Theme aus localStorage laden
   useEffect(() => {
@@ -107,34 +113,10 @@ export default function Home() {
 
         {/* Buttons rechts (Desktop) */}
         <div className="desktop-nav" style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
-          <button
-            style={{
-              padding: "0.5rem 1rem",
-              borderRadius: "8px",
-              background: "var(--color-button-bg)",
-              color: "var(--color-button-text)",
-              border: "none",
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-          >
-            Anmelden
-          </button>
+          {/* 🔧 NEU: AuthStatus rechts im Header */}
+          <AuthStatus />
 
-          <button
-            style={{
-              padding: "0.5rem 1rem",
-              borderRadius: "8px",
-              background: "var(--color-accent)",
-              color: "#fff",
-              border: "none",
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-          >
-            Testen
-          </button>
-
+          {/* 🔧 Theme-Switch wieder am alten Platz */}
           <button
             onClick={handleToggle}
             style={{
@@ -150,10 +132,15 @@ export default function Home() {
               cursor: "pointer",
               fontSize: "1.25rem",
             }}
+            aria-label="Theme wechseln"
+            title="Theme wechseln"
           >
             {getThemeIcon()}
           </button>
         </div>
+
+        {/* 🔧 ENTFERNT: separater AuthStatus-Block unter dem Header
+            (damit nicht doppelt gerendert) */}
 
         {/* Burger Button (nur Mobile sichtbar) */}
         <button
@@ -197,10 +184,10 @@ export default function Home() {
                 boxShadow: "-2px 0 10px rgba(0,0,0,0.2)",
               }}
             >
-             {/* Theme Switch Button – schließt das Menü NICHT */}
+              {/* Theme Switch Button – schließt das Menü NICHT */}
               <button
                 onClick={() => {
-                  handleToggle(); // Nur Theme ändern
+                  handleToggle();
                 }}
                 style={{
                   marginTop: "2rem",
@@ -208,11 +195,10 @@ export default function Home() {
                   border: "none",
                   textAlign: "left",
                   fontWeight: 600,
-                 }}
->
+                }}
+              >
                 {getThemeIcon()} Theme wechseln
               </button>
-
 
               {/* Schließen oben rechts */}
               <button
@@ -358,20 +344,22 @@ export default function Home() {
             <p style={{ fontSize: "clamp(1rem, 1.6vw, 1.25rem)", marginBottom: "1.5rem" }}>
               Die erste AI-gestützte Plattform, die ASMR, Meditation und Schlafgeschichten individuell auf dich zuschneidet. 🌙✨
             </p>
-            <button
-              style={{
-                width: "150px",
-                padding: "0.5rem",
-                borderRadius: "6px",
-                background: "var(--color-accent)",
-                color: "#fff",
-                fontWeight: 600,
-                border: "none",
-                cursor: "pointer",
-              }}
-            >
-              Jetzt ausprobieren
-            </button>
+              <button
+                onClick={() => router.push(loggedIn ? "/generate" : "/register")}
+                style={{
+                  width: "150px",
+                  padding: "0.5rem",
+                  borderRadius: "6px",
+                  background: "var(--color-accent)",
+                  color: "#fff",
+                  fontWeight: 600,
+                  border: "none",
+                  cursor: "pointer",
+                }}
+              >
+                Jetzt ausprobieren
+              </button>
+
           </div>
         </div>
       </section>
@@ -504,6 +492,7 @@ export default function Home() {
     </main>
   );
 }
+
 
 
 

@@ -3,22 +3,34 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "postinstall": "prisma generate",
+    "prisma:deploy": "prisma migrate deploy",
     "build": "next build",
+    "dev": "next dev",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "seed": "ts-node prisma/seed.ts"
+  
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",
+    "@hookform/resolvers": "^5.2.2",
+    "@prisma/client": "^6.17.1",
+    "bcryptjs": "^3.0.2",
     "dotenv": "^17.2.2",
     "next": "15.5.3",
+    "next-auth": "^4.24.11",
     "nodemailer": "^6.10.1",
+    "prisma": "^6.17.1",
     "react": "19.1.0",
-    "react-dom": "19.1.0"
+    "react-dom": "19.1.0",
+    "react-hook-form": "^7.65.0",
+    "zod": "^4.1.12"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
     "@tailwindcss/postcss": "^4.1.13",
+    "@types/bcryptjs": "^2.4.6",
     "@types/node": "^20.19.17",
     "@types/nodemailer": "^7.0.1",
     "@types/react": "^19",

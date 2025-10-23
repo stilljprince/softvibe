@@ -1,0 +1,19 @@
+// prisma/schema.prisma
+generator client {
+  provider = "postgresql"
+}
+
+datasource db {
+  provider = "sqlite" // für Dev okay
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String  @id @default(cuid())
+  email        String  @unique
+  name         String?
+  passwordHash String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
