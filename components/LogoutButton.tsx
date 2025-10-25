@@ -1,18 +1,11 @@
 // components/LogoutButton.tsx
 "use client";
-
-import { signOut } from "next-auth/react";
+import Link from "next/link";
 
 export default function LogoutButton() {
   return (
-    <button
-      type="button"
-      onClick={() => signOut({ callbackUrl: "/" })}
-      className="sv-btn sv-btn--primary"
-      style={{ minWidth: 160 }}
-      aria-label="Logout"
-    >
+    <Link href="/logout" className="sv-btn" style={{ minWidth: 160 }}>
       Logout
-    </button>
+    </Link>
   );
 }

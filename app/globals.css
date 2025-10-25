@@ -424,3 +424,68 @@ html, body {
   border: 1px solid var(--color-button-border, rgba(0,0,0,0.06));
   color: var(--color-text);
 }
+/* === SoftVibe: Auth Pages === */
+.sv-auth{
+  min-height: calc(100vh - 120px);
+  display:flex; align-items:center; justify-content:center;
+  padding: 24px;
+}
+
+.sv-auth__card{
+  width: 100%;
+  max-width: 520px;
+  border-radius: 16px;
+  background: var(--color-card);
+  color: var(--color-text);
+  border: 1px solid var(--color-nav-bg);
+  box-shadow: 0 10px 26px rgba(0,0,0,.08);
+  padding: 24px;
+}
+
+.sv-auth__title{
+  font-size: clamp(1.25rem, 2.2vw, 1.6rem);
+  font-weight: 800;
+  margin: 4px 0 16px;
+}
+
+.sv-form{ display:flex; flex-direction:column; gap: 14px; }
+.sv-form-row{ display:flex; flex-direction:column; gap: 6px; }
+
+.sv-label{ font-weight: 600; }
+
+.sv-input{
+  appearance:none;
+  outline: none;
+  border-radius: 12px;
+  border: 1px solid var(--color-nav-bg);
+  background: var(--color-bg);
+  color: var(--color-text);
+  padding: 12px 14px;
+  font-size: 14px;
+  transition: border-color .15s ease, box-shadow .15s ease, background .2s ease;
+}
+.sv-input:focus{
+  border-color: color-mix(in oklab, var(--color-accent), #000 12%);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-accent) 25%, transparent);
+}
+
+.sv-actions{
+  display:flex; gap: 12px; justify-content:flex-end; margin-top: 6px;
+}
+
+.sv-help{ font-size: 0.925rem; opacity:.9; margin-top: 6px; }
+.sv-error{ color: #e11d48; font-weight: 600; }
+
+.sv-link{
+  color: var(--color-accent); text-decoration: none; font-weight: 700;
+}
+.sv-link:hover{ text-decoration: underline; }
+
+.sv-spinner{
+  width: 28px; height: 28px; border-radius: 50%;
+  border: 3px solid color-mix(in oklab, var(--color-accent) 25%, transparent);
+  border-top-color: var(--color-accent);
+  animation: svSpin .8s linear infinite;
+  margin: 14px auto 4px;
+}
+@keyframes svSpin { to { transform: rotate(360deg); } }

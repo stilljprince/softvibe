@@ -2,6 +2,7 @@
 
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { signIn } from "next-auth/react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -17,7 +18,7 @@ export default function LoginPage() {
 
 function LoginForm() {
   const router = useRouter();
-  const searchParams = useSearchParams(); // ✅ jetzt innerhalb von <Suspense>
+  const searchParams = useSearchParams(); // ✅ innerhalb Suspense
   const callbackUrl = searchParams.get("callbackUrl") || "/";
 
   const [error, setError] = useState<string | null>(null);
@@ -26,9 +27,7 @@ function LoginForm() {
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-  } = useForm<LoginInput>({
-    resolver: zodResolver(LoginSchema),
-  });
+  } = useForm<LoginInput>({ resolver: zodResolver(LoginSchema) });
 
   const onSubmit = async (values: LoginInput) => {
     setError(null);
@@ -48,23 +47,37 @@ function LoginForm() {
   };
 
   return (
-    <main style={{ maxWidth: 420, margin: "48px auto" }}>
-      <h1>Login</h1>
-      <form onSubmit={handleSubmit(onSubmit)}>
-        <label>E-Mail</label>
-        <input type="email" {...register("email")} />
-        {errors.email && <p>{errors.email.message}</p>}
+    <main className="sv-auth">
+      <section className="sv-auth__card" aria-labelledby="login-title">
+        <h1 id="login-title" className="sv-auth__title">Anmelden</h1>
 
-        <label>Passwort</label>
-        <input type="password" {...register("password")} />
-        {errors.password && <p>{errors.password.message}</p>}
+        <form className="sv-form" onSubmit={handleSubmit(onSubmit)} noValidate>
+          <div className="sv-form-row">
+            <label className="sv-label">E-Mail</label>
+            <input type="email" className="sv-input" {...register("email")} />
+            {errors.email && <p className="sv-error">{errors.email.message}</p>}
+          </div>
 
-        {error && <p>{error}</p>}
+          <div className="sv-form-row">
+            <label className="sv-label">Passwort</label>
+            <input type="password" className="sv-input" {...register("password")} />
+            {errors.password && <p className="sv-error">{errors.password.message}</p>}
+          </div>
 
-        <button type="submit" disabled={isSubmitting}>
-          {isSubmitting ? "Einloggen..." : "Einloggen"}
-        </button>
-      </form>
+          {error && <p className="sv-error" role="alert">{error}</p>}
+
+          <div className="sv-actions">
+            <button type="submit" className="sv-btn sv-btn--primary" disabled={isSubmitting}>
+              {isSubmitting ? "Einloggen…" : "Einloggen"}
+            </button>
+          </div>
+        </form>
+
+        <p className="sv-help">
+          Noch kein Konto?{" "}
+          <Link href="/register" className="sv-link">Registrieren</Link>
+        </p>
+      </section>
     </main>
   );
 }
