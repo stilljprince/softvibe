@@ -1,6 +1,6 @@
 "use client";
 
-import { useSession, signOut } from "next-auth/react";
+import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { useMemo } from "react";
 
@@ -55,14 +55,14 @@ export default function AuthStatus() {
             Generieren
           </Link>
 
-          {/* Logout (mit Text) */}
+         {/*                                                                //Logout (mit Text)
           <button
             className="sv-btn"
             onClick={() => signOut({ callbackUrl: PATHS.logoutCallback })}
             type="button"
           >
             Logout
-          </button>
+          </button>  */} 
         </>
       ) : (
         <>
