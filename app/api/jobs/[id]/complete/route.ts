@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/config";
 import { prisma } from "@/lib/prisma";
@@ -6,16 +6,15 @@ import { $Enums } from "@prisma/client";
 
 export const runtime = "nodejs";
 
-export async function POST(
-  _req: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function POST(_req: Request, context: unknown) {
+  const { params } = context as { params: { id: string } };
+
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // ✅ erst prüfen, ob der Job dem Nutzer gehört
+  // Ownership prüfen
   const found = await prisma.job.findFirst({
     where: { id: params.id, userId: session.user.id },
     select: { id: true },
