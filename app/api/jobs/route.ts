@@ -31,7 +31,7 @@ export async function GET() {
   return NextResponse.json(jobs);
 }
 
-// CREATE
+// CREATE (mit einfachem Rate-Limit)
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
@@ -42,6 +42,21 @@ export async function POST(req: Request) {
   const parsed = CreateJobSchema.safeParse(json);
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  }
+
+  // 🔒 Rate-Limit: 1 Create pro 5s
+  const WINDOW_MS = 5000;
+  const since = new Date(Date.now() - WINDOW_MS);
+  const recent = await prisma.job.findFirst({
+    where: { userId: session.user.id, createdAt: { gt: since } },
+    select: { id: true, createdAt: true },
+  });
+  if (recent) {
+    const headers = { "Retry-After": String(Math.ceil(WINDOW_MS / 1000)) };
+    return NextResponse.json(
+      { error: "RATE_LIMITED", retryAfterSeconds: Math.ceil(WINDOW_MS / 1000) },
+      { status: 429, headers }
+    );
   }
 
   const { prompt, preset } = parsed.data;

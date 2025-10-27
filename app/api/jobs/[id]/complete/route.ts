@@ -7,6 +7,11 @@ import { $Enums } from "@prisma/client";
 export const runtime = "nodejs";
 
 export async function POST(_req: Request, context: unknown) {
+  // 🔒 Mock in Production sperren
+  if (process.env.NODE_ENV === "production") {
+    return NextResponse.json({ error: "Not available in production" }, { status: 403 });
+  }
+
   const { params } = context as { params: { id: string } };
 
   const session = await getServerSession(authOptions);
