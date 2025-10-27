@@ -4,8 +4,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql" // für Dev okay
-  url      = env("DATABASE_URL")
+  provider = "postgresql"
+
+  url = env("DATABASE_URL")
 }
 
 model User {
@@ -16,4 +17,49 @@ model User {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  Job       Job[]
+  Track     Track[]
+}
+
+enum JobStatus {
+  QUEUED
+  PROCESSING
+  DONE
+  FAILED
+}
+
+model Job {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  prompt    String
+  preset    String?
+  status    JobStatus @default(QUEUED)
+  resultUrl String?
+  error     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tracks Track[]
+}
+
+model Track {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  jobId String?
+  job   Job?    @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  title           String
+  url             String
+  durationSeconds Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([jobId])
 }
