@@ -8,7 +8,19 @@ const PRESETS = [
   { id: "meditation", label: "Meditation (Breath, Soft Tone)" },
 ];
 
-type Job = { id: string; status: "QUEUED"|"PROCESSING"|"DONE"|"FAILED"; resultUrl?: string|null; error?: string|null };
+type JobStatus = "QUEUED" | "PROCESSING" | "DONE" | "FAILED";
+
+type Job = {
+  id: string;
+  status: JobStatus;
+  resultUrl?: string | null;
+  error?: string | null;
+  prompt?: string | null;
+  preset?: string | null;
+  createdAt?: string;
+};
+
+const PAGE_SIZE = 10;
 
 export default function GenerateClient() {
   const [preset, setPreset] = useState<string>(PRESETS[0].id);
@@ -16,7 +28,33 @@ export default function GenerateClient() {
   const [job, setJob] = useState<Job | null>(null);
   const [polling, setPolling] = useState(false);
 
+  // Liste + Paging
+  const [jobList, setJobList] = useState<Job[]>([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingList, setLoadingList] = useState(false);
+
   const canSubmit = useMemo(() => prompt.trim().length >= 3, [prompt]);
+
+  useEffect(() => {
+    void loadJobs(0);
+  }, []);
+
+  async function loadJobs(skip: number) {
+    setLoadingList(true);
+    const res = await fetch(`/api/jobs?take=${PAGE_SIZE}&skip=${skip}`);
+    if (!res.ok) {
+      setLoadingList(false);
+      return;
+    }
+    const data: Job[] = await res.json();
+    if (skip === 0) {
+      setJobList(data);
+    } else {
+      setJobList((prev) => [...prev, ...data]);
+    }
+    setHasMore(data.length === PAGE_SIZE);
+    setLoadingList(false);
+  }
 
   async function createJob() {
     const res = await fetch("/api/jobs", {
@@ -24,16 +62,25 @@ export default function GenerateClient() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ preset, prompt }),
     });
+
+    if (res.status === 429) {
+      alert("Zu viele Anfragen. Bitte kurz warten.");
+      return;
+    }
+
     if (!res.ok) {
       alert("Konnte Job nicht anlegen.");
       return;
     }
+
     const data: Job = await res.json();
     setJob(data);
     setPolling(true);
+    // Liste neu laden (auf Seite 0)
+    void loadJobs(0);
   }
 
-  // simples Polling alle 2s
+  // Polling für aktuellen Job
   useEffect(() => {
     if (!job || !polling) return;
     const id = setInterval(async () => {
@@ -43,15 +90,35 @@ export default function GenerateClient() {
       setJob(fresh);
       if (fresh.status === "DONE" || fresh.status === "FAILED") {
         setPolling(false);
+        void loadJobs(0);
       }
     }, 2000);
     return () => clearInterval(id);
   }, [job, polling]);
 
+  // Job löschen
+  async function deleteJob(id: string) {
+    const res = await fetch(`/api/jobs/${id}`, {
+      method: "DELETE",
+    });
+    if (res.status === 204) {
+      setJobList((prev) => prev.filter((j) => j.id !== id));
+      // falls der aktuell angezeigte Job gelöscht wurde
+      if (job?.id === id) {
+        setJob(null);
+      }
+    } else {
+      alert("Konnte Job nicht löschen.");
+    }
+  }
+
   return (
     <main style={{ maxWidth: 840, margin: "40px auto", padding: "0 16px" }}>
-      <h1 style={{ fontSize: "1.8rem", fontWeight: 800, marginBottom: 12 }}>Generieren</h1>
+      <h1 style={{ fontSize: "1.8rem", fontWeight: 800, marginBottom: 12 }}>
+        Generieren
+      </h1>
 
+      {/* Formular-Karte */}
       <section
         style={{
           background: "var(--color-card)",
@@ -69,8 +136,10 @@ export default function GenerateClient() {
               onChange={(e) => setPreset(e.target.value)}
               className="sv-input"
             >
-              {PRESETS.map(p => (
-                <option key={p.id} value={p.id}>{p.label}</option>
+              {PRESETS.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
+                </option>
               ))}
             </select>
           </div>
@@ -80,7 +149,7 @@ export default function GenerateClient() {
             <textarea
               className="sv-input"
               rows={4}
-              placeholder="Beschreibe, was du hören möchtest (z. B. „sanftes Flüstern mit leichten Tapping-Geräuschen…“)"
+              placeholder='Beschreibe, was du hören möchtest (z. B. "sanftes Flüstern…")'
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
             />
@@ -93,11 +162,9 @@ export default function GenerateClient() {
               onClick={async () => {
                 if (!job) return;
                 await fetch(`/api/jobs/${job.id}/complete`, { method: "POST" });
-                // Poller nimmt den neuen Status beim nächsten Tick mit
                 setPolling(true);
               }}
               disabled={!job || job.status === "DONE"}
-              title="Mock: Job sofort abschließen (nur Dev)"
             >
               Simulation abschließen
             </button>
@@ -114,12 +181,81 @@ export default function GenerateClient() {
         </div>
       </section>
 
-      {/* Status / Ergebnis */}
+      {/* Aktueller Job */}
       {job && (
         <section style={{ marginTop: 16 }}>
           <StatusCard job={job} />
         </section>
       )}
+
+      {/* Job-Liste */}
+      <section style={{ marginTop: 24 }}>
+        <h2 style={{ fontSize: "1.1rem", fontWeight: 700, marginBottom: 8 }}>
+          Deine letzten Jobs
+        </h2>
+        {jobList.length === 0 ? (
+          <p style={{ opacity: 0.7 }}>Noch keine Jobs gefunden.</p>
+        ) : (
+          <ul style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {jobList.map((j) => (
+              <li
+                key={j.id}
+                style={{
+                    background: "var(--color-card)",
+                    border: "1px solid var(--color-nav-bg)",
+                    borderRadius: 10,
+                    padding: "10px 12px",
+                    display: "flex",
+                    gap: 14,
+                    alignItems: "center",
+                }}
+              >
+                <div style={{ flex: "1 1 auto", minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, overflowWrap: "anywhere" }}>
+                    {j.prompt && j.prompt.trim() !== "" ? j.prompt : "(ohne Prompt)"}
+                  </div>
+                  <div style={{ fontSize: "0.75rem", opacity: 0.7 }}>
+                    {j.preset || "—"} ·{" "}
+                    {j.createdAt
+                      ? new Date(j.createdAt).toLocaleString("de-DE")
+                      : ""}
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <StatusPill status={j.status} />
+                  {j.status === "DONE" && j.resultUrl ? (
+                    <audio controls src={j.resultUrl} style={{ width: 140 }} />
+                  ) : null}
+
+                  {/* 🆕 löschen */}
+                  <button
+                    type="button"
+                    onClick={() => deleteJob(j.id)}
+                    className="sv-btn"
+                    style={{ padding: "4px 10px" }}
+                  >
+                    Löschen
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {hasMore && (
+          <div style={{ marginTop: 12 }}>
+            <button
+              type="button"
+              onClick={() => loadJobs(jobList.length)}
+              className="sv-btn"
+              disabled={loadingList}
+            >
+              {loadingList ? "Lade…" : "Mehr laden"}
+            </button>
+          </div>
+        )}
+      </section>
     </main>
   );
 }
@@ -136,7 +272,7 @@ function StatusCard({ job }: { job: Job }) {
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <strong>Job: {job.id}</strong>
-        <span>Status: {label(job.status)}</span>
+        <StatusPill status={job.status} />
       </div>
 
       {job.status === "DONE" && job.resultUrl && (
@@ -147,18 +283,45 @@ function StatusCard({ job }: { job: Job }) {
 
       {job.status === "FAILED" && (
         <p style={{ color: "#e11d48", fontWeight: 600, marginTop: 8 }}>
-          Fehlgeschlagen: {job.error ?? "Unbekannter Fehler"}
+          {job.error ?? "Fehlgeschlagen"}
         </p>
       )}
     </div>
   );
 }
 
-function label(s: Job["status"]) {
-  switch (s) {
-    case "QUEUED": return "Warteschlange";
-    case "PROCESSING": return "In Bearbeitung";
-    case "DONE": return "Fertig";
-    case "FAILED": return "Fehlgeschlagen";
-  }
+function StatusPill({ status }: { status: JobStatus }) {
+  const label =
+    status === "QUEUED"
+      ? "Warteschlange"
+      : status === "PROCESSING"
+      ? "In Bearbeitung"
+      : status === "DONE"
+      ? "Fertig"
+      : "Fehlgeschlagen";
+
+  const bg =
+    status === "DONE"
+      ? "color-mix(in oklab, var(--color-accent) 35%, transparent)"
+      : status === "FAILED"
+      ? "#fee2e2"
+      : "color-mix(in oklab, var(--color-card) 85%, #000 15%)";
+
+  const color = status === "FAILED" ? "#7f1d1d" : "inherit";
+
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        padding: "3px 10px",
+        borderRadius: 999,
+        fontSize: "0.75rem",
+        fontWeight: 600,
+        background: bg,
+        color,
+      }}
+    >
+      {label}
+    </span>
+  );
 }
