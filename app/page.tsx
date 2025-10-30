@@ -14,9 +14,20 @@ export default function Home() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [closing, setClosing] = useState(false);
   const [cooldown, setCooldown] = useState(false);
-const { data } = useSession();
-const loggedIn = !!data?.user;
-const router = useRouter();
+
+  // ⬇️ nur hier geändert: status mitnehmen
+  const { data: session, status: sessionStatus } = useSession();
+  const [loggedIn, setLoggedIn] = useState(false);
+  const router = useRouter();
+
+  // ⬇️ Session-Änderung auswerten
+  useEffect(() => {
+    if (sessionStatus === "authenticated" && session?.user) {
+      setLoggedIn(true);
+    } else if (sessionStatus === "unauthenticated") {
+      setLoggedIn(false);
+    }
+  }, [sessionStatus, session]);
 
   // Theme aus localStorage laden
   useEffect(() => {
@@ -113,10 +124,10 @@ const router = useRouter();
 
         {/* Buttons rechts (Desktop) */}
         <div className="desktop-nav" style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
-          {/* 🔧 NEU: AuthStatus rechts im Header */}
+          {/* AuthStatus rechts im Header */}
           <AuthStatus />
 
-          {/* 🔧 Theme-Switch wieder am alten Platz */}
+          {/* Theme-Switch */}
           <button
             onClick={handleToggle}
             style={{
@@ -138,9 +149,6 @@ const router = useRouter();
             {getThemeIcon()}
           </button>
         </div>
-
-        {/* 🔧 ENTFERNT: separater AuthStatus-Block unter dem Header
-            (damit nicht doppelt gerendert) */}
 
         {/* Burger Button (nur Mobile sichtbar) */}
         <button
@@ -344,22 +352,27 @@ const router = useRouter();
             <p style={{ fontSize: "clamp(1rem, 1.6vw, 1.25rem)", marginBottom: "1.5rem" }}>
               Die erste AI-gestützte Plattform, die ASMR, Meditation und Schlafgeschichten individuell auf dich zuschneidet. 🌙✨
             </p>
-              <button
-                onClick={() => router.push(loggedIn ? "/generate" : "/register")}
-                style={{
-                  width: "150px",
-                  padding: "0.5rem",
-                  borderRadius: "6px",
-                  background: "var(--color-accent)",
-                  color: "#fff",
-                  fontWeight: 600,
-                  border: "none",
-                  cursor: "pointer",
-                }}
-              >
-                Jetzt ausprobieren
-              </button>
-
+            <button
+              onClick={() => {
+                if (loggedIn) {
+                  router.push("/generate");
+                } else {
+                  router.push("/register");
+                }
+              }}
+              style={{
+                width: "180px",
+                padding: "0.6rem 0.9rem",
+                borderRadius: "6px",
+                background: "var(--color-accent)",
+                color: "#fff",
+                fontWeight: 600,
+                border: "none",
+                cursor: "pointer",
+              }}
+            >
+              {loggedIn ? "Generieren" : "Jetzt ausprobieren"}
+            </button>
           </div>
         </div>
       </section>
@@ -492,7 +505,6 @@ const router = useRouter();
     </main>
   );
 }
-
 
 
 
