@@ -489,3 +489,16 @@ html, body {
   margin: 14px auto 4px;
 }
 @keyframes svSpin { to { transform: rotate(360deg); } }
+/* ===== SoftVibe: mobile menu hard background ===== */
+.sv-mobile-menu {
+  background: var(--color-card) !important;
+  /* falls var(--color-card) mal transparent gesetzt wird: */
+  background-color: var(--color-card, #fdfbf7) !important;
+}
+.dark .sv-mobile-menu {
+  background: #111827 !important;
+}
+
+.pastel .sv-mobile-menu {
+  background: #fdf7ff !important;
+}

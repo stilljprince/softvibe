@@ -97,17 +97,16 @@ export default function Home() {
   };
 
   // Style für mobile Menü-Buttons (wird unten benutzt)
-  const mobileBtnStyle = {
-    padding: "1rem 0",
-    fontSize: "1.25rem",
-    fontWeight: 600,
-    color: "var(--color-text)",
-    background: "transparent",
-    border: "none",
-    borderBottom: "1px solid rgba(255,255,255,0.1)",
-    textAlign: "left" as const,
-    cursor: "pointer",
-  };
+ const mobileBtnStyle: React.CSSProperties = {
+  padding: "1rem 0.5rem",
+  fontSize: "1.05rem",
+  fontWeight: 600,
+  color: "var(--color-text)",     
+  border: "none",
+  borderBottom: "1px solid var(--color-nav-bg)",
+  textAlign: "left",
+  cursor: "pointer",
+};
 
   return (
     <main
@@ -219,159 +218,235 @@ export default function Home() {
           ☰
         </button>
 
-        {/* ====================== Mobile Menü ====================== */}
-        {(menuOpen || closing) && (
-          <>
-            {/* Overlay */}
-            <div
-              onClick={closeMenu}
-              style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 999 }}
-            />
-
-            {/* Slide-In/Out Menü */}
-            <div
-              className={`mobile-menu ${closing ? "closing" : "open"}`}
-              style={{
-                position: "fixed",
-                top: 0,
-                right: 0,
-                height: "100%",
-                width: "70%",
-                maxWidth: "300px",
-                background: "var(--color-card)",
-                zIndex: 1000,
-                display: "flex",
-                flexDirection: "column",
-                padding: "1rem",
-                boxShadow: "-2px 0 10px rgba(0,0,0,0.2)",
-              }}
-            >
-              {/* Theme Switch Button – schließt das Menü NICHT */}
-              <button
-                onClick={() => {
-                  handleToggle();
-                }}
-                style={{
-                  marginTop: "2rem",
-                  background: "transparent",
-                  border: "none",
-                  textAlign: "left",
-                  fontWeight: 600,
-                }}
-              >
-                {getThemeIcon()} Theme wechseln
-              </button>
-
-              {/* Schließen oben rechts */}
-              <button
-                onClick={closeMenu}
-                style={{
-                  background: "transparent",
-                  border: "none",
-                  fontSize: "2rem",
-                  alignSelf: "flex-end",
-                  cursor: "pointer",
-                  marginBottom: "1rem",
-                }}
-              >
-                ✕
-              </button>
-
-              {/* Links */}
-              <nav style={{ display: "flex", flexDirection: "column" }}>
-                {[
-                  { id: "features", label: "Features" },
-                  { id: "about", label: "Über uns" },
-                  { id: "contact", label: "Kontakt" },
-                ].map((item) => (
-                  <a
-                    key={item.id}
-                    href={`#${item.id}`}
-                    onClick={closeMenu}
-                    style={{
-                      padding: "1rem 0",
-                      fontSize: "1.25rem",
-                      fontWeight: 600,
-                      color: "var(--color-text)",
-                      textDecoration: "none",
-                      borderBottom: "1px solid rgba(255,255,255,0.1)",
-                      textAlign: "left",
-                    }}
-                  >
-                    {item.label}
-                  </a>
-                ))}
-
-                {/* 👇 zustandsabhängig */}
-                {loggedIn ? (
-                  <>
-                    <button
-                      onClick={() => {
-                        closeMenu();
-                        router.push("/generate");
-                      }}
-                      style={mobileBtnStyle}
-                    >
-                      Generieren
-                    </button>
-                    <button
-                      onClick={() => {
-                        closeMenu();
-                        router.push("/account");
-                      }}
-                      style={mobileBtnStyle}
-                    >
-                      Mein Konto
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button
-                      onClick={() => {
-                        closeMenu();
-                        router.push("/login");
-                      }}
-                      style={mobileBtnStyle}
-                    >
-                      Anmelden
-                    </button>
-                    <button
-                      onClick={() => {
-                        closeMenu();
-                        router.push("/register");
-                      }}
-                      style={mobileBtnStyle}
-                    >
-                      Registrieren
-                    </button>
-                  </>
-                )}
-              </nav>
-            </div>
-          </>
-        )}
 
         {/* Styles */}
-        <style jsx>{`
-          .desktop-nav { display: flex; }
-          .burger-btn { display: none; }
-          @media (max-width: 768px) {
-            .desktop-nav { display: none !important; }
-            .burger-btn { display: block !important; }
-          }
-          .mobile-menu.open { animation: slideIn 0.3s forwards; }
-          .mobile-menu.closing { animation: slideOut 0.3s forwards; }
-          @keyframes slideIn {
-            from { transform: translateX(100%); }
-            to { transform: translateX(0); }
-          }
-          @keyframes slideOut {
-            from { transform: translateX(0); }
-            to { transform: translateX(100%); }
-          }
-        `}</style>
-      </header>
+       <style jsx>{`
+  .desktop-nav { display: flex; }
+  .burger-btn { display: none; }
 
+  /* 👇 bisher: unter 768px nur Mobile */
+  @media (max-width: 768px) {
+    .desktop-nav { display: none !important; }
+    .burger-btn { display: block !important; }
+  }
+
+  /* 👇 NEU: auch bei quer-Mobil (iPhone Landscape) ausblenden,
+     weil dort zu wenig Höhe/Breite für Nav + Auth ist */
+  @media (max-width: 950px) {
+    .desktop-nav { display: none !important; }
+    .burger-btn { display: block !important; }
+  }
+
+  .mobile-menu.open { animation: slideIn 0.3s forwards; }
+  .mobile-menu.closing { animation: slideOut 0.3s forwards; }
+  @keyframes slideIn {
+    from { transform: translateX(100%); }
+    to { transform: translateX(0); }
+  }
+  @keyframes slideOut {
+    from { transform: translateX(0); }
+    to { transform: translateX(100%); }
+  }
+`}</style>
+      </header>
+{/* ====================== Mobile Menü (außerhalb des Headers!) ====================== */}
+{(menuOpen || closing) && (
+  <>
+    {/* Overlay */}
+    <div
+      onClick={closeMenu}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 999 }}
+    />
+
+    {/* Drawer */}
+    <div
+      className={`mobile-menu ${closing ? "closing" : "open"}`}
+      style={{
+        position: "fixed",
+        top: 0,
+        right: 0,
+        height: "100%",
+        width: "70%",
+        maxWidth: "300px",
+        // 👇 jetzt: theme-aware + transparenter für Glas
+        background:
+          theme === "dark"
+            ? "rgba(17, 24, 39, 0.75)"   // dark, leicht transparent
+            : theme === "pastel"
+            ? "rgba(253, 247, 255, 0.85)" // pastel
+            : "rgba(253, 251, 247, 0.85)", // light
+        backdropFilter: "blur(14px)",
+        WebkitBackdropFilter: "blur(14px)",
+        zIndex: 1000,
+        display: "flex",
+        flexDirection: "column",
+        padding: "1rem",
+        boxShadow: "-2px 0 10px rgba(0,0,0,0.2)",
+        borderLeft: "1px solid rgba(255,255,255,0.12)",
+      }}
+    >
+      {/* Theme Switch Button – schließt das Menü NICHT */}
+      <button
+        onClick={handleToggle}
+        style={{
+          marginTop: "2rem",
+          background: "transparent",
+          border: "none",
+          textAlign: "left",
+          fontWeight: 600,
+          color: "var(--color-text)",
+          width: "100%",
+          appearance: "none",
+          WebkitAppearance: "none",
+        }}
+      >
+        {getThemeIcon()} Theme wechseln
+      </button>
+
+      {/* Schließen oben rechts */}
+      <button
+        onClick={closeMenu}
+        style={{
+          background: "transparent",
+          border: "none",
+          fontSize: "2rem",
+          alignSelf: "flex-end",
+          cursor: "pointer",
+          marginBottom: "1rem",
+          color: "var(--color-text)",
+          appearance: "none",
+          WebkitAppearance: "none",
+        }}
+      >
+        ✕
+      </button>
+
+      {/* Links */}
+      <nav style={{ display: "flex", flexDirection: "column" }}>
+        {[
+          { id: "features", label: "Features" },
+          { id: "about", label: "Über uns" },
+          { id: "contact", label: "Kontakt" },
+        ].map((item) => (
+          <a
+            key={item.id}
+            href={`#${item.id}`}
+            onClick={closeMenu}
+            style={{
+              padding: "1rem 0",
+              fontSize: "1.25rem",
+              fontWeight: 600,
+              color: "var(--color-text)",
+              textDecoration: "none",
+              borderBottom: "1px solid rgba(255,255,255,0.12)",
+              textAlign: "left",
+              width: "100%",
+              display: "block",
+            }}
+          >
+            {item.label}
+          </a>
+        ))}
+
+        {loggedIn ? (
+          <>
+            <button
+              onClick={() => {
+                closeMenu();
+                router.push("/generate");
+              }}
+              style={{
+                padding: "1rem 0",
+                fontSize: "1.25rem",
+                fontWeight: 600,
+                color: "var(--color-text)",
+                background: "transparent",
+                border: "none",
+                borderBottom: "1px solid rgba(255,255,255,0.12)",
+                textAlign: "left",
+                cursor: "pointer",
+                width: "100%",
+                appearance: "none",
+                WebkitAppearance: "none",
+              }}
+            >
+              Generieren
+            </button>
+            <button
+              onClick={() => {
+                closeMenu();
+                router.push("/account");
+              }}
+              style={{
+                padding: "1rem 0",
+                fontSize: "1.25rem",
+                fontWeight: 600,
+                color: "var(--color-text)",
+                background: "transparent",
+                border: "none",
+                borderBottom: "1px solid rgba(255,255,255,0.12)",
+                textAlign: "left",
+                cursor: "pointer",
+                width: "100%",
+                appearance: "none",
+                WebkitAppearance: "none",
+              }}
+            >
+              Mein Konto
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              onClick={() => {
+                closeMenu();
+                router.push("/login");
+              }}
+              style={{
+                padding: "1rem 0",
+                fontSize: "1.25rem",
+                fontWeight: 600,
+                color: "var(--color-text)",
+                background: "transparent",
+                border: "none",
+                borderBottom: "1px solid rgba(255,255,255,0.12)",
+                textAlign: "left",
+                cursor: "pointer",
+                width: "100%",
+                appearance: "none",
+                WebkitAppearance: "none",
+              }}
+            >
+              Anmelden
+            </button>
+            <button
+              onClick={() => {
+                closeMenu();
+                router.push("/register");
+              }}
+              style={{
+                padding: "1rem 0",
+                fontSize: "1.25rem",
+                fontWeight: 600,
+                color: "var(--color-text)",
+                background: "transparent",
+                border: "none",
+                borderBottom: "1px solid rgba(255,255,255,0.12)",
+                textAlign: "left",
+                cursor: "pointer",
+                width: "100%",
+                appearance: "none",
+                WebkitAppearance: "none",
+              }}
+            >
+              Registrieren
+            </button>
+          </>
+        )}
+      </nav>
+    </div>
+  </>
+)}
       {/* ====================== Hero ====================== */}
       <section style={{ padding: "2rem 1rem" }}>
         <div
