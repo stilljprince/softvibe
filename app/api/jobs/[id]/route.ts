@@ -1,5 +1,5 @@
 // app/api/jobs/[id]/route.ts
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/config";
 import { prisma } from "@/lib/prisma";
@@ -8,8 +8,8 @@ export const runtime = "nodejs";
 
 // GET /api/jobs/:id
 export async function GET(
-  _req: Request,
-  context: { params: { id: string } }
+  _req: NextRequest,
+  { params }: { params: { id: string } }
 ) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
@@ -18,7 +18,7 @@ export async function GET(
 
   const job = await prisma.job.findFirst({
     where: {
-      id: context.params.id,
+      id: params.id,
       userId: session.user.id,
     },
     select: {
@@ -41,8 +41,8 @@ export async function GET(
 
 // DELETE /api/jobs/:id
 export async function DELETE(
-  _req: Request,
-  context: { params: { id: string } }
+  _req: NextRequest,
+  { params }: { params: { id: string } }
 ) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
@@ -51,7 +51,7 @@ export async function DELETE(
 
   const existing = await prisma.job.findFirst({
     where: {
-      id: context.params.id,
+      id: params.id,
       userId: session.user.id,
     },
     select: { id: true },
@@ -62,7 +62,7 @@ export async function DELETE(
   }
 
   await prisma.job.delete({
-    where: { id: context.params.id },
+    where: { id: params.id },
   });
 
   return new NextResponse(null, { status: 204 });

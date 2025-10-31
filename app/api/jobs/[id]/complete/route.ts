@@ -1,5 +1,5 @@
 // app/api/jobs/[id]/complete/route.ts
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/config";
 import { prisma } from "@/lib/prisma";
@@ -8,8 +8,8 @@ import { $Enums } from "@prisma/client";
 export const runtime = "nodejs";
 
 export async function POST(
-  _req: Request,
-  context: { params: { id: string } }
+  _req: NextRequest,
+  { params }: { params: { id: string } }
 ) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
@@ -18,7 +18,7 @@ export async function POST(
 
   const job = await prisma.job.findFirst({
     where: {
-      id: context.params.id,
+      id: params.id,
       userId: session.user.id,
     },
   });
@@ -28,10 +28,9 @@ export async function POST(
   }
 
   const updated = await prisma.job.update({
-    where: { id: context.params.id },
+    where: { id: params.id },
     data: {
       status: $Enums.JobStatus.DONE,
-      // Test-Dummy, damit deine UI was hat
       resultUrl: job.resultUrl ?? "https://example.com/fake-asmr.mp3",
     },
     select: {

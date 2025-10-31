@@ -96,17 +96,6 @@ export default function Home() {
     }, 300);
   };
 
-  // Style für mobile Menü-Buttons (wird unten benutzt)
- const mobileBtnStyle: React.CSSProperties = {
-  padding: "1rem 0.5rem",
-  fontSize: "1.05rem",
-  fontWeight: 600,
-  color: "var(--color-text)",     
-  border: "none",
-  borderBottom: "1px solid var(--color-nav-bg)",
-  textAlign: "left",
-  cursor: "pointer",
-};
 
   return (
     <main
