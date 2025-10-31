@@ -6,14 +6,11 @@ import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
 
-type Params = {
-  params: {
-    id: string;
-  };
-};
-
-// GET /api/jobs/:id  → einzelner Job (nur eigener!)
-export async function GET(_req: Request, { params }: Params) {
+// GET /api/jobs/:id
+export async function GET(
+  _req: Request,
+  context: { params: { id: string } }
+) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -21,7 +18,7 @@ export async function GET(_req: Request, { params }: Params) {
 
   const job = await prisma.job.findFirst({
     where: {
-      id: params.id,
+      id: context.params.id,
       userId: session.user.id,
     },
     select: {
@@ -42,28 +39,30 @@ export async function GET(_req: Request, { params }: Params) {
   return NextResponse.json(job);
 }
 
-// DELETE /api/jobs/:id  → zum „Löschen“-Button in deiner UI
-export async function DELETE(_req: Request, { params }: Params) {
+// DELETE /api/jobs/:id
+export async function DELETE(
+  _req: Request,
+  context: { params: { id: string } }
+) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // vorher prüfen, ob der Job dem User gehört
-  const exists = await prisma.job.findFirst({
+  const existing = await prisma.job.findFirst({
     where: {
-      id: params.id,
+      id: context.params.id,
       userId: session.user.id,
     },
     select: { id: true },
   });
 
-  if (!exists) {
+  if (!existing) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
   await prisma.job.delete({
-    where: { id: params.id },
+    where: { id: context.params.id },
   });
 
   return new NextResponse(null, { status: 204 });

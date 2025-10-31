@@ -5,13 +5,12 @@ import { authOptions } from "@/lib/auth/config";
 import { prisma } from "@/lib/prisma";
 import { $Enums } from "@prisma/client";
 
-type Params = {
-  params: {
-    id: string;
-  };
-};
+export const runtime = "nodejs";
 
-export async function POST(_req: Request, { params }: Params) {
+export async function POST(
+  _req: Request,
+  context: { params: { id: string } }
+) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -19,7 +18,7 @@ export async function POST(_req: Request, { params }: Params) {
 
   const job = await prisma.job.findFirst({
     where: {
-      id: params.id,
+      id: context.params.id,
       userId: session.user.id,
     },
   });
@@ -29,7 +28,7 @@ export async function POST(_req: Request, { params }: Params) {
   }
 
   const updated = await prisma.job.update({
-    where: { id: params.id },
+    where: { id: context.params.id },
     data: {
       status: $Enums.JobStatus.FAILED,
       error: "Mock: Verarbeitung fehlgeschlagen.",
