@@ -7,10 +7,10 @@ import { prisma } from "@/lib/prisma";
 export const runtime = "nodejs";
 
 // GET /api/jobs/:id
-export async function GET(
-  _req: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function GET(req: NextRequest, ctx: unknown) {
+  const { params } = ctx as { params: { id: string } };
+  const jobId = params.id;
+
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -18,7 +18,7 @@ export async function GET(
 
   const job = await prisma.job.findFirst({
     where: {
-      id: params.id,
+      id: jobId,
       userId: session.user.id,
     },
     select: {
@@ -40,10 +40,10 @@ export async function GET(
 }
 
 // DELETE /api/jobs/:id
-export async function DELETE(
-  _req: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function DELETE(req: NextRequest, ctx: unknown) {
+  const { params } = ctx as { params: { id: string } };
+  const jobId = params.id;
+
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -51,7 +51,7 @@ export async function DELETE(
 
   const existing = await prisma.job.findFirst({
     where: {
-      id: params.id,
+      id: jobId,
       userId: session.user.id,
     },
     select: { id: true },
@@ -62,7 +62,7 @@ export async function DELETE(
   }
 
   await prisma.job.delete({
-    where: { id: params.id },
+    where: { id: jobId },
   });
 
   return new NextResponse(null, { status: 204 });

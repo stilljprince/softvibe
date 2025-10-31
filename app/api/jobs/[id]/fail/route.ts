@@ -7,10 +7,10 @@ import { $Enums } from "@prisma/client";
 
 export const runtime = "nodejs";
 
-export async function POST(
-  _req: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function POST(req: NextRequest, ctx: unknown) {
+  const { params } = ctx as { params: { id: string } };
+  const jobId = params.id;
+
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -18,7 +18,7 @@ export async function POST(
 
   const job = await prisma.job.findFirst({
     where: {
-      id: params.id,
+      id: jobId,
       userId: session.user.id,
     },
   });
@@ -28,7 +28,7 @@ export async function POST(
   }
 
   const updated = await prisma.job.update({
-    where: { id: params.id },
+    where: { id: jobId },
     data: {
       status: $Enums.JobStatus.FAILED,
       error: "Mock: Verarbeitung fehlgeschlagen.",
