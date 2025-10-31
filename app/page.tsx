@@ -15,12 +15,16 @@ export default function Home() {
   const [closing, setClosing] = useState(false);
   const [cooldown, setCooldown] = useState(false);
 
-  // ⬇️ nur hier geändert: status mitnehmen
   const { data: session, status: sessionStatus } = useSession();
   const [loggedIn, setLoggedIn] = useState(false);
+
+  // 👇 neu: für Scroll-Hide
+  const [showHeader, setShowHeader] = useState(true);
+  const [lastScrollY, setLastScrollY] = useState(0);
+
   const router = useRouter();
 
-  // ⬇️ Session-Änderung auswerten
+  // Session-Änderung auswerten
   useEffect(() => {
     if (sessionStatus === "authenticated" && session?.user) {
       setLoggedIn(true);
@@ -41,6 +45,26 @@ export default function Home() {
     document.documentElement.className = theme;
     localStorage.setItem("theme", theme);
   }, [theme]);
+
+  // 👇 Scroll-Verhalten: runter = weg, hoch = da
+  useEffect(() => {
+    const handleScroll = () => {
+      const currentY = window.scrollY;
+
+      if (currentY > lastScrollY && currentY > 40) {
+        // runter
+        setShowHeader(false);
+      } else {
+        // hoch oder oben
+        setShowHeader(true);
+      }
+
+      setLastScrollY(currentY);
+    };
+
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, [lastScrollY]);
 
   const nextTheme: Record<Theme, Theme> = {
     light: "dark",
@@ -72,16 +96,44 @@ export default function Home() {
     }, 300);
   };
 
+  // Style für mobile Menü-Buttons (wird unten benutzt)
+  const mobileBtnStyle = {
+    padding: "1rem 0",
+    fontSize: "1.25rem",
+    fontWeight: 600,
+    color: "var(--color-text)",
+    background: "transparent",
+    border: "none",
+    borderBottom: "1px solid rgba(255,255,255,0.1)",
+    textAlign: "left" as const,
+    cursor: "pointer",
+  };
+
   return (
-    <main style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
+    <main
+      style={{
+        minHeight: "100vh",
+        display: "flex",
+        flexDirection: "column",
+        paddingTop: "64px", // Platz für den fixen Header
+      }}
+    >
       {/* ====================== Header ====================== */}
       <header
         style={{
-          position: "relative",
+          position: "fixed",
+          top: menuOpen ? 0 : showHeader ? 0 : "-70px", // 👈 Hide/Show + bei offenem Menü immer sichtbar
+          left: 0,
+          right: 0,
+          zIndex: 100,
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
-          padding: "1rem 2rem",
+          padding: "0.6rem 1.5rem",
+          background: "color-mix(in oklab, var(--color-bg) 90%, transparent)",
+          backdropFilter: "blur(10px)",
+          borderBottom: "1px solid var(--color-nav-bg)",
+          transition: "top 0.2s ease-out",
         }}
       >
         {/* Logo links */}
@@ -93,9 +145,11 @@ export default function Home() {
         <nav
           className="desktop-nav"
           style={{
-            flex: "1 1 auto",
+            position: "absolute",
+            left: "50%",
+            top: "50%",
+            transform: "translate(-50%, -50%)",
             display: "flex",
-            justifyContent: "center",
             gap: "1rem",
           }}
         >
@@ -248,39 +302,50 @@ export default function Home() {
                   </a>
                 ))}
 
-                <button
-                  onClick={closeMenu}
-                  style={{
-                    padding: "1rem 0",
-                    fontSize: "1.25rem",
-                    fontWeight: 600,
-                    color: "var(--color-text)",
-                    background: "transparent",
-                    border: "none",
-                    borderBottom: "1px solid rgba(255,255,255,0.1)",
-                    textAlign: "left",
-                    cursor: "pointer",
-                  }}
-                >
-                  Anmelden
-                </button>
-
-                <button
-                  onClick={closeMenu}
-                  style={{
-                    padding: "1rem 0",
-                    fontSize: "1.25rem",
-                    fontWeight: 600,
-                    color: "var(--color-text)",
-                    background: "transparent",
-                    border: "none",
-                    borderBottom: "1px solid rgba(255,255,255,0.1)",
-                    textAlign: "left",
-                    cursor: "pointer",
-                  }}
-                >
-                  Testen
-                </button>
+                {/* 👇 zustandsabhängig */}
+                {loggedIn ? (
+                  <>
+                    <button
+                      onClick={() => {
+                        closeMenu();
+                        router.push("/generate");
+                      }}
+                      style={mobileBtnStyle}
+                    >
+                      Generieren
+                    </button>
+                    <button
+                      onClick={() => {
+                        closeMenu();
+                        router.push("/account");
+                      }}
+                      style={mobileBtnStyle}
+                    >
+                      Mein Konto
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => {
+                        closeMenu();
+                        router.push("/login");
+                      }}
+                      style={mobileBtnStyle}
+                    >
+                      Anmelden
+                    </button>
+                    <button
+                      onClick={() => {
+                        closeMenu();
+                        router.push("/register");
+                      }}
+                      style={mobileBtnStyle}
+                    >
+                      Registrieren
+                    </button>
+                  </>
+                )}
               </nav>
             </div>
           </>
@@ -505,6 +570,4 @@ export default function Home() {
     </main>
   );
 }
-
-
 
