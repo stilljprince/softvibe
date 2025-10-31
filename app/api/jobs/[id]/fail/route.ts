@@ -5,44 +5,45 @@ import { authOptions } from "@/lib/auth/config";
 import { prisma } from "@/lib/prisma";
 import { $Enums } from "@prisma/client";
 
-export const runtime = "nodejs";
+type Params = {
+  params: {
+    id: string;
+  };
+};
 
-export async function POST(_req: Request, context: unknown) {
-  // Mock in Production sperren
-  if (process.env.NODE_ENV === "production") {
-    return NextResponse.json({ error: "Not available in production" }, { status: 403 });
-  }
-
-  const { params } = context as { params: { id: string } };
-
+export async function POST(_req: Request, { params }: Params) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Job des aktuellen Users holen
   const job = await prisma.job.findFirst({
-    where: { id: params.id, userId: session.user.id },
-    select: { id: true, status: true },
+    where: {
+      id: params.id,
+      userId: session.user.id,
+    },
   });
 
   if (!job) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  // Nur Jobs, die gerade PROCESSING sind, dürfen fehlschlagen
-  if (job.status !== $Enums.JobStatus.PROCESSING) {
-    return NextResponse.json({ error: "Invalid state" }, { status: 409 });
-  }
-
-  const failed = await prisma.job.update({
-    where: { id: job.id },
+  const updated = await prisma.job.update({
+    where: { id: params.id },
     data: {
       status: $Enums.JobStatus.FAILED,
-      error: "Mock: Audio-Engine konnte den Job nicht verarbeiten.",
+      error: "Mock: Verarbeitung fehlgeschlagen.",
     },
-    select: { id: true, status: true, error: true },
+    select: {
+      id: true,
+      status: true,
+      resultUrl: true,
+      prompt: true,
+      preset: true,
+      error: true,
+      createdAt: true,
+    },
   });
 
-  return NextResponse.json(failed);
+  return NextResponse.json(updated);
 }

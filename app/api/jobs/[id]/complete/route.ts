@@ -1,43 +1,51 @@
+// app/api/jobs/[id]/complete/route.ts
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/config";
 import { prisma } from "@/lib/prisma";
 import { $Enums } from "@prisma/client";
 
-export const runtime = "nodejs";
+type Params = {
+  params: {
+    id: string;
+  };
+};
 
-export async function POST(_req: Request, context: unknown) {
-  // 🔒 Mock in Production sperren
-  if (process.env.NODE_ENV === "production") {
-    return NextResponse.json({ error: "Not available in production" }, { status: 403 });
-  }
-
-  const { params } = context as { params: { id: string } };
-
+export async function POST(_req: Request, { params }: Params) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Ownership prüfen
-  const found = await prisma.job.findFirst({
-    where: { id: params.id, userId: session.user.id },
-    select: { id: true },
+  // nur eigenen Job updaten
+  const job = await prisma.job.findFirst({
+    where: {
+      id: params.id,
+      userId: session.user.id,
+    },
   });
-  if (!found) {
+
+  if (!job) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  const job = await prisma.job.update({
+  const updated = await prisma.job.update({
     where: { id: params.id },
     data: {
       status: $Enums.JobStatus.DONE,
-      resultUrl:
-        "https://cdn.pixabay.com/download/audio/2021/10/26/audio_5f2b3f.mp3?filename=softvibe-demo.mp3",
-      error: null,
+      // hier könnten wir eine echte URL setzen – fürs Testing reicht ein Dummy
+      resultUrl: job.resultUrl ?? "https://example.com/fake-asmr.mp3",
     },
-    select: { id: true, status: true, resultUrl: true },
+    select: {
+      id: true,
+      status: true,
+      resultUrl: true,
+      prompt: true,
+      preset: true,
+      error: true,
+      createdAt: true,
+    },
   });
 
-  return NextResponse.json(job);
+  return NextResponse.json(updated);
 }

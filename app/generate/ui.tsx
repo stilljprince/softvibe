@@ -32,6 +32,7 @@ export default function GenerateClient() {
   const [jobList, setJobList] = useState<Job[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loadingList, setLoadingList] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const canSubmit = useMemo(() => prompt.trim().length >= 3, [prompt]);
 
@@ -41,8 +42,16 @@ export default function GenerateClient() {
 
   async function loadJobs(skip: number) {
     setLoadingList(true);
+    setError(null);
     const res = await fetch(`/api/jobs?take=${PAGE_SIZE}&skip=${skip}`);
+    if (res.status === 401) {
+      // falls jemand doch ohne Session hier reinrutscht
+      setError("Nicht eingeloggt.");
+      setLoadingList(false);
+      return;
+    }
     if (!res.ok) {
+      setError("Konnte Jobs nicht laden.");
       setLoadingList(false);
       return;
     }
@@ -57,6 +66,7 @@ export default function GenerateClient() {
   }
 
   async function createJob() {
+    setError(null);
     const res = await fetch("/api/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -64,12 +74,17 @@ export default function GenerateClient() {
     });
 
     if (res.status === 429) {
-      alert("Zu viele Anfragen. Bitte kurz warten.");
+      setError("Zu viele Anfragen. Bitte kurz warten.");
+      return;
+    }
+
+    if (res.status === 401) {
+      setError("Nicht eingeloggt.");
       return;
     }
 
     if (!res.ok) {
-      alert("Konnte Job nicht anlegen.");
+      setError("Konnte Job nicht anlegen.");
       return;
     }
 
@@ -85,7 +100,11 @@ export default function GenerateClient() {
     if (!job || !polling) return;
     const id = setInterval(async () => {
       const res = await fetch(`/api/jobs/${job.id}`);
-      if (!res.ok) return;
+      if (!res.ok) {
+        // vorher wurde hier einfach "return" gemacht → wir loggen es lieber
+        console.warn("Job konnte nicht neu geladen werden", await res.text());
+        return;
+      }
       const fresh: Job = await res.json();
       setJob(fresh);
       if (fresh.status === "DONE" || fresh.status === "FAILED") {
@@ -103,12 +122,11 @@ export default function GenerateClient() {
     });
     if (res.status === 204) {
       setJobList((prev) => prev.filter((j) => j.id !== id));
-      // falls der aktuell angezeigte Job gelöscht wurde
       if (job?.id === id) {
         setJob(null);
       }
     } else {
-      alert("Konnte Job nicht löschen.");
+      setError("Konnte Job nicht löschen.");
     }
   }
 
@@ -181,6 +199,10 @@ export default function GenerateClient() {
         </div>
       </section>
 
+      {error && (
+        <p style={{ color: "#e11d48", marginTop: 12 }}>{error}</p>
+      )}
+
       {/* Aktueller Job */}
       {job && (
         <section style={{ marginTop: 16 }}>
@@ -201,13 +223,13 @@ export default function GenerateClient() {
               <li
                 key={j.id}
                 style={{
-                    background: "var(--color-card)",
-                    border: "1px solid var(--color-nav-bg)",
-                    borderRadius: 10,
-                    padding: "10px 12px",
-                    display: "flex",
-                    gap: 14,
-                    alignItems: "center",
+                  background: "var(--color-card)",
+                  border: "1px solid var(--color-nav-bg)",
+                  borderRadius: 10,
+                  padding: "10px 12px",
+                  display: "flex",
+                  gap: 14,
+                  alignItems: "center",
                 }}
               >
                 <div style={{ flex: "1 1 auto", minWidth: 0 }}>
@@ -228,7 +250,6 @@ export default function GenerateClient() {
                     <audio controls src={j.resultUrl} style={{ width: 140 }} />
                   ) : null}
 
-                  {/* 🆕 löschen */}
                   <button
                     type="button"
                     onClick={() => deleteJob(j.id)}
