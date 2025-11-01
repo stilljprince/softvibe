@@ -8,7 +8,7 @@ import { $Enums } from "@prisma/client";
 
 export const runtime = "nodejs";
 
-// LIST (mit optional ?take und ?skip)
+// GET /api/jobs
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
@@ -28,16 +28,17 @@ export async function GET(req: Request) {
       resultUrl: true,
       prompt: true,
       preset: true,
+      durationSec: true, // 👈 nur einmal
       createdAt: true,
     },
-    take: Math.min(take, 50), // Hard-Limit
+    take: Math.min(take, 50),
     skip: Math.max(skip, 0),
   });
 
   return NextResponse.json(jobs);
 }
 
-// CREATE (mit Rate-Limit wie vorher)
+// POST /api/jobs
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
@@ -58,14 +59,14 @@ export async function POST(req: Request) {
     select: { id: true },
   });
   if (recent) {
-    const headers = { "Retry-After": String(Math.ceil(WINDOW_MS / 1000)) };
+    const retry = Math.ceil(WINDOW_MS / 1000);
     return NextResponse.json(
-      { error: "RATE_LIMITED", retryAfterSeconds: Math.ceil(WINDOW_MS / 1000) },
-      { status: 429, headers }
+      { error: "RATE_LIMITED", retryAfterSeconds: retry },
+      { status: 429, headers: { "Retry-After": String(retry) } }
     );
   }
 
-  const { prompt, preset } = parsed.data;
+  const { prompt, preset, durationSec } = parsed.data;
 
   const job = await prisma.job.create({
     data: {
@@ -73,8 +74,16 @@ export async function POST(req: Request) {
       prompt,
       preset,
       status: $Enums.JobStatus.QUEUED,
+      ...(typeof durationSec === "number" ? { durationSec } : {}),
     },
-    select: { id: true, status: true },
+    select: {
+      id: true,
+      status: true,
+      prompt: true,
+      preset: true,
+      durationSec: true, // 👈 auch hier genau einmal
+      createdAt: true,
+    },
   });
 
   return NextResponse.json(job, { status: 201 });
