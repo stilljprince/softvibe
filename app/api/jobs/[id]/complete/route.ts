@@ -1,26 +1,39 @@
 // app/api/jobs/[id]/complete/route.ts
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/config";
 import { prisma } from "@/lib/prisma";
-import { $Enums } from "@prisma/client";
 
 export const runtime = "nodejs";
 
-export async function POST(req: NextRequest, ctx: unknown) {
-  // ctx auf das erwartete Format casten
-  const { params } = ctx as { params: { id: string } };
-  const jobId = params.id;
+export async function POST(req: Request) {
+  const url = new URL(req.url);
+  const parts = url.pathname.split("/"); // ["", "api", "jobs", "<id>", "complete"]
+  const jobId = parts[3];
 
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!jobId) {
+    return NextResponse.json({ error: "Job ID missing" }, { status: 400 });
   }
 
-  const job = await prisma.job.findFirst({
-    where: {
-      id: jobId,
-      userId: session.user.id,
+  // 🔐 zuerst System-Header prüfen
+  const systemSecret = req.headers.get("x-softvibe-job-secret");
+  const isSystem =
+    systemSecret && systemSecret === process.env.JOB_SYSTEM_SECRET;
+
+  let userId: string | null = null;
+  if (!isSystem) {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    userId = session.user.id;
+  }
+
+  const job = await prisma.job.findUnique({
+    where: { id: jobId },
+    select: {
+      id: true,
+      userId: true,
     },
   });
 
@@ -28,12 +41,18 @@ export async function POST(req: NextRequest, ctx: unknown) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
+  // 👤 wenn User → Ownership prüfen
+  if (!isSystem && job.userId !== userId) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  // Dummy-Audio setzen
   const updated = await prisma.job.update({
     where: { id: jobId },
     data: {
-      status: $Enums.JobStatus.DONE,
-      // Dummy-URL für deine UI
-      resultUrl: job.resultUrl ?? "https://example.com/fake-asmr.mp3",
+      status: "DONE",
+      resultUrl: "https://samplelib.com/lib/preview/mp3/sample-3s.mp3",
+      error: null,
     },
     select: {
       id: true,
@@ -41,7 +60,7 @@ export async function POST(req: NextRequest, ctx: unknown) {
       resultUrl: true,
       prompt: true,
       preset: true,
-      error: true,
+      durationSec: true,
       createdAt: true,
     },
   });

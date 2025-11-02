@@ -120,7 +120,7 @@ export default function Home() {
           padding: "0.6rem 1.5rem",
           background: "color-mix(in oklab, var(--color-bg) 90%, transparent)",
           backdropFilter: "blur(10px)",
-          borderBottom: "1px solid var(--color-nav-bg)",
+         
           transition: "top 0.2s ease-out",
         }}
       >
@@ -209,25 +209,18 @@ export default function Home() {
 
 
         {/* Styles */}
-       <style jsx>{`
+<style jsx>{`
   .desktop-nav { display: flex; }
   .burger-btn { display: none; }
 
-  /* 👇 bisher: unter 768px nur Mobile */
   @media (max-width: 768px) {
-    .desktop-nav { display: none !important; }
-    .burger-btn { display: block !important; }
-  }
-
-  /* 👇 NEU: auch bei quer-Mobil (iPhone Landscape) ausblenden,
-     weil dort zu wenig Höhe/Breite für Nav + Auth ist */
-  @media (max-width: 950px) {
     .desktop-nav { display: none !important; }
     .burger-btn { display: block !important; }
   }
 
   .mobile-menu.open { animation: slideIn 0.3s forwards; }
   .mobile-menu.closing { animation: slideOut 0.3s forwards; }
+
   @keyframes slideIn {
     from { transform: translateX(100%); }
     to { transform: translateX(0); }
@@ -236,9 +229,21 @@ export default function Home() {
     from { transform: translateX(0); }
     to { transform: translateX(100%); }
   }
+
+  /* 👇 NEU: Landscape auf kleinen Geräten → trotzdem Mobile-Menü erzwingen */
+  @media (orientation: landscape) and (max-width: 1024px) {
+    .desktop-nav { display: none !important; }
+    .burger-btn { display: block !important; }
+  }
+
+  /* optional, falls sehr niedrige Viewports (<600px Höhe) */
+  @media (max-height: 600px) and (max-width: 1100px) {
+    .desktop-nav { display: none !important; }
+    .burger-btn { display: block !important; }
+  }
 `}</style>
       </header>
-{/* ====================== Mobile Menü (außerhalb des Headers!) ====================== */}
+{/* ====================== Mobile Menü ====================== */}
 {(menuOpen || closing) && (
   <>
     {/* Overlay */}
@@ -247,7 +252,7 @@ export default function Home() {
       style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 999 }}
     />
 
-    {/* Drawer */}
+    {/* Slide-In/Out Menü */}
     <div
       className={`mobile-menu ${closing ? "closing" : "open"}`}
       style={{
@@ -257,182 +262,183 @@ export default function Home() {
         height: "100%",
         width: "70%",
         maxWidth: "300px",
-        // 👇 jetzt: theme-aware + transparenter für Glas
-        background:
-          theme === "dark"
-            ? "rgba(17, 24, 39, 0.75)"   // dark, leicht transparent
-            : theme === "pastel"
-            ? "rgba(253, 247, 255, 0.85)" // pastel
-            : "rgba(253, 251, 247, 0.85)", // light
-        backdropFilter: "blur(14px)",
-        WebkitBackdropFilter: "blur(14px)",
         zIndex: 1000,
         display: "flex",
-        flexDirection: "column",
-        padding: "1rem",
-        boxShadow: "-2px 0 10px rgba(0,0,0,0.2)",
-        borderLeft: "1px solid rgba(255,255,255,0.12)",
       }}
     >
-      {/* Theme Switch Button – schließt das Menü NICHT */}
-      <button
-        onClick={handleToggle}
+      {/* inneres Panel */}
+      <div
         style={{
-          marginTop: "2rem",
-          background: "transparent",
-          border: "none",
-          textAlign: "left",
-          fontWeight: 600,
-          color: "var(--color-text)",
+          background:
+            theme === "dark"
+              ? "#111827"
+              : theme === "pastel"
+              ? "#fdf7ff"
+              : "#fdfbf7",
+          borderLeft: "1px solid var(--color-nav-bg)",
+          height: "100%",
           width: "100%",
-          appearance: "none",
-          WebkitAppearance: "none",
+          display: "flex",
+          flexDirection: "column",
+          padding: "1rem",
+          boxShadow: "-2px 0 10px rgba(0,0,0,0.2)",
         }}
       >
-        {getThemeIcon()} Theme wechseln
-      </button>
+        {/* Theme Switch Button – schließt das Menü NICHT */}
+        <button
+          onClick={() => {
+            handleToggle();
+          }}
+          style={{
+            marginTop: "2rem",
+            background: "transparent",
+            border: "none",
+            textAlign: "left",
+            fontWeight: 600,
+            color: "var(--color-text)",
+            width: "100%",               // 👈 vollbreit
+          }}
+        >
+          {getThemeIcon()} Theme wechseln
+        </button>
 
-      {/* Schließen oben rechts */}
-      <button
-        onClick={closeMenu}
-        style={{
-          background: "transparent",
-          border: "none",
-          fontSize: "2rem",
-          alignSelf: "flex-end",
-          cursor: "pointer",
-          marginBottom: "1rem",
-          color: "var(--color-text)",
-          appearance: "none",
-          WebkitAppearance: "none",
-        }}
-      >
-        ✕
-      </button>
+        {/* Schließen oben rechts */}
+        <button
+          onClick={closeMenu}
+          style={{
+            background: "transparent",
+            border: "none",
+            fontSize: "2rem",
+            alignSelf: "flex-end",
+            cursor: "pointer",
+            marginBottom: "1rem",
+            color: "var(--color-text)",
+          }}
+        >
+          ✕
+        </button>
 
-      {/* Links */}
-      <nav style={{ display: "flex", flexDirection: "column" }}>
-        {[
-          { id: "features", label: "Features" },
-          { id: "about", label: "Über uns" },
-          { id: "contact", label: "Kontakt" },
-        ].map((item) => (
-          <a
-            key={item.id}
-            href={`#${item.id}`}
-            onClick={closeMenu}
-            style={{
-              padding: "1rem 0",
-              fontSize: "1.25rem",
-              fontWeight: 600,
-              color: "var(--color-text)",
-              textDecoration: "none",
-              borderBottom: "1px solid rgba(255,255,255,0.12)",
-              textAlign: "left",
-              width: "100%",
-              display: "block",
-            }}
-          >
-            {item.label}
-          </a>
-        ))}
+        {/* Links + Actions */}
+        <nav style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+          {[
+            { id: "features", label: "Features" },
+            { id: "about", label: "Über uns" },
+            { id: "contact", label: "Kontakt" },
+          ].map((item) => (
+            <a
+              key={item.id}
+              href={`#${item.id}`}
+              onClick={closeMenu}
+              style={{
+                padding: "1rem 0",
+                fontSize: "1.25rem",
+                fontWeight: 600,
+                color: "var(--color-text)",
+                textDecoration: "none",
+                borderBottom: "1px solid var(--color-nav-bg)",
+                textAlign: "left",
+                width: "100%",             // 👈 vollbreit
+                display: "block",           // 👈 block, damit nix nebeneinander will
+              }}
+            >
+              {item.label}
+            </a>
+          ))}
 
-        {loggedIn ? (
-          <>
-            <button
-              onClick={() => {
-                closeMenu();
-                router.push("/generate");
-              }}
-              style={{
-                padding: "1rem 0",
-                fontSize: "1.25rem",
-                fontWeight: 600,
-                color: "var(--color-text)",
-                background: "transparent",
-                border: "none",
-                borderBottom: "1px solid rgba(255,255,255,0.12)",
-                textAlign: "left",
-                cursor: "pointer",
-                width: "100%",
-                appearance: "none",
-                WebkitAppearance: "none",
-              }}
-            >
-              Generieren
-            </button>
-            <button
-              onClick={() => {
-                closeMenu();
-                router.push("/account");
-              }}
-              style={{
-                padding: "1rem 0",
-                fontSize: "1.25rem",
-                fontWeight: 600,
-                color: "var(--color-text)",
-                background: "transparent",
-                border: "none",
-                borderBottom: "1px solid rgba(255,255,255,0.12)",
-                textAlign: "left",
-                cursor: "pointer",
-                width: "100%",
-                appearance: "none",
-                WebkitAppearance: "none",
-              }}
-            >
-              Mein Konto
-            </button>
-          </>
-        ) : (
-          <>
-            <button
-              onClick={() => {
-                closeMenu();
-                router.push("/login");
-              }}
-              style={{
-                padding: "1rem 0",
-                fontSize: "1.25rem",
-                fontWeight: 600,
-                color: "var(--color-text)",
-                background: "transparent",
-                border: "none",
-                borderBottom: "1px solid rgba(255,255,255,0.12)",
-                textAlign: "left",
-                cursor: "pointer",
-                width: "100%",
-                appearance: "none",
-                WebkitAppearance: "none",
-              }}
-            >
-              Anmelden
-            </button>
-            <button
-              onClick={() => {
-                closeMenu();
-                router.push("/register");
-              }}
-              style={{
-                padding: "1rem 0",
-                fontSize: "1.25rem",
-                fontWeight: 600,
-                color: "var(--color-text)",
-                background: "transparent",
-                border: "none",
-                borderBottom: "1px solid rgba(255,255,255,0.12)",
-                textAlign: "left",
-                cursor: "pointer",
-                width: "100%",
-                appearance: "none",
-                WebkitAppearance: "none",
-              }}
-            >
-              Registrieren
-            </button>
-          </>
-        )}
-      </nav>
+          {/* 👇 zustandsabhängig */}
+          {loggedIn ? (
+            <>
+              <button
+                onClick={() => {
+                  closeMenu();
+                  router.push("/generate");
+                }}
+                style={{
+                  padding: "1rem 0",
+                  fontSize: "1.25rem",
+                  fontWeight: 600,
+                  color: "var(--color-text)",
+                  background: "transparent",
+                  border: "none",
+                  borderBottom: "1px solid var(--color-nav-bg)",
+                  textAlign: "left",
+                  cursor: "pointer",
+                  width: "100%",           // 👈 vollbreit
+                  display: "block",
+                }}
+              >
+                Generieren
+              </button>
+              <button
+                onClick={() => {
+                  closeMenu();
+                  router.push("/account");
+                }}
+                style={{
+                  padding: "1rem 0",
+                  fontSize: "1.25rem",
+                  fontWeight: 600,
+                  color: "var(--color-text)",
+                  background: "transparent",
+                  border: "none",
+                  borderBottom: "1px solid var(--color-nav-bg)",
+                  textAlign: "left",
+                  cursor: "pointer",
+                  width: "100%",           // 👈 vollbreit
+                  display: "block",
+                }}
+              >
+                Mein Konto
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={() => {
+                  closeMenu();
+                  router.push("/login");
+                }}
+                style={{
+                  padding: "1rem 0",
+                  fontSize: "1.25rem",
+                  fontWeight: 600,
+                  color: "var(--color-text)",
+                  background: "transparent",
+                  border: "none",
+                  borderBottom: "1px solid var(--color-nav-bg)",
+                  textAlign: "left",
+                  cursor: "pointer",
+                  width: "100%",           // 👈 vollbreit
+                  display: "block",
+                }}
+              >
+                Anmelden
+              </button>
+              <button
+                onClick={() => {
+                  closeMenu();
+                  router.push("/register");
+                }}
+                style={{
+                  padding: "1rem 0",
+                  fontSize: "1.25rem",
+                  fontWeight: 600,
+                  color: "var(--color-text)",
+                  background: "transparent",
+                  border: "none",
+                  borderBottom: "1px solid var(--color-nav-bg)",
+                  textAlign: "left",
+                  cursor: "pointer",
+                  width: "100%",           // 👈 vollbreit
+                  display: "block",
+                }}
+              >
+                Registrieren
+              </button>
+            </>
+          )}
+        </nav>
+      </div>
     </div>
   </>
 )}

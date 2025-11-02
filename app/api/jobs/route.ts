@@ -8,6 +8,9 @@ import { $Enums } from "@prisma/client";
 
 export const runtime = "nodejs";
 
+// 👇 hier stellst du ein, wie viele offene Jobs ein User max. haben darf
+const MAX_OPEN_JOBS_PER_USER = 5;
+
 // GET /api/jobs
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
@@ -28,7 +31,7 @@ export async function GET(req: Request) {
       resultUrl: true,
       prompt: true,
       preset: true,
-      durationSec: true, // 👈 nur einmal
+      durationSec: true,
       createdAt: true,
     },
     take: Math.min(take, 50),
@@ -51,7 +54,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  // Rate-Limit
+  // ⏱️ 1. kleines Zeit-Rate-Limit (wie vorher)
   const WINDOW_MS = 5000;
   const since = new Date(Date.now() - WINDOW_MS);
   const recent = await prisma.job.findFirst({
@@ -66,6 +69,29 @@ export async function POST(req: Request) {
     );
   }
 
+  // 🆕 2. offenes-Job-Limit pro User
+  // offen = QUEUED oder PROCESSING
+  const openCount = await prisma.job.count({
+    where: {
+      userId: session.user.id,
+      status: {
+        in: [$Enums.JobStatus.QUEUED, $Enums.JobStatus.PROCESSING],
+      },
+    },
+  });
+
+  if (openCount >= MAX_OPEN_JOBS_PER_USER) {
+    return NextResponse.json(
+      {
+        error: "TOO_MANY_OPEN_JOBS",
+        message: `Du hast bereits ${openCount} offene Jobs. Bitte warte, bis einer fertig ist.`,
+        maxOpenJobs: MAX_OPEN_JOBS_PER_USER,
+      },
+      { status: 429 }
+    );
+  }
+
+  // 3. eigentlicher Create
   const { prompt, preset, durationSec } = parsed.data;
 
   const job = await prisma.job.create({
@@ -81,7 +107,7 @@ export async function POST(req: Request) {
       status: true,
       prompt: true,
       preset: true,
-      durationSec: true, // 👈 auch hier genau einmal
+      durationSec: true,
       createdAt: true,
     },
   });

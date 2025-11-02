@@ -40,13 +40,14 @@ export const authOptions: NextAuthOptions = {
   session: { strategy: "jwt" },
   pages: { signIn: "/login" },
   callbacks: {
-    async jwt({ token, user }) {
-      if (user && "id" in user) (token as TokenWithId).id = (user as { id: string }).id;
-      return token;
-    },
-    async session({ session, token }) {
-      if (session.user) (session.user as { id: string }).id = (token as TokenWithId).id ?? "";
-      return session;
-    },
+    // lib/auth/config.ts – in callbacks
+              async jwt({ token, user }) {
+                if (user) token.id = (user as { id: string }).id;
+                return token;
+              },
+              async session({ session, token }) {
+                session.user!.id = token.id as string;
+                return session;
+              },
   },
 };

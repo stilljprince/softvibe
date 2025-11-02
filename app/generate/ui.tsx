@@ -73,20 +73,30 @@ export default function GenerateClient() {
     }
 
     const res = await fetch("/api/jobs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
 
-    if (res.status === 429) {
-      alert("Zu viele Anfragen. Bitte kurz warten.");
-      return;
-    }
+      if (res.status === 429) {
+        // 👇 versuchen, die Antwort zu lesen (kann auch fehlschlagen → dann halt Standardmeldung)
+        const data = await res.json().catch(() => null);
 
-    if (!res.ok) {
-      alert("Konnte Job nicht anlegen.");
-      return;
-    }
+        if (data?.error === "TOO_MANY_OPEN_JOBS") {
+          alert(
+            data?.message ??
+              "Du hast schon zu viele offene Jobs. Bitte warte, bis einer fertig ist."
+          );
+        } else {
+          alert("Zu viele Anfragen. Bitte kurz warten.");
+        }
+        return;
+      }
+
+      if (!res.ok) {
+        alert("Konnte Job nicht anlegen.");
+        return;
+      }
 
     const data: Job = await res.json();
     setJob(data);

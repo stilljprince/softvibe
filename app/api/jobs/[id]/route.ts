@@ -1,32 +1,44 @@
 // app/api/jobs/[id]/route.ts
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/config";
 import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
 
-// GET /api/jobs/:id
-export async function GET(req: NextRequest, ctx: unknown) {
-  const { params } = ctx as { params: { id: string } };
-  const jobId = params.id;
+export async function GET(req: Request) {
+  const url = new URL(req.url);
+  const parts = url.pathname.split("/"); // ['', 'api', 'jobs', '<id>']
+  const jobId = parts[3];
 
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!jobId) {
+    return NextResponse.json({ error: "Job ID missing" }, { status: 400 });
   }
 
-  const job = await prisma.job.findFirst({
-    where: {
-      id: jobId,
-      userId: session.user.id,
-    },
+  // 🔐 System-Header prüfen
+  const systemSecret = req.headers.get("x-softvibe-job-secret");
+  const isSystem =
+    systemSecret && systemSecret === process.env.JOB_SYSTEM_SECRET;
+
+  let userId: string | null = null;
+  if (!isSystem) {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    userId = session.user.id;
+  }
+
+  const job = await prisma.job.findUnique({
+    where: { id: jobId },
     select: {
       id: true,
+      userId: true,
       status: true,
-      resultUrl: true,
       prompt: true,
       preset: true,
+      durationSec: true,
+      resultUrl: true,
       error: true,
       createdAt: true,
     },
@@ -36,29 +48,50 @@ export async function GET(req: NextRequest, ctx: unknown) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
+  // 👤 wenn kein System-Call → Ownership prüfen
+  if (!isSystem && job.userId !== userId) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   return NextResponse.json(job);
 }
 
-// DELETE /api/jobs/:id
-export async function DELETE(req: NextRequest, ctx: unknown) {
-  const { params } = ctx as { params: { id: string } };
-  const jobId = params.id;
+export async function DELETE(req: Request) {
+  const url = new URL(req.url);
+  const parts = url.pathname.split("/");
+  const jobId = parts[3];
 
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!jobId) {
+    return NextResponse.json({ error: "Job ID missing" }, { status: 400 });
   }
 
-  const existing = await prisma.job.findFirst({
-    where: {
-      id: jobId,
-      userId: session.user.id,
+  const systemSecret = req.headers.get("x-softvibe-job-secret");
+  const isSystem =
+    systemSecret && systemSecret === process.env.JOB_SYSTEM_SECRET;
+
+  let userId: string | null = null;
+  if (!isSystem) {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    userId = session.user.id;
+  }
+
+  const job = await prisma.job.findUnique({
+    where: { id: jobId },
+    select: {
+      id: true,
+      userId: true,
     },
-    select: { id: true },
   });
 
-  if (!existing) {
+  if (!job) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  if (!isSystem && job.userId !== userId) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   await prisma.job.delete({
