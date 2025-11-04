@@ -3,11 +3,15 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-const PRESETS = [
+/** Fallback-Presets (falls /api/presets nichts liefert) */
+const FALLBACK_PRESETS = [
   { id: "classic-asmr", label: "Classic ASMR (Whisper, Tapping)" },
   { id: "sleep-story", label: "Sleep Story (Calm, Slow)" },
   { id: "meditation", label: "Meditation (Breath, Soft Tone)" },
 ];
+
+type UIPreset = { id: string; label: string };
+type ApiPreset = { id?: string; slug?: string; label?: string; name?: string };
 
 type JobStatus = "QUEUED" | "PROCESSING" | "DONE" | "FAILED";
 
@@ -24,25 +28,79 @@ type Job = {
 
 const PAGE_SIZE = 10;
 
+/** Type Guard für API-Presets */
+function isApiPreset(x: unknown): x is ApiPreset {
+  return typeof x === "object" && x !== null && (
+    "id" in x || "slug" in x || "label" in x || "name" in x
+  );
+}
+
 export default function GenerateClient() {
-  const [preset, setPreset] = useState<string>(PRESETS[0].id);
+  // Presets & Auswahl
+  const [presets, setPresets] = useState<UIPreset[]>(FALLBACK_PRESETS);
+  const [preset, setPreset] = useState<string>(FALLBACK_PRESETS[0].id);
+
+  // Formularfelder
   const [prompt, setPrompt] = useState("");
   const [durationSec, setDurationSec] = useState<number | "">("");
+
+  // Aktueller Job & Polling
   const [job, setJob] = useState<Job | null>(null);
   const [polling, setPolling] = useState(false);
+
+  // Liste + Paging
   const [jobList, setJobList] = useState<Job[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loadingList, setLoadingList] = useState(false);
 
   const canSubmit = useMemo(() => prompt.trim().length >= 3, [prompt]);
 
+  // Presets laden (mit Fallback)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/presets", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json().catch(() => null);
+        if (!Array.isArray(data)) return;
+
+        const arr = data.filter(isApiPreset);
+        if (arr.length === 0) return;
+
+        const mapped: UIPreset[] = arr.map((p) => ({
+          id:
+            p.id ??
+            p.slug ??
+            (p.label ? p.label.toLowerCase().replace(/\s+/g, "-") : "preset"),
+          label: p.label ?? p.name ?? String(p.slug ?? p.id ?? "Preset"),
+        }));
+
+        if (!cancelled) {
+          setPresets(mapped);
+          // aktuelle Auswahl beibehalten, falls vorhanden – sonst auf erstes Preset setzen
+          if (!mapped.some((pr) => pr.id === preset)) {
+            setPreset(mapped[0].id);
+          }
+        }
+      } catch {
+        // stiller Fallback auf FALLBACK_PRESETS
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // absichtlich "preset" in deps, damit Auswahl konsistent bleibt wenn Presets wechseln
+  }, [preset]);
+
+  // Erste Seite Jobs laden
   useEffect(() => {
     void loadJobs(0);
   }, []);
 
   async function loadJobs(skip: number) {
     setLoadingList(true);
-    const res = await fetch(`/api/jobs?take=${PAGE_SIZE}&skip=${skip}`);
+    const res = await fetch(`/api/jobs?take=${PAGE_SIZE}&skip=${skip}`, { cache: "no-store" });
     if (!res.ok) {
       setLoadingList(false);
       return;
@@ -58,45 +116,39 @@ export default function GenerateClient() {
   }
 
   async function createJob() {
-    // 👇 statt any → explizites Objekt
     const body: {
       preset: string;
       prompt: string;
       durationSec?: number;
-    } = {
-      preset,
-      prompt,
-    };
+    } = { preset, prompt };
 
     if (typeof durationSec === "number" && !Number.isNaN(durationSec)) {
       body.durationSec = durationSec;
     }
 
     const res = await fetch("/api/jobs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
 
-      if (res.status === 429) {
-        // 👇 versuchen, die Antwort zu lesen (kann auch fehlschlagen → dann halt Standardmeldung)
-        const data = await res.json().catch(() => null);
-
-        if (data?.error === "TOO_MANY_OPEN_JOBS") {
-          alert(
-            data?.message ??
-              "Du hast schon zu viele offene Jobs. Bitte warte, bis einer fertig ist."
-          );
-        } else {
-          alert("Zu viele Anfragen. Bitte kurz warten.");
-        }
-        return;
+    if (res.status === 429) {
+      const data = await res.json().catch(() => null);
+      if (data?.error === "TOO_MANY_OPEN_JOBS") {
+        alert(
+          data?.message ??
+            "Du hast schon zu viele offene Jobs. Bitte warte, bis einer fertig ist."
+        );
+      } else {
+        alert("Zu viele Anfragen. Bitte kurz warten.");
       }
+      return;
+    }
 
-      if (!res.ok) {
-        alert("Konnte Job nicht anlegen.");
-        return;
-      }
+    if (!res.ok) {
+      alert("Konnte Job nicht anlegen.");
+      return;
+    }
 
     const data: Job = await res.json();
     setJob(data);
@@ -104,12 +156,11 @@ export default function GenerateClient() {
     void loadJobs(0);
   }
 
-  // Polling
+  // Polling für aktuellen Job
   useEffect(() => {
     if (!job || !polling) return;
-
     const id = setInterval(async () => {
-      const res = await fetch(`/api/jobs/${job.id}`);
+      const res = await fetch(`/api/jobs/${job.id}`, { cache: "no-store" });
       if (!res.ok) return;
       const fresh: Job = await res.json();
       setJob(fresh);
@@ -118,10 +169,10 @@ export default function GenerateClient() {
         void loadJobs(0);
       }
     }, 2000);
-
     return () => clearInterval(id);
   }, [job, polling]);
 
+  // Job löschen
   async function deleteJob(id: string) {
     const res = await fetch(`/api/jobs/${id}`, { method: "DELETE" });
     if (res.status === 204) {
@@ -138,7 +189,7 @@ export default function GenerateClient() {
         Generieren
       </h1>
 
-      {/* Formular */}
+      {/* Formular-Karte */}
       <section
         style={{
           background: "var(--color-card)",
@@ -156,7 +207,7 @@ export default function GenerateClient() {
               onChange={(e) => setPreset(e.target.value)}
               className="sv-input"
             >
-              {PRESETS.map((p) => (
+              {presets.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.label}
                 </option>
@@ -175,7 +226,7 @@ export default function GenerateClient() {
             />
           </div>
 
-          {/* Dauer */}
+          {/* Dauer (optional) */}
           <div>
             <label className="sv-label">
               Dauer (Sekunden) <span style={{ opacity: 0.5 }}>(optional)</span>
@@ -188,11 +239,8 @@ export default function GenerateClient() {
               value={durationSec}
               onChange={(e) => {
                 const v = e.target.value;
-                if (v === "") {
-                  setDurationSec("");
-                } else {
-                  setDurationSec(Number(v));
-                }
+                if (v === "") setDurationSec("");
+                else setDurationSec(Number(v));
               }}
               placeholder="z. B. 120"
             />
@@ -214,6 +262,7 @@ export default function GenerateClient() {
             >
               Simulation abschließen
             </button>
+
             <button
               className="sv-btn sv-btn--primary"
               type="button"
@@ -233,7 +282,7 @@ export default function GenerateClient() {
         </section>
       )}
 
-      {/* Liste */}
+      {/* Job-Liste */}
       <section style={{ marginTop: 24 }}>
         <h2 style={{ fontSize: "1.1rem", fontWeight: 700, marginBottom: 8 }}>
           Deine letzten Jobs
@@ -267,11 +316,13 @@ export default function GenerateClient() {
                       : ""}
                   </div>
                 </div>
+
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                   <StatusPill status={j.status} />
                   {j.status === "DONE" && j.resultUrl ? (
                     <audio controls src={j.resultUrl} style={{ width: 140 }} />
                   ) : null}
+
                   <button
                     type="button"
                     onClick={() => deleteJob(j.id)}
@@ -285,6 +336,7 @@ export default function GenerateClient() {
             ))}
           </ul>
         )}
+
         {hasMore && (
           <div style={{ marginTop: 12 }}>
             <button
@@ -316,16 +368,19 @@ function StatusCard({ job }: { job: Job }) {
         <strong>Job: {job.id}</strong>
         <StatusPill status={job.status} />
       </div>
+
       {job.durationSec ? (
         <p style={{ marginTop: 6, fontSize: "0.8rem", opacity: 0.75 }}>
           Dauer: {job.durationSec}s
         </p>
       ) : null}
+
       {job.status === "DONE" && job.resultUrl && (
         <div style={{ marginTop: 12 }}>
           <audio controls src={job.resultUrl} style={{ width: "100%" }} />
         </div>
       )}
+
       {job.status === "FAILED" && (
         <p style={{ color: "#e11d48", fontWeight: 600, marginTop: 8 }}>
           {job.error ?? "Fehlgeschlagen"}
