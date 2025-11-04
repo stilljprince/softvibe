@@ -3,15 +3,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-/** Fallback-Presets (falls /api/presets nichts liefert) */
-const FALLBACK_PRESETS = [
+const PRESETS = [
   { id: "classic-asmr", label: "Classic ASMR (Whisper, Tapping)" },
   { id: "sleep-story", label: "Sleep Story (Calm, Slow)" },
   { id: "meditation", label: "Meditation (Breath, Soft Tone)" },
 ];
-
-type UIPreset = { id: string; label: string };
-type ApiPreset = { id?: string; slug?: string; label?: string; name?: string };
 
 type JobStatus = "QUEUED" | "PROCESSING" | "DONE" | "FAILED";
 
@@ -28,23 +24,10 @@ type Job = {
 
 const PAGE_SIZE = 10;
 
-/** Type Guard für API-Presets */
-function isApiPreset(x: unknown): x is ApiPreset {
-  return typeof x === "object" && x !== null && (
-    "id" in x || "slug" in x || "label" in x || "name" in x
-  );
-}
-
 export default function GenerateClient() {
-  // Presets & Auswahl
-  const [presets, setPresets] = useState<UIPreset[]>(FALLBACK_PRESETS);
-  const [preset, setPreset] = useState<string>(FALLBACK_PRESETS[0].id);
-
-  // Formularfelder
+  const [preset, setPreset] = useState<string>(PRESETS[0].id);
   const [prompt, setPrompt] = useState("");
   const [durationSec, setDurationSec] = useState<number | "">("");
-
-  // Aktueller Job & Polling
   const [job, setJob] = useState<Job | null>(null);
   const [polling, setPolling] = useState(false);
 
@@ -55,52 +38,57 @@ export default function GenerateClient() {
 
   const canSubmit = useMemo(() => prompt.trim().length >= 3, [prompt]);
 
-  // Presets laden (mit Fallback)
+  // ---------- Persistenz in localStorage (Preset/Prompt/Dauer) ----------
+  const LS_PRESET = "sv_generate_preset";
+  const LS_PROMPT = "sv_generate_prompt";
+  const LS_DURATION = "sv_generate_duration";
+
+  // Beim Mount aus localStorage laden
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch("/api/presets", { cache: "no-store" });
-        if (!res.ok) return;
-        const data = await res.json().catch(() => null);
-        if (!Array.isArray(data)) return;
+    try {
+      const p = localStorage.getItem(LS_PRESET);
+      const pr = localStorage.getItem(LS_PROMPT);
+      const d = localStorage.getItem(LS_DURATION);
 
-        const arr = data.filter(isApiPreset);
-        if (arr.length === 0) return;
-
-        const mapped: UIPreset[] = arr.map((p) => ({
-          id:
-            p.id ??
-            p.slug ??
-            (p.label ? p.label.toLowerCase().replace(/\s+/g, "-") : "preset"),
-          label: p.label ?? p.name ?? String(p.slug ?? p.id ?? "Preset"),
-        }));
-
-        if (!cancelled) {
-          setPresets(mapped);
-          // aktuelle Auswahl beibehalten, falls vorhanden – sonst auf erstes Preset setzen
-          if (!mapped.some((pr) => pr.id === preset)) {
-            setPreset(mapped[0].id);
-          }
-        }
-      } catch {
-        // stiller Fallback auf FALLBACK_PRESETS
+      if (p) setPreset(p);
+      if (pr) setPrompt(pr);
+      if (d !== null && d !== "") {
+        const n = Number(d);
+        if (!Number.isNaN(n)) setDurationSec(n);
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // absichtlich "preset" in deps, damit Auswahl konsistent bleibt wenn Presets wechseln
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  // Änderungen speichern
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_PRESET, preset);
+    } catch {}
   }, [preset]);
 
-  // Erste Seite Jobs laden
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_PROMPT, prompt);
+    } catch {}
+  }, [prompt]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_DURATION, durationSec === "" ? "" : String(durationSec));
+    } catch {}
+  }, [durationSec]);
+
+  // ---------------------------------------------------------------------
+
   useEffect(() => {
     void loadJobs(0);
   }, []);
 
   async function loadJobs(skip: number) {
     setLoadingList(true);
-    const res = await fetch(`/api/jobs?take=${PAGE_SIZE}&skip=${skip}`, { cache: "no-store" });
+    const res = await fetch(`/api/jobs?take=${PAGE_SIZE}&skip=${skip}`);
     if (!res.ok) {
       setLoadingList(false);
       return;
@@ -120,7 +108,10 @@ export default function GenerateClient() {
       preset: string;
       prompt: string;
       durationSec?: number;
-    } = { preset, prompt };
+    } = {
+      preset,
+      prompt,
+    };
 
     if (typeof durationSec === "number" && !Number.isNaN(durationSec)) {
       body.durationSec = durationSec;
@@ -153,6 +144,7 @@ export default function GenerateClient() {
     const data: Job = await res.json();
     setJob(data);
     setPolling(true);
+    // Liste neu laden (auf Seite 0)
     void loadJobs(0);
   }
 
@@ -160,7 +152,7 @@ export default function GenerateClient() {
   useEffect(() => {
     if (!job || !polling) return;
     const id = setInterval(async () => {
-      const res = await fetch(`/api/jobs/${job.id}`, { cache: "no-store" });
+      const res = await fetch(`/api/jobs/${job.id}`);
       if (!res.ok) return;
       const fresh: Job = await res.json();
       setJob(fresh);
@@ -174,7 +166,9 @@ export default function GenerateClient() {
 
   // Job löschen
   async function deleteJob(id: string) {
-    const res = await fetch(`/api/jobs/${id}`, { method: "DELETE" });
+    const res = await fetch(`/api/jobs/${id}`, {
+      method: "DELETE",
+    });
     if (res.status === 204) {
       setJobList((prev) => prev.filter((j) => j.id !== id));
       if (job?.id === id) setJob(null);
@@ -207,7 +201,7 @@ export default function GenerateClient() {
               onChange={(e) => setPreset(e.target.value)}
               className="sv-input"
             >
-              {presets.map((p) => (
+              {PRESETS.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.label}
                 </option>
@@ -226,7 +220,7 @@ export default function GenerateClient() {
             />
           </div>
 
-          {/* Dauer (optional) */}
+          {/* Dauer */}
           <div>
             <label className="sv-label">
               Dauer (Sekunden) <span style={{ opacity: 0.5 }}>(optional)</span>
@@ -239,8 +233,11 @@ export default function GenerateClient() {
               value={durationSec}
               onChange={(e) => {
                 const v = e.target.value;
-                if (v === "") setDurationSec("");
-                else setDurationSec(Number(v));
+                if (v === "") {
+                  setDurationSec("");
+                } else {
+                  setDurationSec(Number(v));
+                }
               }}
               placeholder="z. B. 120"
             />
@@ -287,7 +284,55 @@ export default function GenerateClient() {
         <h2 style={{ fontSize: "1.1rem", fontWeight: 700, marginBottom: 8 }}>
           Deine letzten Jobs
         </h2>
-        {jobList.length === 0 ? (
+
+        {/* Skeletons wenn erste Seite lädt */}
+        {loadingList && jobList.length === 0 ? (
+          <ul style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {[0, 1, 2].map((i) => (
+              <li
+                key={i}
+                style={{
+                  background: "var(--color-card)",
+                  border: "1px solid var(--color-nav-bg)",
+                  borderRadius: 10,
+                  padding: "10px 12px",
+                }}
+              >
+                <div
+                  style={{
+                    height: 14,
+                    width: "60%",
+                    borderRadius: 6,
+                    background: "linear-gradient(90deg, #eee, #f6f6f6, #eee)",
+                    backgroundSize: "200% 100%",
+                    animation: "svShine 1.2s linear infinite",
+                  }}
+                />
+                <div
+                  style={{
+                    height: 10,
+                    width: "35%",
+                    marginTop: 8,
+                    borderRadius: 6,
+                    background: "linear-gradient(90deg, #eee, #f6f6f6, #eee)",
+                    backgroundSize: "200% 100%",
+                    animation: "svShine 1.2s linear infinite",
+                  }}
+                />
+              </li>
+            ))}
+            <style jsx>{`
+              @keyframes svShine {
+                0% {
+                  background-position: 0 0;
+                }
+                100% {
+                  background-position: 200% 0;
+                }
+              }
+            `}</style>
+          </ul>
+        ) : jobList.length === 0 ? (
           <p style={{ opacity: 0.7 }}>Noch keine Jobs gefunden.</p>
         ) : (
           <ul style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -323,6 +368,7 @@ export default function GenerateClient() {
                     <audio controls src={j.resultUrl} style={{ width: 140 }} />
                   ) : null}
 
+                  {/* löschen */}
                   <button
                     type="button"
                     onClick={() => deleteJob(j.id)}

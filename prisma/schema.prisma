@@ -1,24 +1,61 @@
-// prisma/schema.prisma
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "postgresql"
-
-  url = env("DATABASE_URL")
+  url      = env("DATABASE_URL")
 }
 
 model User {
-  id           String  @id @default(cuid())
-  email        String  @unique
+  id           String   @id @default(cuid())
+  email        String   @unique
   name         String?
   passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  Job          Job[]
+  Track        Track[]
+}
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  Job       Job[]
-  Track     Track[]
+model Job {
+  id          String    @id @default(cuid())
+  userId      String
+  prompt      String
+  preset      String?
+  status      JobStatus @default(QUEUED)
+  resultUrl   String?
+  error       String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  durationSec Int?
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tracks      Track[]
+}
+
+model Track {
+  id              String   @id @default(cuid())
+  userId          String
+  jobId           String?
+  title           String
+  url             String
+  durationSeconds Int?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  job             Job?     @relation(fields: [jobId], references: [id])
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([jobId])
+}
+
+model Preset {
+  id                 String   @id @default(cuid())
+  slug               String   @unique
+  label              String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  defaultDurationSec Int?
 }
 
 enum JobStatus {
@@ -26,42 +63,4 @@ enum JobStatus {
   PROCESSING
   DONE
   FAILED
-}
-
-model Job {
-  id     String @id @default(cuid())
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  prompt    String
-  preset    String?
-  status    JobStatus @default(QUEUED)
-  resultUrl String?
-  error     String?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  durationSec Int?
-
-  tracks Track[]
-}
-
-model Track {
-  id     String @id @default(cuid())
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  jobId String?
-  job   Job?    @relation(fields: [jobId], references: [id], onDelete: SetNull)
-
-  title           String
-  url             String
-  durationSeconds Int?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([userId, createdAt])
-  @@index([jobId])
 }

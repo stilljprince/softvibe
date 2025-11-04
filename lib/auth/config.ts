@@ -1,53 +1,67 @@
 // lib/auth/config.ts
-import type { NextAuthOptions } from "next-auth";
-import Credentials from "next-auth/providers/credentials";
-import type { JWT } from "next-auth/jwt";
+import { NextAuthOptions } from "next-auth";
+import CredentialsProvider from "next-auth/providers/credentials";
 import { prisma } from "@/lib/prisma";
-import { compare } from "bcryptjs";
-import { z } from "zod";
-
-const credentialsSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(1),
-});
-
-type TokenWithId = JWT & { id?: string };
+import bcrypt from "bcryptjs";
 
 export const authOptions: NextAuthOptions = {
+  session: {
+    strategy: "jwt",
+  },
   providers: [
-    Credentials({
+    CredentialsProvider({
       name: "Credentials",
       credentials: {
-        email: { label: "E-Mail", type: "email" },
+        email: { label: "E-Mail", type: "text" },
         password: { label: "Passwort", type: "password" },
       },
       async authorize(credentials) {
-        const parsed = credentialsSchema.safeParse(credentials);
-        if (!parsed.success) return null;
+        if (!credentials?.email || !credentials.password) {
+          return null;
+        }
 
-        const { email, password } = parsed.data;
+        // 🔧 wichtig: select hinzufügen, damit TS weiß: password existiert
+        const user = await prisma.user.findUnique({
+          where: { email: credentials.email },
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            passwordHash: true, // 👈 explizit
+          },
+        });
 
-        const user = await prisma.user.findUnique({ where: { email } });
-        if (!user) return null;
+        // jetzt kennt TS das Feld
+        if (!user || !user.passwordHash) {
+          return null;
+        }
 
-        const ok = await compare(password, user.passwordHash);
-        if (!ok) return null;
+        const valid = await bcrypt.compare(credentials.password, user.passwordHash);
+        if (!valid) return null;
 
-        return { id: user.id, email: user.email, name: user.name ?? null };
+        return {
+          id: user.id,
+          email: user.email,
+          name: user.name ?? undefined,
+        };
       },
     }),
   ],
-  session: { strategy: "jwt" },
-  pages: { signIn: "/login" },
   callbacks: {
-    // lib/auth/config.ts – in callbacks
-              async jwt({ token, user }) {
-                if (user) token.id = (user as { id: string }).id;
-                return token;
-              },
-              async session({ session, token }) {
-                session.user!.id = token.id as string;
-                return session;
-              },
+    async jwt({ token, user }) {
+      if (user && "id" in user && typeof (user as { id?: string }).id === "string") {
+        token.id = (user as { id: string }).id;
+      }
+      return token;
+    },
+    async session({ session, token }) {
+      if (session.user && token.id) {
+        (session.user as { id?: string }).id = token.id as string;
+      }
+      return session;
+    },
+  },
+  pages: {
+    signIn: "/login",
   },
 };
