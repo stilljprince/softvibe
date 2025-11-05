@@ -2,6 +2,9 @@
   "name": "softvibe",
   "version": "0.1.0",
   "private": true,
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
   "scripts": {
     "postinstall": "prisma generate",
     "prisma:deploy": "prisma migrate deploy",
@@ -9,7 +12,7 @@
     "dev": "next dev",
     "start": "next start",
     "lint": "next lint",
-    "seed": "ts-node prisma/seed.ts"
+    "seed": "prisma db seed"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.922.0",
@@ -41,6 +44,7 @@
     "prisma": "^6.18.0",
     "tailwindcss": "^4.1.13",
     "ts-node": "^10.9.2",
+    "tsx": "^4.20.6",
     "typescript": "^5.9.2"
   }
 }
