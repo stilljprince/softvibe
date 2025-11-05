@@ -6,59 +6,42 @@ import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
 
-export async function POST(req: Request) {
-  const url = new URL(req.url);
-  const parts = url.pathname.split("/"); // ["", "api", "jobs", "<id>", "start"]
-  const jobId = parts[3];
+export async function POST(
+  _req: Request,
+  ctx: { params: Promise<{ id: string }> } // 👈 Promise-Params
+) {
+  const { id } = await ctx.params;
 
-  if (!jobId) {
-    return NextResponse.json({ error: "Job ID missing" }, { status: 400 });
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const systemSecret = req.headers.get("x-softvibe-job-secret");
-  const isSystem =
-    systemSecret && systemSecret === process.env.JOB_SYSTEM_SECRET;
-
-  let userId: string | null = null;
-  if (!isSystem) {
-    const session = await getServerSession(authOptions);
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-    userId = session.user.id;
-  }
-
-  const job = await prisma.job.findUnique({
-    where: { id: jobId },
-    select: {
-      id: true,
-      userId: true,
-    },
+  const job = await prisma.job.findFirst({
+    where: { id, userId: session.user.id },
+    select: { id: true, status: true },
   });
-
   if (!job) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
   }
 
-  if (!isSystem && job.userId !== userId) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  // idempotent: wenn schon PROCESSING, ok
+  if (job.status === "PROCESSING") {
+    return NextResponse.json({ id, status: job.status }, { status: 200 });
+  }
+
+  if (job.status !== "QUEUED") {
+    return NextResponse.json(
+      { error: "INVALID_STATE", status: job.status },
+      { status: 409 }
+    );
   }
 
   const updated = await prisma.job.update({
-    where: { id: jobId },
-    data: {
-      status: "PROCESSING",
-      error: null,
-    },
-    select: {
-      id: true,
-      status: true,
-      prompt: true,
-      preset: true,
-      durationSec: true,
-      createdAt: true,
-    },
+    where: { id },
+    data: { status: "PROCESSING" },
+    select: { id: true, status: true },
   });
 
-  return NextResponse.json(updated);
+  return NextResponse.json(updated, { status: 200 });
 }
