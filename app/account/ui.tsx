@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import type React from "react";
+import EmptyState from "../components/EmptyState";
 
 type AccountUser = {
   id: string;
@@ -15,21 +16,25 @@ type AccountUser = {
 
 type JobStatus = "QUEUED" | "PROCESSING" | "DONE" | "FAILED";
 
-type Job = {
+type Track = {
   id: string;
   prompt?: string | null;
   preset?: string | null;
-  status: JobStatus;
+  status?: JobStatus;
   resultUrl?: string | null;
   createdAt?: string;
   durationSec?: number | null;
+  // optional falls /api/tracks liefert:
+  title?: string | null;
+  url?: string | null;
+  durationSeconds?: number | null;
 };
 
 type Theme = "light" | "dark" | "pastel";
 
 export default function AccountClient({ user }: { user: AccountUser }) {
-  const [jobs, setJobs] = useState<Job[]>([]);
-  const [loadingJobs, setLoadingJobs] = useState(false);
+  const [tracks, setTracks] = useState<Track[]>([]);
+  const [loadingTracks, setLoadingTracks] = useState(false);
 
   // ===== Theme wie Landing =====
   const [theme, setTheme] = useState<Theme>("light");
@@ -42,33 +47,34 @@ export default function AccountClient({ user }: { user: AccountUser }) {
     document.documentElement.className = theme;
     localStorage.setItem("theme", theme);
   }, [theme]);
-  const nextTheme: Record<Theme, Theme> = {
-    light: "dark",
-    dark: "pastel",
-    pastel: "light",
-  };
-  const getThemeIcon = () => {
-    if (theme === "light") return "🌞";
-    if (theme === "dark") return "🌙";
-    return "🎨";
-  };
+  const nextTheme: Record<Theme, Theme> = { light: "dark", dark: "pastel", pastel: "light" };
+  const getThemeIcon = () => (theme === "light" ? "🌞" : theme === "dark" ? "🌙" : "🎨");
   const handleToggleTheme = () => setTheme(nextTheme[theme]);
-  const getLogo = () => {
-    if (theme === "light") return "/softvibe-logo-light.svg";
-    if (theme === "dark") return "/softvibe-logo-dark.svg";
-    return "/softvibe-logo-pastel.svg";
-  };
+  const getLogo = () =>
+    theme === "light" ? "/softvibe-logo-light.svg" : theme === "dark" ? "/softvibe-logo-dark.svg" : "/softvibe-logo-pastel.svg";
 
-  // ===== letzte 5 Jobs =====
+  // ===== letzte 5 Einträge robust laden (normalisieren auf Array) =====
   useEffect(() => {
     const load = async () => {
-      setLoadingJobs(true);
-      const res = await fetch("/api/jobs?take=5");
-      if (res.ok) {
-        const data: Job[] = await res.json();
-        setJobs(data);
+      setLoadingTracks(true);
+      try {
+        // Bevorzugt /api/tracks?take=5; fällt zurück auf /api/jobs?take=5
+        let res = await fetch("/api/tracks?take=5");
+        if (!res.ok) {
+          res = await fetch("/api/jobs?take=5");
+        }
+        if (!res.ok) throw new Error(String(res.status));
+
+        const data = await res.json();
+        const list: unknown =
+          Array.isArray(data) ? data : Array.isArray((data as { items?: unknown[] })?.items) ? (data as { items: unknown[] }).items : [];
+
+        setTracks((list as Track[]) ?? []);
+      } catch {
+        setTracks([]);
+      } finally {
+        setLoadingTracks(false);
       }
-      setLoadingJobs(false);
     };
     void load();
   }, []);
@@ -79,6 +85,13 @@ export default function AccountClient({ user }: { user: AccountUser }) {
       .map((p) => p[0])
       .join("")
       .toUpperCase() || "SV";
+
+  // Hilfsfunktion für Anzeige-Titel & URL aus Track oder Job
+  const displayTitle = (t: Track) => {
+    const base = (t.title ?? t.prompt ?? "").trim();
+    return base !== "" ? base : "(ohne Prompt)";
+  };
+  const displayUrl = (t: Track) => t.url ?? t.resultUrl ?? "";
 
   return (
     <main
@@ -214,12 +227,13 @@ export default function AccountClient({ user }: { user: AccountUser }) {
             <div style={{ display: "flex", gap: "1rem", alignItems: "center", marginBottom: "1rem" }}>
               <div>
                 {user.image ? (
-                  <Image
+                  // Hinweis von Next lint ist ok; wir lassen <img> hier bewusst (war so vorher)
+                  <img
                     src={user.image}
-                    alt={user.name}
-                    width={70}
-                    height={70}
+                    alt={user.name ?? "User"}
                     style={{
+                      width: 70,
+                      height: 70,
                       borderRadius: "999px",
                       objectFit: "cover",
                       border: "3px solid rgba(255,255,255,0.5)",
@@ -246,12 +260,8 @@ export default function AccountClient({ user }: { user: AccountUser }) {
                 )}
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <p style={{ fontSize: "0.7rem", opacity: 0.7, marginBottom: 3 }}>
-                  Dein SoftVibe-Konto
-                </p>
-                <h1 style={{ fontSize: "1.25rem", fontWeight: 700, lineHeight: 1.05 }}>
-                  {user.name}
-                </h1>
+                <p style={{ fontSize: "0.7rem", opacity: 0.7, marginBottom: 3 }}>Dein SoftVibe-Konto</p>
+                <h1 style={{ fontSize: "1.25rem", fontWeight: 700, lineHeight: 1.05 }}>{user.name}</h1>
                 <p style={{ opacity: 0.9, overflowWrap: "anywhere" }}>{user.email}</p>
               </div>
             </div>
@@ -274,14 +284,14 @@ export default function AccountClient({ user }: { user: AccountUser }) {
                   gap: "0.6rem",
                 }}
               >
-                <Field label="Name" value={user.name} />
+                <Field label="Name" value={user.name ?? "—"} />
                 <Field label="E-Mail" value={user.email} mono />
                 <Field label="User-ID" value={user.id} mono />
               </div>
             </section>
           </div>
 
-          {/* ===== rechte Spalte – mit Verlauf 10% ===== */}
+          {/* ===== rechte Spalte – letzte Generierungen ===== */}
           <div
             style={{
               padding: "1.25rem 1.5rem 1.5rem",
@@ -298,9 +308,7 @@ export default function AccountClient({ user }: { user: AccountUser }) {
                 marginBottom: "0.75rem",
               }}
             >
-              <h2 style={{ fontSize: "1rem", fontWeight: 700 }}>
-                Deine letzten Generierungen
-              </h2>
+              <h2 style={{ fontSize: "1rem", fontWeight: 700 }}>Deine letzten Generierungen</h2>
               <Link
                 href="/generate"
                 style={{
@@ -314,13 +322,16 @@ export default function AccountClient({ user }: { user: AccountUser }) {
               </Link>
             </div>
 
-            {loadingJobs ? (
-              <p style={{ opacity: 0.6, fontSize: "0.85rem" }}>Lade…</p>
-            ) : jobs.length === 0 ? (
-              <p style={{ opacity: 0.6, fontSize: "0.85rem" }}>
-                Noch keine Generierungen. Erstelle eine über „Generieren“.
-              </p>
-            ) : (
+            {loadingTracks ? (
+                <p style={{ opacity: 0.6, fontSize: "0.85rem" }}>Lade…</p>
+              ) : tracks.length === 0 ? (
+                <EmptyState
+                  title="Noch keine Generierungen"
+                  hint="Wenn du generierst, erscheinen sie hier."
+                  action={{ href: "/generate", label: "Jetzt generieren" }}
+                />
+              ) : (
+  // ... deine <ul> bleibt
               <ul
                 style={{
                   display: "flex",
@@ -328,12 +339,11 @@ export default function AccountClient({ user }: { user: AccountUser }) {
                   gap: "0.6rem",
                 }}
               >
-                {jobs.map((job) => (
+                {(Array.isArray(tracks) ? tracks : []).map((t) => (
                   <li
-                    key={job.id}
+                    key={t.id}
                     style={{
-                      background:
-                        "color-mix(in oklab, var(--color-card) 95%, var(--color-bg))",
+                      background: "color-mix(in oklab, var(--color-card) 95%, var(--color-bg))",
                       border: "1px solid rgba(0,0,0,0.018)",
                       borderRadius: 12,
                       padding: "0.7rem 0.75rem 0.6rem",
@@ -350,24 +360,23 @@ export default function AccountClient({ user }: { user: AccountUser }) {
                           wordBreak: "break-word",
                         }}
                       >
-                        {job.prompt && job.prompt.trim() !== ""
-                          ? job.prompt
-                          : "(ohne Prompt)"}
+                        {displayTitle(t)}
                       </div>
                       <div style={{ fontSize: "0.72rem", opacity: 0.6 }}>
-                        {job.preset || "—"}
-                        {job.durationSec ? ` · ${job.durationSec}s` : ""}
-                        {job.createdAt
-                          ? ` · ${new Date(job.createdAt).toLocaleString("de-DE")}`
-                          : ""}
+                        {(t.preset ?? "—") || "—"}
+                        {t.durationSec ? ` · ${t.durationSec}s` : t.durationSeconds ? ` · ${t.durationSeconds}s` : ""}
+                        {t.createdAt ? ` · ${new Date(t.createdAt).toLocaleString("de-DE")}` : ""}
                       </div>
                     </div>
 
-                    <StatusPill status={job.status} />
-
-                    {job.status === "DONE" && job.resultUrl ? (
-                      <audio controls src={job.resultUrl} style={{ width: 170 }} />
-                    ) : null}
+                    {(t.status === "DONE" || t.url || t.resultUrl) && (
+                      <audio
+                        controls
+                        src={displayUrl(t)}
+                        style={{ width: 170 }}
+                        controlsList="noplaybackrate noremoteplayback"
+                      />
+                    )}
                   </li>
                 ))}
               </ul>
@@ -389,15 +398,7 @@ const navLinkStyle: React.CSSProperties = {
   fontSize: "0.9rem",
 };
 
-function Field({
-  label,
-  value,
-  mono,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-}) {
+function Field({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
     <div
       style={{
@@ -415,9 +416,7 @@ function Field({
       <span
         style={{
           fontWeight: 600,
-          fontFamily: mono
-            ? "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas"
-            : undefined,
+          fontFamily: mono ? "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas" : undefined,
           overflowWrap: "anywhere",
           wordBreak: "break-word",
         }}
@@ -425,42 +424,5 @@ function Field({
         {value || "—"}
       </span>
     </div>
-  );
-}
-
-function StatusPill({ status }: { status: JobStatus }) {
-  const label =
-    status === "QUEUED"
-      ? "Wartend"
-      : status === "PROCESSING"
-      ? "In Bearbeitung"
-      : status === "DONE"
-      ? "Fertig"
-      : "Fehlgeschlagen";
-
-  const bg =
-    status === "DONE"
-      ? "color-mix(in oklab, var(--color-accent) 30%, transparent)"
-      : status === "FAILED"
-      ? "#fee2e2"
-      : "rgba(0,0,0,0.04)";
-
-  const color = status === "FAILED" ? "#7f1d1d" : "inherit";
-
-  return (
-    <span
-      style={{
-        display: "inline-block",
-        padding: "3px 10px 4px",
-        borderRadius: 999,
-        fontSize: "0.7rem",
-        fontWeight: 600,
-        background: bg,
-        color,
-        whiteSpace: "nowrap",
-      }}
-    >
-      {label}
-    </span>
   );
 }

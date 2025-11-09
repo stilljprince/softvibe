@@ -1,6 +1,5 @@
-html {
-  scroll-behavior: smooth;
-}
+/* neu – greift nur, wenn das Attribut gesetzt ist */
+html[data-scroll-behavior="smooth"] { scroll-behavior: smooth; }
 
 /* ===========================
    Basis Reset

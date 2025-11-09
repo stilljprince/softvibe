@@ -8,10 +8,7 @@ import { $Enums } from "@prisma/client";
 
 export const runtime = "nodejs";
 
-// 👇 hier stellst du ein, wie viele offene Jobs ein User max. haben darf
-const MAX_OPEN_JOBS_PER_USER = 5;
-
-// GET /api/jobs
+// LIST (mit optional ?take und ?skip)
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
@@ -23,7 +20,7 @@ export async function GET(req: Request) {
   const skip = Number(searchParams.get("skip") ?? "0");
 
   const jobs = await prisma.job.findMany({
-    where: { userId: session.user.id },
+    where: { userId: session.user.id as string },
     orderBy: { createdAt: "desc" },
     select: {
       id: true,
@@ -34,83 +31,83 @@ export async function GET(req: Request) {
       durationSec: true,
       createdAt: true,
     },
-    take: Math.min(take, 50),
-    skip: Math.max(skip, 0),
+    take: Math.min(isFinite(take) ? take : 20, 50), // Hard-Limit
+    skip: Math.max(isFinite(skip) ? skip : 0, 0),
   });
 
   return NextResponse.json(jobs);
 }
 
-// POST /api/jobs
+// CREATE (mit Rate-Limit + robuster User-Resolve)
 export async function POST(req: Request) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
-  const json = await req.json().catch(() => ({}));
-  const parsed = CreateJobSchema.safeParse(json);
-  if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
-  }
+    // Body robust lesen
+    const raw = await req.json().catch(() => ({} as unknown));
 
-  // ⏱️ 1. kleines Zeit-Rate-Limit (wie vorher)
-  const WINDOW_MS = 5000;
-  const since = new Date(Date.now() - WINDOW_MS);
-  const recent = await prisma.job.findFirst({
-    where: { userId: session.user.id, createdAt: { gt: since } },
-    select: { id: true },
-  });
-  if (recent) {
-    const retry = Math.ceil(WINDOW_MS / 1000);
+    const parsed = CreateJobSchema.safeParse(raw);
+    if (!parsed.success) {
+      const details = parsed.error.flatten();
+      return NextResponse.json({ error: "BAD_REQUEST", details }, { status: 400 });
+    }
+    const { prompt, preset, durationSec } = parsed.data as {
+      prompt: string;
+      preset?: string | null;
+      durationSec?: number | null;
+    };
+
+    // 🔧 WICHTIG: User-ID frisch aus DB auflösen
+    const dbUser = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { id: session.user.id as string },
+          ...(session.user.email ? [{ email: session.user.email as string }] : []),
+        ],
+      },
+      select: { id: true },
+    });
+
+    if (!dbUser) {
+      return NextResponse.json({ error: "USER_NOT_FOUND" }, { status: 401 });
+    }
+
+    // kleines Rate-Limit
+    const WINDOW_MS = 5000;
+    const since = new Date(Date.now() - WINDOW_MS);
+    const recent = await prisma.job.findFirst({
+      where: { userId: dbUser.id, createdAt: { gt: since } },
+      select: { id: true },
+    });
+    if (recent) {
+      const retryAfter = Math.ceil(WINDOW_MS / 1000);
+      return NextResponse.json(
+        { error: "RATE_LIMITED", retryAfterSeconds: retryAfter },
+        { status: 429, headers: { "Retry-After": String(retryAfter) } }
+      );
+    }
+
+    // Job anlegen
+    const job = await prisma.job.create({
+      data: {
+        userId: dbUser.id, // ✅ garantiert existent → kein FK-Fehler
+        prompt,
+        preset: preset ?? null,
+        status: $Enums.JobStatus.QUEUED,
+        durationSec: typeof durationSec === "number" ? durationSec : null,
+      },
+      select: { id: true, status: true },
+    });
+
+    return NextResponse.json(job, { status: 201 });
+  } catch (e) {
+    const err = e as { code?: string; message?: string };
     return NextResponse.json(
-      { error: "RATE_LIMITED", retryAfterSeconds: retry },
-      { status: 429, headers: { "Retry-After": String(retry) } }
+      { error: "INTERNAL_ERROR", code: err.code ?? null, message: err.message ?? "unknown" },
+      { status: 500 }
     );
   }
-
-  // 🆕 2. offenes-Job-Limit pro User
-  // offen = QUEUED oder PROCESSING
-  const openCount = await prisma.job.count({
-    where: {
-      userId: session.user.id,
-      status: {
-        in: [$Enums.JobStatus.QUEUED, $Enums.JobStatus.PROCESSING],
-      },
-    },
-  });
-
-  if (openCount >= MAX_OPEN_JOBS_PER_USER) {
-    return NextResponse.json(
-      {
-        error: "TOO_MANY_OPEN_JOBS",
-        message: `Du hast bereits ${openCount} offene Jobs. Bitte warte, bis einer fertig ist.`,
-        maxOpenJobs: MAX_OPEN_JOBS_PER_USER,
-      },
-      { status: 429 }
-    );
-  }
-
-  // 3. eigentlicher Create
-  const { prompt, preset, durationSec } = parsed.data;
-
-  const job = await prisma.job.create({
-    data: {
-      userId: session.user.id,
-      prompt,
-      preset,
-      status: $Enums.JobStatus.QUEUED,
-      ...(typeof durationSec === "number" ? { durationSec } : {}),
-    },
-    select: {
-      id: true,
-      status: true,
-      prompt: true,
-      preset: true,
-      durationSec: true,
-      createdAt: true,
-    },
-  });
-
-  return NextResponse.json(job, { status: 201 });
 }

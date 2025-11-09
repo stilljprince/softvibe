@@ -3,37 +3,14 @@ import {
   S3Client,
   PutObjectCommand,
   GetObjectCommand,
+  HeadObjectCommand,
+  type PutObjectCommandInput,
+  type GetObjectCommandOutput,
+  type HeadObjectCommandOutput,
   type ObjectCannedACL,
 } from "@aws-sdk/client-s3";
 
-/** bool aus ENV sicher parsen */
-function parseBool(v: string | undefined): boolean {
-  return /^(1|true|yes|on)$/i.test(v ?? "");
-}
-
-/** sind die wichtigsten Variablen da? */
-export function hasS3Env() {
-  return !!(
-    process.env.S3_BUCKET &&
-    process.env.S3_REGION &&
-    process.env.S3_ACCESS_KEY_ID &&
-    process.env.S3_SECRET_ACCESS_KEY
-  );
-}
-
-/** nur für Debug-Ausgaben */
-export function s3EnvSummary() {
-  return {
-    hasS3: hasS3Env(),
-    bucket: process.env.S3_BUCKET || null,
-    region: process.env.S3_REGION || null,
-    endpoint: process.env.S3_ENDPOINT || null,
-    prefix: process.env.S3_PREFIX || null,
-    forcePathStyle: parseBool(process.env.S3_FORCE_PATH_STYLE),
-  };
-}
-
-/** globaler S3-Client */
+/** S3 Client (R2 kompatibel) */
 export const s3 = new S3Client({
   region: process.env.S3_REGION || "auto",
   endpoint: process.env.S3_ENDPOINT || undefined,
@@ -44,24 +21,24 @@ export const s3 = new S3Client({
           secretAccessKey: process.env.S3_SECRET_ACCESS_KEY!,
         }
       : undefined,
-  // wichtig: nicht !!string, sondern korrekt parsen
-  forcePathStyle: parseBool(process.env.S3_FORCE_PATH_STYLE),
+  forcePathStyle: !!process.env.S3_FORCE_PATH_STYLE,
 });
 
-/** konsistenter Key: <prefix>/<id>.mp3 */
-export function s3KeyForJob(jobId: string) {
-  const prefix = (process.env.S3_PREFIX || "generated").replace(/^\/+|\/+$/g, "");
+/** Ist S3/R2 korrekt konfiguriert? */
+export function hasS3Env(): boolean {
+  return Boolean(
+    process.env.S3_BUCKET &&
+      (process.env.S3_ACCESS_KEY_ID || process.env.S3_ENDPOINT) // bei R2 reicht oft Endpoint+Tokens
+  );
+}
+
+/** Key-Namensschema: <prefix>/<jobId>.mp3 */
+export function s3KeyForJob(jobId: string): string {
+  const prefix = (process.env.S3_PREFIX || "generated").replace(/^\/|\/$/g, "");
   return `${prefix}/${jobId}.mp3`;
 }
 
-/** Normalisierung nach Uint8Array (deckt Buffer UND Uint8Array ab) */
-function toUint8(input: Uint8Array | ArrayBuffer): Uint8Array {
-  if (input instanceof ArrayBuffer) return new Uint8Array(input);
-  // Buffer ist eine Unterklasse von Uint8Array → direkt nutzbar
-  return input;
-}
-
-/** Upload: akzeptiert Uint8Array/ArrayBuffer/Buffer */
+/** Upload MP3 – akzeptiert Buffer/Uint8Array/ArrayBuffer */
 export async function uploadMP3ToS3(
   key: string,
   data: Uint8Array | ArrayBuffer | Buffer
@@ -69,27 +46,45 @@ export async function uploadMP3ToS3(
   const Bucket = process.env.S3_BUCKET;
   if (!Bucket) throw new Error("S3_BUCKET missing");
 
-  // TS-sicher normalisieren (Buffer wird hier als Uint8Array behandelt)
-  const Body = toUint8(data as Uint8Array | ArrayBuffer);
+  const Body: Uint8Array =
+    data instanceof ArrayBuffer ? new Uint8Array(data) : (data as Uint8Array);
 
   const acl = process.env.S3_OBJECT_ACL as ObjectCannedACL | undefined;
 
-  await s3.send(
-    new PutObjectCommand({
-      Bucket,
-      Key: key,
-      Body,
-      ContentType: "audio/mpeg",
-      ...(acl ? { ACL: acl } : {}),
-    })
-  );
+  const input: PutObjectCommandInput = {
+    Bucket,
+    Key: key,
+    Body,
+    ContentType: "audio/mpeg",
+    ...(acl ? { ACL: acl } : {}),
+  };
 
+  await s3.send(new PutObjectCommand(input));
   return key;
 }
 
-/** GetObject (für Proxy) */
-export async function getObjectForKey(key: string) {
+/** Head: nur Metadaten (ContentLength/Type) */
+export async function headObjectByKey(
+  key: string
+): Promise<Pick<HeadObjectCommandOutput, "ContentLength" | "ContentType">> {
   const Bucket = process.env.S3_BUCKET;
   if (!Bucket) throw new Error("S3_BUCKET missing");
-  return s3.send(new GetObjectCommand({ Bucket, Key: key }));
+  const out = await s3.send(new HeadObjectCommand({ Bucket, Key: key }));
+  return { ContentLength: out.ContentLength, ContentType: out.ContentType };
+}
+
+/** Get: Objekt inkl. Body */
+export async function getObjectByKey(
+  key: string
+): Promise<
+  Pick<GetObjectCommandOutput, "Body" | "ContentLength" | "ContentType">
+> {
+  const Bucket = process.env.S3_BUCKET;
+  if (!Bucket) throw new Error("S3_BUCKET missing");
+  const out = await s3.send(new GetObjectCommand({ Bucket, Key: key }));
+  return {
+    Body: out.Body,
+    ContentLength: out.ContentLength,
+    ContentType: out.ContentType,
+  };
 }

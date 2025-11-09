@@ -1,136 +1,201 @@
 // app/api/jobs/[id]/audio/route.ts
+import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/config";
 import { prisma } from "@/lib/prisma";
-import { getObjectForKey as getObjectStream } from "@/lib/s3";
-import type { GetObjectCommandOutput } from "@aws-sdk/client-s3";
-import path from "node:path";
+import {
+  hasS3Env,
+  s3KeyForJob,
+  headObjectByKey,
+  getObjectByKey,
+} from "@/lib/s3";
 import fs from "node:fs/promises";
+import path from "node:path";
 
 export const runtime = "nodejs";
 
-/** Body hat transformToByteArray (AWS SDK >= v3.310) */
+/** sicheres Kopieren in echtes ArrayBuffer (kein SharedArrayBuffer) */
+function toArrayBuffer(u8: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(u8.byteLength);
+  copy.set(u8);
+  return copy.buffer;
+}
+
+/** Type Guard: Uint8Array */
+function isUint8Array(x: unknown): x is Uint8Array {
+  return x instanceof Uint8Array;
+}
+
+/** Type Guard: Node Buffer */
+function isNodeBuffer(x: unknown): x is Buffer {
+  // Buffer ist im Node-Runtime global verfügbar
+  return typeof Buffer !== "undefined" && Buffer.isBuffer(x);
+}
+
+/** Body mit transformToByteArray (AWS SDK >= v3.310) */
 function hasTransformToByteArray(
   body: unknown
 ): body is { transformToByteArray: () => Promise<Uint8Array> } {
   return !!body && typeof (body as { transformToByteArray?: unknown }).transformToByteArray === "function";
 }
 
-/** Ist ein AsyncIterable (Node Readable kompatibel) */
+/** Fallback: AsyncIterable erkennen */
 function isAsyncIterable(
   body: unknown
-): body is AsyncIterable<Uint8Array | Buffer | string> {
+): body is AsyncIterable<unknown> {
   return !!body && typeof (body as { [Symbol.asyncIterator]?: unknown })[Symbol.asyncIterator] === "function";
 }
 
-/** AsyncIterable → Uint8Array zusammenführen */
-async function toUint8ArrayFromStream(
-  stream: AsyncIterable<Uint8Array | Buffer | string>
+/** Node-AsyncIterable in Bytes zusammenführen – robust getypt */
+async function concatAsyncIterable(
+  body: AsyncIterable<unknown>
 ): Promise<Uint8Array> {
   const chunks: Uint8Array[] = [];
-  for await (const c of stream) {
-    if (typeof c === "string") {
-      chunks.push(new TextEncoder().encode(c));
-    } else if (c instanceof Uint8Array) {
-      chunks.push(c);
+  for await (const part of body) {
+    if (typeof part === "string") {
+      chunks.push(new TextEncoder().encode(part));
+    } else if (isUint8Array(part)) {
+      chunks.push(part);
+    } else if (isNodeBuffer(part)) {
+      chunks.push(new Uint8Array(part.buffer, part.byteOffset, part.byteLength));
     } else {
-      chunks.push(new Uint8Array(c)); // Buffer -> Uint8Array
+      // defensiver Fallback für ArrayBufferView-ähnliche Strukturen
+      const maybe = part as {
+        buffer?: ArrayBufferLike;
+        byteOffset?: number;
+        byteLength?: number;
+      };
+      if (
+        maybe &&
+        maybe.buffer instanceof ArrayBuffer &&
+        typeof maybe.byteOffset === "number" &&
+        typeof maybe.byteLength === "number"
+      ) {
+        chunks.push(new Uint8Array(maybe.buffer, maybe.byteOffset, maybe.byteLength));
+      }
+      // Unbekanntes Format: ignorieren
     }
   }
-  const total = chunks.reduce((n, u) => n + u.byteLength, 0);
+  const total = chunks.reduce((n, c) => n + c.byteLength, 0);
   const out = new Uint8Array(total);
   let off = 0;
-  for (const u of chunks) {
-    out.set(u, off);
-    off += u.byteLength;
+  for (const c of chunks) {
+    out.set(c, off);
+    off += c.byteLength;
   }
   return out;
 }
 
-/** Uint8Array → garantiert echtes ArrayBuffer-Slice (ohne SharedArrayBuffer) */
-function toArrayBuffer(u8: Uint8Array): ArrayBuffer {
-  const buf = new ArrayBuffer(u8.byteLength);
-  new Uint8Array(buf).set(u8);
-  return buf;
-}
-
-/** S3-Key aus Job-ID */
-function s3KeyForJob(id: string) {
-  const prefix = (process.env.S3_PREFIX ?? "generated").replace(/^\/|\/$/g, "");
-  return `${prefix}/${id}.mp3`;
-}
-
-export async function GET(
+/** HEAD: nur Länge/Typ */
+export async function HEAD(
   _req: Request,
-  ctx: { params: Promise<{ id: string }> } // Next.js 15: params ist Promise
+  ctx: { params: Promise<{ id: string }> }
 ) {
   const { id } = await ctx.params;
 
-  // Auth & Ownership
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
-      status: 401,
-      headers: { "Content-Type": "application/json" },
-    });
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const job = await prisma.job.findFirst({
     where: { id, userId: session.user.id },
-    select: { id: true },
+    select: { id: true, resultUrl: true },
   });
-  if (!job) {
-    return new Response(JSON.stringify({ error: "NOT_FOUND" }), {
-      status: 404,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
+  if (!job) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
 
-  const baseHeaders = {
-    "Content-Type": "audio/mpeg",
-    "Cache-Control": "public, max-age=300",
-  } as const;
+  const headers = new Headers();
+  headers.set("Accept-Ranges", "bytes");
 
-  // 1) S3 versuchen
-  if (process.env.S3_BUCKET && process.env.S3_ACCESS_KEY_ID && process.env.S3_SECRET_ACCESS_KEY) {
+  if (hasS3Env()) {
     try {
-      const key = s3KeyForJob(id);
-      const out = (await getObjectStream(key)) as GetObjectCommandOutput;
-      const body = out.Body;
-
-      if (hasTransformToByteArray(body)) {
-        const u8 = await body.transformToByteArray();
-        return new Response(toArrayBuffer(u8), {
-          headers: { ...baseHeaders, "x-audio-source": "s3" },
-        });
+      const meta = await headObjectByKey(s3KeyForJob(id));
+      if (meta.ContentType) headers.set("Content-Type", meta.ContentType);
+      if (typeof meta.ContentLength === "number") {
+        headers.set("Content-Length", String(meta.ContentLength));
       }
-
-      if (isAsyncIterable(body)) {
-        const u8 = await toUint8ArrayFromStream(
-          body as AsyncIterable<Uint8Array | Buffer | string>
-        );
-        return new Response(toArrayBuffer(u8), {
-          headers: { ...baseHeaders, "x-audio-source": "s3" },
-        });
-      }
-      // kein Body -> lokal probieren
+      return new Response(null, { status: 200, headers });
     } catch {
-      // stiller Fallback
+      return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
     }
   }
 
-  // 2) Lokal lesen
+  // lokal
+  const rel = job.resultUrl?.startsWith("/generated/")
+    ? job.resultUrl
+    : `/generated/${id}.mp3`;
+  const abs = path.join(process.cwd(), "public", rel.replace(/^\//, ""));
   try {
-    const rel = path.join("public", "generated", `${id}.mp3`);
-    const file = await fs.readFile(path.join(process.cwd(), rel));
-    const u8 = new Uint8Array(file);
-    return new Response(toArrayBuffer(u8), {
-      headers: { ...baseHeaders, "x-audio-source": "local" },
-    });
+    const st = await fs.stat(abs);
+    headers.set("Content-Type", "audio/mpeg");
+    headers.set("Content-Length", String(st.size));
+    return new Response(null, { status: 200, headers });
   } catch {
-    return new Response(JSON.stringify({ error: "AUDIO_NOT_FOUND" }), {
-      status: 404,
-      headers: { "Content-Type": "application/json" },
-    });
+    return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
+  }
+}
+
+/** GET: Datei liefern */
+export async function GET(
+  _req: Request,
+  ctx: { params: Promise<{ id: string }> }
+) {
+  const { id } = await ctx.params;
+
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const job = await prisma.job.findFirst({
+    where: { id, userId: session.user.id },
+    select: { id: true, resultUrl: true },
+  });
+  if (!job) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
+
+  const headers = new Headers();
+  headers.set("Accept-Ranges", "bytes");
+
+  if (hasS3Env()) {
+    try {
+      const obj = await getObjectByKey(s3KeyForJob(id));
+      if (obj.ContentType) headers.set("Content-Type", obj.ContentType);
+      if (typeof obj.ContentLength === "number") {
+        headers.set("Content-Length", String(obj.ContentLength));
+      }
+
+      const body = obj.Body;
+      if (!body) {
+        return NextResponse.json({ error: "EMPTY_BODY" }, { status: 500 });
+      }
+
+      if (hasTransformToByteArray(body)) {
+        const u8 = await body.transformToByteArray();
+        return new Response(toArrayBuffer(u8), { headers });
+      }
+
+      if (isAsyncIterable(body)) {
+        const u8 = await concatAsyncIterable(body);
+        return new Response(toArrayBuffer(u8), { headers });
+      }
+
+      return NextResponse.json({ error: "UNREADABLE_BODY" }, { status: 500 });
+    } catch {
+      return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
+    }
+  }
+
+  // lokal
+  const rel = job.resultUrl?.startsWith("/generated/")
+    ? job.resultUrl
+    : `/generated/${id}.mp3`;
+  const abs = path.join(process.cwd(), "public", rel.replace(/^\//, ""));
+  try {
+    const fileU8 = new Uint8Array(await fs.readFile(abs));
+    headers.set("Content-Type", "audio/mpeg");
+    headers.set("Content-Length", String(fileU8.byteLength));
+    return new Response(toArrayBuffer(fileU8), { headers });
+  } catch {
+    return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
   }
 }

@@ -1,7 +1,8 @@
 // app/generate/ui.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import EmptyState from "../components/EmptyState";
 
 const PRESETS = [
   { id: "classic-asmr", label: "Classic ASMR (Whisper, Tapping)" },
@@ -28,19 +29,18 @@ export default function GenerateClient() {
   const [preset, setPreset] = useState<string>(PRESETS[0].id);
   const [prompt, setPrompt] = useState("");
   const [durationSec, setDurationSec] = useState<number | "">("");
-
   const [job, setJob] = useState<Job | null>(null);
   const [polling, setPolling] = useState(false);
-
   const [jobList, setJobList] = useState<Job[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loadingList, setLoadingList] = useState(false);
 
-  // 🆕 UI-Feedback
-  const [creating, setCreating] = useState(false);
-  const [completing, setCompleting] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-  const [errMsg, setErrMsg] = useState<string | null>(null);
+  // Save-to-Library
+  const [saveToLibrary, setSaveToLibrary] = useState(true);
+  const [trackTitle, setTrackTitle] = useState("");
+
+  // NEU: Guard gegen doppelte Saves (Strict Mode / doppelte Effects)
+  const savedJobIdsRef = useRef<Set<string>>(new Set());
 
   const canSubmit = useMemo(() => prompt.trim().length >= 3, [prompt]);
 
@@ -48,120 +48,109 @@ export default function GenerateClient() {
     void loadJobs(0);
   }, []);
 
+  useEffect(() => {
+    const t = prompt.trim();
+    if (!trackTitle && t) setTrackTitle(t.slice(0, 80));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prompt]);
+
   async function loadJobs(skip: number) {
     setLoadingList(true);
-    try {
-      const res = await fetch(`/api/jobs?take=${PAGE_SIZE}&skip=${skip}`);
-      if (!res.ok) return;
-      const data: Job[] = await res.json();
-      if (skip === 0) setJobList(data);
-      else setJobList((prev) => [...prev, ...data]);
-      setHasMore(data.length === PAGE_SIZE);
-    } finally {
+    const res = await fetch(`/api/jobs?take=${PAGE_SIZE}&skip=${skip}`);
+    if (!res.ok) {
       setLoadingList(false);
+      return;
     }
+    const data: Job[] = await res.json();
+    if (skip === 0) setJobList(data);
+    else setJobList((prev) => [...prev, ...data]);
+    setHasMore(data.length === PAGE_SIZE);
+    setLoadingList(false);
   }
 
   async function createJob() {
-    setErrMsg(null);
-    setMsg(null);
-    setCreating(true);
-
-    const body: {
-      preset: string;
-      prompt: string;
-      durationSec?: number;
-    } = { preset, prompt };
-
+    const body: { preset: string; prompt: string; durationSec?: number } = {
+      preset,
+      prompt,
+    };
     if (typeof durationSec === "number" && !Number.isNaN(durationSec)) {
       body.durationSec = durationSec;
     }
 
-    try {
-      const res = await fetch("/api/jobs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+    const res = await fetch("/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
 
-      if (res.status === 429) {
-        const data = await res.json().catch(() => null);
-        if (data?.error === "TOO_MANY_OPEN_JOBS") {
-          setErrMsg(
-            data?.message ??
-              "Du hast schon zu viele offene Jobs. Bitte warte, bis einer fertig ist."
-          );
-        } else {
-          setErrMsg("Zu viele Anfragen. Bitte kurz warten.");
-        }
-        return;
+    if (res.status === 429) {
+      const data = await res.json().catch(() => null);
+      if (data?.error === "TOO_MANY_OPEN_JOBS") {
+        alert(data?.message ?? "Du hast schon zu viele offene Jobs. Bitte warte, bis einer fertig ist.");
+      } else {
+        alert("Zu viele Anfragen. Bitte kurz warten.");
       }
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        setErrMsg(data?.error ?? "Konnte Job nicht anlegen.");
-        return;
-      }
-
-      const data: Job = await res.json();
-      setJob(data);
-      setMsg("Job erstellt.");
-      // Bei unserer „Complete erzeugt Audio“-Logik brauchen wir Polling nicht zwingend,
-      // lassen es aber für andere Flows an, falls Status noch wechselt.
-      setPolling(true);
-      void loadJobs(0);
-    } finally {
-      setCreating(false);
+      return;
     }
+
+    if (!res.ok) {
+      alert("Konnte Job nicht anlegen.");
+      return;
+    }
+
+    const data: Job = await res.json();
+    setJob(data);
+    setPolling(true);
+    // Guard resetten für neuen Job
+    savedJobIdsRef.current.delete(data.id);
+    void loadJobs(0);
   }
 
-  // Polling für aktuellen Job (belassen, falls externe Statuswechsel kommen)
+  // Polling
   useEffect(() => {
     if (!job || !polling) return;
+
     const id = setInterval(async () => {
       const res = await fetch(`/api/jobs/${job.id}`);
       if (!res.ok) return;
       const fresh: Job = await res.json();
       setJob(fresh);
-      if (fresh.status === "DONE" || fresh.status === "FAILED") {
+
+      const finished = fresh.status === "DONE" || fresh.status === "FAILED";
+      if (finished) {
         setPolling(false);
         void loadJobs(0);
+
+        if (fresh.status === "DONE" && saveToLibrary) {
+          // ✅ Doppel-POST verhindern
+          if (!savedJobIdsRef.current.has(fresh.id)) {
+            const title = (trackTitle || prompt || "SoftVibe Track").slice(0, 80);
+            try {
+              await fetch("/api/tracks", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ jobId: fresh.id, title }),
+              });
+            } finally {
+              savedJobIdsRef.current.add(fresh.id);
+            }
+          }
+        }
       }
     }, 2000);
-    return () => clearInterval(id);
-  }, [job, polling]);
 
-  // Job löschen
+    return () => clearInterval(id);
+    
+  }, [job, polling, saveToLibrary, trackTitle, prompt]);
+
   async function deleteJob(id: string) {
     const res = await fetch(`/api/jobs/${id}`, { method: "DELETE" });
     if (res.status === 204) {
       setJobList((prev) => prev.filter((j) => j.id !== id));
       if (job?.id === id) setJob(null);
+      savedJobIdsRef.current.delete(id);
     } else {
-      setErrMsg("Konnte Job nicht löschen.");
-    }
-  }
-
-  // 🆕 Simulation abschließen (ruft TTS & setzt DONE)
-  async function completeJob() {
-    if (!job) return;
-    setErrMsg(null);
-    setMsg("Erzeuge Audio…");
-    setCompleting(true);
-    try {
-      const res = await fetch(`/api/jobs/${job.id}/complete`, { method: "POST" });
-      if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        setErrMsg(data?.error ?? "Fehler beim Abschließen.");
-        return;
-      }
-      const updated: Job = await res.json();
-      setJob(updated);
-      setMsg(updated.status === "DONE" ? "Fertig." : null);
-      setPolling(updated.status !== "DONE" && updated.status !== "FAILED");
-      void loadJobs(0);
-    } finally {
-      setCompleting(false);
+      alert("Konnte Job nicht löschen.");
     }
   }
 
@@ -171,7 +160,7 @@ export default function GenerateClient() {
         Generieren
       </h1>
 
-      {/* Formular-Karte */}
+      {/* Formular */}
       <section
         style={{
           background: "var(--color-card)",
@@ -188,7 +177,6 @@ export default function GenerateClient() {
               value={preset}
               onChange={(e) => setPreset(e.target.value)}
               className="sv-input"
-              disabled={creating || completing}
             >
               {PRESETS.map((p) => (
                 <option key={p.id} value={p.id}>
@@ -206,7 +194,6 @@ export default function GenerateClient() {
               placeholder='Beschreibe, was du hören möchtest (z. B. "sanftes Flüstern…")'
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              disabled={creating || completing}
             />
           </div>
 
@@ -227,57 +214,58 @@ export default function GenerateClient() {
                 else setDurationSec(Number(v));
               }}
               placeholder="z. B. 120"
-              disabled={creating || completing}
             />
             <p style={{ fontSize: "0.75rem", opacity: 0.6, marginTop: 4 }}>30–1800 Sekunden.</p>
           </div>
 
-          {/* Actions */}
+          {/* Save to Library */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "auto 1fr",
+              alignItems: "center",
+              gap: 12,
+            }}
+          >
+            <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={saveToLibrary}
+                onChange={(e) => setSaveToLibrary(e.target.checked)}
+              />
+              In Bibliothek speichern
+            </label>
+            <input
+              className="sv-input"
+              placeholder="Titel (optional)"
+              value={trackTitle}
+              onChange={(e) => setTrackTitle(e.target.value)}
+              disabled={!saveToLibrary}
+            />
+          </div>
+
           <div style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
             <button
               className="sv-btn"
               type="button"
-              onClick={completeJob}
-              disabled={!job || job.status === "DONE" || completing}
+              onClick={async () => {
+                if (!job) return;
+                await fetch(`/api/jobs/${job.id}/complete`, { method: "POST" });
+                setPolling(true);
+              }}
+              disabled={!job || job.status === "DONE"}
             >
-              {completing ? "Erzeuge Audio…" : "Simulation abschließen"}
+              Simulation abschließen
             </button>
-
             <button
               className="sv-btn sv-btn--primary"
               type="button"
               onClick={createJob}
-              disabled={!canSubmit || creating || completing}
+              disabled={!canSubmit}
             >
-              {creating ? "Erstelle…" : "Generieren"}
+              Generieren
             </button>
           </div>
-
-          {/* 🆕 Meldungen */}
-          {msg ? (
-            <div
-              style={{
-                marginTop: 4,
-                fontSize: "0.9rem",
-                color: "var(--color-text)",
-                opacity: 0.85,
-              }}
-            >
-              {msg}
-            </div>
-          ) : null}
-          {errMsg ? (
-            <div
-              style={{
-                marginTop: 4,
-                fontSize: "0.9rem",
-                color: "#b91c1c",
-                fontWeight: 600,
-              }}
-            >
-              {errMsg}
-            </div>
-          ) : null}
         </div>
       </section>
 
@@ -288,13 +276,16 @@ export default function GenerateClient() {
         </section>
       )}
 
-      {/* Job-Liste */}
+      {/* Liste */}
       <section style={{ marginTop: 24 }}>
         <h2 style={{ fontSize: "1.1rem", fontWeight: 700, marginBottom: 8 }}>
           Deine letzten Jobs
         </h2>
         {jobList.length === 0 ? (
-          <p style={{ opacity: 0.7 }}>Noch keine Jobs gefunden.</p>
+          <EmptyState
+            title="Noch keine Jobs"
+            hint="Starte eine Generierung über das Formular oben."
+          />
         ) : (
           <ul style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {jobList.map((j) => (
@@ -320,7 +311,6 @@ export default function GenerateClient() {
                     {j.createdAt ? ` · ${new Date(j.createdAt).toLocaleString("de-DE")}` : ""}
                   </div>
                 </div>
-
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                   <StatusPill status={j.status} />
                   {j.status === "DONE" && j.resultUrl ? (
@@ -331,7 +321,6 @@ export default function GenerateClient() {
                     onClick={() => deleteJob(j.id)}
                     className="sv-btn"
                     style={{ padding: "4px 10px" }}
-                    disabled={creating || completing}
                   >
                     Löschen
                   </button>
@@ -340,7 +329,6 @@ export default function GenerateClient() {
             ))}
           </ul>
         )}
-
         {hasMore && (
           <div style={{ marginTop: 12 }}>
             <button
@@ -372,19 +360,16 @@ function StatusCard({ job }: { job: Job }) {
         <strong>Job: {job.id}</strong>
         <StatusPill status={job.status} />
       </div>
-
       {job.durationSec ? (
         <p style={{ marginTop: 6, fontSize: "0.8rem", opacity: 0.75 }}>
           Dauer: {job.durationSec}s
         </p>
       ) : null}
-
       {job.status === "DONE" && job.resultUrl && (
         <div style={{ marginTop: 12 }}>
           <audio controls src={job.resultUrl} style={{ width: "100%" }} />
         </div>
       )}
-
       {job.status === "FAILED" && (
         <p style={{ color: "#e11d48", fontWeight: 600, marginTop: 8 }}>
           {job.error ?? "Fehlgeschlagen"}
@@ -396,13 +381,9 @@ function StatusCard({ job }: { job: Job }) {
 
 function StatusPill({ status }: { status: JobStatus }) {
   const label =
-    status === "QUEUED"
-      ? "Warteschlange"
-      : status === "PROCESSING"
-      ? "In Bearbeitung"
-      : status === "DONE"
-      ? "Fertig"
-      : "Fehlgeschlagen";
+    status === "QUEUED" ? "Warteschlange" :
+    status === "PROCESSING" ? "In Bearbeitung" :
+    status === "DONE" ? "Fertig" : "Fehlgeschlagen";
 
   const bg =
     status === "DONE"

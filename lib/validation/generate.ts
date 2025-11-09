@@ -2,14 +2,18 @@
 import { z } from "zod";
 
 export const CreateJobSchema = z.object({
-  prompt: z.string().min(3, "Bitte gib mindestens 3 Zeichen ein."),
-  preset: z.string().min(1, "Preset fehlt."),
+  prompt: z.string().min(3, "Prompt zu kurz"),
+  preset: z.string().trim().min(1).optional().nullable(),
   durationSec: z
-    .number()
-    .int()
-    .min(30, "Mindestens 30 Sekunden.")
-    .max(1800, "Maximal 30 Minuten.")
-    .optional(),
+    .union([z.number(), z.string()])
+    .optional()
+    .nullable()
+    .transform((v) => {
+      if (v === null || v === undefined || v === "") return undefined;
+      const n = typeof v === "string" ? Number(v) : v;
+      return Number.isFinite(n) ? n : undefined;
+    })
+    .refine((v) => v === undefined || (Number.isInteger(v) && v >= 30 && v <= 1800), {
+      message: "durationSec muss zwischen 30–1800 Sekunden liegen",
+    }),
 });
-
-export type CreateJobInput = z.infer<typeof CreateJobSchema>;

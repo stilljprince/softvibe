@@ -2,26 +2,26 @@
 import { prisma } from "../lib/prisma";
 
 async function main() {
-  const base = [
-    { slug: "classic-asmr", label: "Classic ASMR (Whisper, Tapping)" },
-    { slug: "sleep-story", label: "Sleep Story (Calm, Slow)" },
-    { slug: "meditation", label: "Meditation (Breath, Soft Tone)" },
+  const presets = [
+    { slug: "classic-asmr", label: "Classic ASMR (Whisper, Tapping)", defaultDurationSec: 120 },
+    { slug: "sleep-story",  label: "Sleep Story (Calm, Slow)",       defaultDurationSec: 600 },
+    { slug: "meditation",   label: "Meditation (Breath, Soft Tone)", defaultDurationSec: 300 },
   ];
 
-  for (const p of base) {
+  for (const p of presets) {
     await prisma.preset.upsert({
       where: { slug: p.slug },
-      update: { label: p.label }, // nur label, kein defaultDurationSec
+      update: { label: p.label, defaultDurationSec: p.defaultDurationSec },
       create: p,
     });
   }
+
+  console.log("✅ Presets upserted:", presets.map(p => p.slug).join(", "));
 }
 
 main()
-  .then(() => {
-    console.log("Seed done");
-  })
+  .then(() => prisma.$disconnect())
   .catch((e) => {
-    console.error(e);
-    process.exit(1);
+    console.error("❌ Seed failed:", e);
+    return prisma.$disconnect().finally(() => process.exit(1));
   });

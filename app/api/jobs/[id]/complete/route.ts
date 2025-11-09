@@ -7,6 +7,12 @@ import { $Enums } from "@prisma/client";
 import path from "node:path";
 import fs from "node:fs/promises";
 
+// 👉 wenn du lib/s3 exporte hast, nutze sie:
+import { uploadMP3ToS3, s3KeyForJob, hasS3Env } from "@/lib/s3";
+// Falls du KEIN hasS3Env() exportierst, kannst du ersatzweise:
+// const hasS3Env = () =>
+//   !!process.env.S3_BUCKET && !!process.env.S3_REGION && !!process.env.S3_ACCESS_KEY_ID && !!process.env.S3_SECRET_ACCESS_KEY;
+
 export const runtime = "nodejs";
 
 type CompleteBody = {
@@ -15,7 +21,6 @@ type CompleteBody = {
   error?: string;
 };
 
-// Preset → Voice Settings (Werte 0..1)
 function settingsForPreset(preset?: string) {
   switch (preset) {
     case "classic-asmr":
@@ -29,22 +34,9 @@ function settingsForPreset(preset?: string) {
   }
 }
 
-// S3-Helfer lokal in dieser Route (damit du sonst nichts anfassen musst)
-function hasS3Env() {
-  return Boolean(
-    process.env.S3_BUCKET &&
-      process.env.S3_ACCESS_KEY_ID &&
-      process.env.S3_SECRET_ACCESS_KEY
-  );
-}
-function s3KeyForJob(id: string) {
-  const prefix = (process.env.S3_PREFIX ?? "generated").replace(/^\/|\/$/g, "");
-  return `${prefix}/${id}.mp3`;
-}
-
 export async function POST(
   req: Request,
-  ctx: { params: Promise<{ id: string }> } // Next.js 15: params ist Promise
+  ctx: { params: Promise<{ id: string }> }
 ) {
   const { id } = await ctx.params;
 
@@ -65,15 +57,19 @@ export async function POST(
       createdAt: true,
     },
   });
-  if (!job) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
+  if (!job) {
+    return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
+  }
 
+  // optionaler Body
   let body: CompleteBody = {};
   try {
     body = (await req.json()) as CompleteBody;
   } catch {
-    // kein Body → ok
+    // kein Body ist ok
   }
 
+  // Client meldet Fehler -> FAIL
   if (body.error && body.error.trim() !== "") {
     const failed = await prisma.job.update({
       where: { id },
@@ -91,15 +87,20 @@ export async function POST(
     return NextResponse.json(failed);
   }
 
-  // Lokaler Zielpfad (Fallback)
-  const localAbs = path.join(process.cwd(), "public", "generated", `${id}.mp3`);
-
+  // Falls der Client bereits eine resultUrl liefert, übernehmen (z.B. extern)
   let nextResultUrl = body.resultUrl ?? null;
+
+  // Wir versuchen zusätzlich, die Dauer zu bestimmen – niemals fatal
+  let detectedDuration: number | undefined;
+
+  // Zielpfad für lokale Kopie (Fallback/Entwicklungsmodus)
+  const localRel = `/generated/${id}.mp3`;
+  const localAbs = path.join(process.cwd(), "public", "generated", `${id}.mp3`);
 
   if (!nextResultUrl) {
     // === ElevenLabs Synthese ===
     const apiKey = process.env.ELEVENLABS_API_KEY;
-    const voiceId = process.env.ELEVENLABS_VOICE_ID || "21m00Tcm4TlvDq8ikWAM"; // setze deine Voice in .env.local
+    const voiceId = process.env.ELEVENLABS_VOICE_ID || "21m00Tcm4TlvDq8ikWAM";
     const modelId = process.env.ELEVENLABS_MODEL_ID || "eleven_multilingual_v2";
 
     if (!apiKey) {
@@ -112,14 +113,6 @@ export async function POST(
 
     const text = job.prompt?.trim() || "SoftVibe Demo Clip";
     const voiceSettings = settingsForPreset(job.preset ?? undefined);
-
-    console.log("[S3:complete]", {
-      hasS3: hasS3Env(),
-      bucket: process.env.S3_BUCKET,
-      prefix: process.env.S3_PREFIX ?? "generated",
-      endpoint: process.env.S3_ENDPOINT,
-      region: process.env.S3_REGION,
-    });
 
     try {
       const resp = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
@@ -141,19 +134,38 @@ export async function POST(
         throw new Error(`ElevenLabs: ${resp.status} ${errTxt}`);
       }
 
-      const arrBuf = await resp.arrayBuffer();
-      const bytes = new Uint8Array(arrBuf);
+      const buf = Buffer.from(await resp.arrayBuffer());
 
-      if (hasS3Env()) {
-        const { uploadMP3ToS3 } = await import("@/lib/s3");
-        const key = s3KeyForJob(id);
-        console.log("[S3:upload]", key);
-        await uploadMP3ToS3(key, bytes);
-        nextResultUrl = `/api/jobs/${id}/audio`;
-      } else {
-        await fs.mkdir(path.dirname(localAbs), { recursive: true });
-        await fs.writeFile(localAbs, bytes);
-        nextResultUrl = `/api/jobs/${id}/audio`;
+      // Dauer erkennen (best-effort, niemals fatal)
+      try {
+        const { parseBuffer } = await import("music-metadata");
+        const meta = await parseBuffer(buf, "audio/mpeg");
+        if (meta.format.duration && Number.isFinite(meta.format.duration)) {
+          detectedDuration = Math.round(meta.format.duration);
+        }
+      } catch {
+        // ignorieren
+      }
+
+      // === S3 bevorzugen, sonst lokal speichern ===
+      try {
+        if (hasS3Env()) {
+          await uploadMP3ToS3(s3KeyForJob(id), buf);
+          // Proxy-Route liefert aus S3 (oder lokal, je nach Implementierung)
+          nextResultUrl = `/api/jobs/${id}/audio`;
+        } else {
+          await fs.mkdir(path.dirname(localAbs), { recursive: true });
+          await fs.writeFile(localAbs, buf);
+          nextResultUrl = `/api/jobs/${id}/audio`;
+        }
+      } catch (e) {
+        // Falls Upload/Write schief geht → FAIL
+        const msg = e instanceof Error ? e.message : "Store audio failed";
+        await prisma.job.update({
+          where: { id },
+          data: { status: $Enums.JobStatus.FAILED, error: msg },
+        });
+        return NextResponse.json({ error: msg }, { status: 500 });
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "TTS failed";
@@ -165,16 +177,20 @@ export async function POST(
     }
   }
 
+  // Dauer final wählen (Body > erkannt > bisher)
   const nextDuration =
     typeof body.durationSec === "number" && !Number.isNaN(body.durationSec)
       ? body.durationSec
+      : typeof detectedDuration === "number"
+      ? detectedDuration
       : job.durationSec ?? undefined;
 
+  // Job abschließen
   const updated = await prisma.job.update({
     where: { id },
     data: {
       status: $Enums.JobStatus.DONE,
-      resultUrl: nextResultUrl ?? `/api/jobs/${id}/audio`,
+      resultUrl: nextResultUrl ?? localRel,
       durationSec: nextDuration,
       error: null,
     },
@@ -188,6 +204,14 @@ export async function POST(
       createdAt: true,
     },
   });
+
+  // Track-Dauer mitziehen (falls es einen Track zu diesem Job gibt)
+  if (typeof nextDuration === "number") {
+    await prisma.track.updateMany({
+      where: { jobId: id },
+      data: { durationSeconds: nextDuration },
+    });
+  }
 
   return NextResponse.json(updated);
 }

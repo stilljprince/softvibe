@@ -1,3 +1,4 @@
+// prisma/schema.prisma
 generator client {
   provider = "prisma-client-js"
 }
@@ -19,23 +20,18 @@ model User {
 }
 
 model Job {
-  id          String     @id @default(cuid())
+  id          String    @id @default(cuid())
   userId      String
   prompt      String
   preset      String?
-  status      JobStatus  @default(QUEUED)
+  status      JobStatus @default(QUEUED)
   resultUrl   String?
   error       String?
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
   durationSec Int?
-  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   tracks      Track[]
-
-  // ⬇️ NEU für Robustheit/Idempotenz
-  attempts    Int        @default(0)
-  startedAt   DateTime?
-  completedAt DateTime?
 }
 
 model Track {
@@ -49,6 +45,10 @@ model Track {
   updatedAt       DateTime @updatedAt
   job             Job?     @relation(fields: [jobId], references: [id])
   user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // 🔹 NEU:
+  isPublic  Boolean @default(false)
+  shareSlug String? @unique
 
   @@index([userId, createdAt])
   @@index([jobId])

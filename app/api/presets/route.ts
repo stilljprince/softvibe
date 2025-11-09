@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
 
+// GET: Presets aus DB, sonst Fallback
 export async function GET() {
   try {
     const presets = await prisma.preset.findMany({
@@ -25,7 +26,7 @@ export async function GET() {
       }))
     );
   } catch {
-    // Fallback, wenn Tabelle nicht da ist
+    // Fallback, falls Tabelle (noch) nicht vorhanden ist
     return NextResponse.json([
       { id: "classic-asmr", label: "Classic ASMR (Whisper, Tapping)" },
       { id: "sleep-story", label: "Sleep Story (Calm, Slow)" },
@@ -34,6 +35,7 @@ export async function GET() {
   }
 }
 
+// POST: Preset anlegen / updaten
 export async function POST(req: Request) {
   const body = await req.json().catch(() => null);
 
