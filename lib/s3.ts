@@ -88,3 +88,13 @@ export async function getObjectByKey(
     ContentType: out.ContentType,
   };
 }
+export function s3EnvSummary() {
+  return {
+    hasS3: hasS3Env(),
+    bucket: process.env.S3_BUCKET ?? null,
+    region: process.env.S3_REGION ?? null,
+    endpoint: process.env.S3_ENDPOINT ?? null,
+    prefix: process.env.S3_PREFIX ?? null,
+    forcePathStyle: !!process.env.S3_FORCE_PATH_STYLE,
+  };
+}
