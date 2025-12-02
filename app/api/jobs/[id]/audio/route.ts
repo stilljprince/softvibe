@@ -11,6 +11,8 @@ import {
 } from "@/lib/s3";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { headers } from "next/headers";
+import { log } from "@/lib/log";
 
 export const runtime = "nodejs";
 
@@ -28,7 +30,6 @@ function isUint8Array(x: unknown): x is Uint8Array {
 
 /** Type Guard: Node Buffer */
 function isNodeBuffer(x: unknown): x is Buffer {
-  // Buffer ist im Node-Runtime global verfügbar
   return typeof Buffer !== "undefined" && Buffer.isBuffer(x);
 }
 
@@ -59,7 +60,6 @@ async function concatAsyncIterable(
     } else if (isNodeBuffer(part)) {
       chunks.push(new Uint8Array(part.buffer, part.byteOffset, part.byteLength));
     } else {
-      // defensiver Fallback für ArrayBufferView-ähnliche Strukturen
       const maybe = part as {
         buffer?: ArrayBufferLike;
         byteOffset?: number;
@@ -73,7 +73,6 @@ async function concatAsyncIterable(
       ) {
         chunks.push(new Uint8Array(maybe.buffer, maybe.byteOffset, maybe.byteLength));
       }
-      // Unbekanntes Format: ignorieren
     }
   }
   const total = chunks.reduce((n, c) => n + c.byteLength, 0);
@@ -91,10 +90,14 @@ export async function HEAD(
   _req: Request,
   ctx: { params: Promise<{ id: string }> }
 ) {
+  const h = await headers();
   const { id } = await ctx.params;
+
+  log.info(h, "jobs:audio:head:start", { id });
 
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
+    log.warn(h, "jobs:audio:head:unauthorized", { id });
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -102,20 +105,25 @@ export async function HEAD(
     where: { id, userId: session.user.id },
     select: { id: true, resultUrl: true },
   });
-  if (!job) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
+  if (!job) {
+    log.warn(h, "jobs:audio:head:not_found", { id });
+    return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
+  }
 
-  const headers = new Headers();
-  headers.set("Accept-Ranges", "bytes");
+  const hdrs = new Headers();
+  hdrs.set("Accept-Ranges", "bytes");
 
   if (hasS3Env()) {
     try {
       const meta = await headObjectByKey(s3KeyForJob(id));
-      if (meta.ContentType) headers.set("Content-Type", meta.ContentType);
+      if (meta.ContentType) hdrs.set("Content-Type", meta.ContentType);
       if (typeof meta.ContentLength === "number") {
-        headers.set("Content-Length", String(meta.ContentLength));
+        hdrs.set("Content-Length", String(meta.ContentLength));
       }
-      return new Response(null, { status: 200, headers });
+      log.info(h, "jobs:audio:head:ok", { id, src: "s3" });
+      return new Response(null, { status: 200, headers: hdrs });
     } catch {
+      log.warn(h, "jobs:audio:head:s3_missing", { id });
       return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
     }
   }
@@ -127,10 +135,12 @@ export async function HEAD(
   const abs = path.join(process.cwd(), "public", rel.replace(/^\//, ""));
   try {
     const st = await fs.stat(abs);
-    headers.set("Content-Type", "audio/mpeg");
-    headers.set("Content-Length", String(st.size));
-    return new Response(null, { status: 200, headers });
+    hdrs.set("Content-Type", "audio/mpeg");
+    hdrs.set("Content-Length", String(st.size));
+    log.info(h, "jobs:audio:head:ok", { id, src: "local" });
+    return new Response(null, { status: 200, headers: hdrs });
   } catch {
+    log.warn(h, "jobs:audio:head:local_missing", { id });
     return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
   }
 }
@@ -140,10 +150,14 @@ export async function GET(
   _req: Request,
   ctx: { params: Promise<{ id: string }> }
 ) {
+  const h = await headers();
   const { id } = await ctx.params;
+
+  log.info(h, "jobs:audio:get:start", { id });
 
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
+    log.warn(h, "jobs:audio:get:unauthorized", { id });
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -151,36 +165,44 @@ export async function GET(
     where: { id, userId: session.user.id },
     select: { id: true, resultUrl: true },
   });
-  if (!job) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
+  if (!job) {
+    log.warn(h, "jobs:audio:get:not_found", { id });
+    return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
+  }
 
-  const headers = new Headers();
-  headers.set("Accept-Ranges", "bytes");
+  const hdrs = new Headers();
+  hdrs.set("Accept-Ranges", "bytes");
 
   if (hasS3Env()) {
     try {
       const obj = await getObjectByKey(s3KeyForJob(id));
-      if (obj.ContentType) headers.set("Content-Type", obj.ContentType);
+      if (obj.ContentType) hdrs.set("Content-Type", obj.ContentType);
       if (typeof obj.ContentLength === "number") {
-        headers.set("Content-Length", String(obj.ContentLength));
+        hdrs.set("Content-Length", String(obj.ContentLength));
       }
 
       const body = obj.Body;
       if (!body) {
+        log.error(h, "jobs:audio:get:empty_body", { id });
         return NextResponse.json({ error: "EMPTY_BODY" }, { status: 500 });
       }
 
       if (hasTransformToByteArray(body)) {
         const u8 = await body.transformToByteArray();
-        return new Response(toArrayBuffer(u8), { headers });
+        log.info(h, "jobs:audio:get:ok", { id, src: "s3:bytearray" });
+        return new Response(toArrayBuffer(u8), { headers: hdrs });
       }
 
       if (isAsyncIterable(body)) {
         const u8 = await concatAsyncIterable(body);
-        return new Response(toArrayBuffer(u8), { headers });
+        log.info(h, "jobs:audio:get:ok", { id, src: "s3:iterable" });
+        return new Response(toArrayBuffer(u8), { headers: hdrs });
       }
 
+      log.error(h, "jobs:audio:get:unreadable", { id });
       return NextResponse.json({ error: "UNREADABLE_BODY" }, { status: 500 });
     } catch {
+      log.warn(h, "jobs:audio:get:s3_missing", { id });
       return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
     }
   }
@@ -192,10 +214,12 @@ export async function GET(
   const abs = path.join(process.cwd(), "public", rel.replace(/^\//, ""));
   try {
     const fileU8 = new Uint8Array(await fs.readFile(abs));
-    headers.set("Content-Type", "audio/mpeg");
-    headers.set("Content-Length", String(fileU8.byteLength));
-    return new Response(toArrayBuffer(fileU8), { headers });
+    hdrs.set("Content-Type", "audio/mpeg");
+    hdrs.set("Content-Length", String(fileU8.byteLength));
+    log.info(h, "jobs:audio:get:ok", { id, src: "local" });
+    return new Response(toArrayBuffer(fileU8), { headers: hdrs });
   } catch {
+    log.warn(h, "jobs:audio:get:local_missing", { id });
     return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
   }
 }

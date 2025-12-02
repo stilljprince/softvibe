@@ -4,6 +4,7 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  DeleteObjectCommand,
   type PutObjectCommandInput,
   type GetObjectCommandOutput,
   type HeadObjectCommandOutput,
@@ -88,6 +89,58 @@ export async function getObjectByKey(
     ContentType: out.ContentType,
   };
 }
+
+/** Objekt per Key löschen */
+export async function deleteObjectByKey(key: string): Promise<void> {
+  const Bucket = process.env.S3_BUCKET;
+  if (!Bucket) throw new Error("S3_BUCKET missing");
+  await s3.send(
+    new DeleteObjectCommand({
+      Bucket,
+      Key: key,
+    })
+  );
+}
+
+/**
+ * Aus einer URL den S3-Key extrahieren.
+ * Spezialfall: /api/jobs/<jobId>/audio -> s3KeyForJob(jobId)
+ */
+export function s3KeyFromUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+
+  // Helper: Pfad normalisieren + auf /api/jobs/<id>/audio prüfen
+  const extractFromPath = (rawPath: string): string | null => {
+    const path = rawPath.replace(/^\/+/, ""); // führende Slashes weg
+    if (!path) return null;
+
+    // /api/jobs/<jobId>/audio -> jobId
+    const m = path.match(/^api\/jobs\/([^/]+)\/audio$/);
+    if (m && m[1]) {
+      return s3KeyForJob(m[1]);
+    }
+
+    // sonst: Pfad direkt als Key verwenden
+    return path;
+  };
+
+  try {
+    const u = new URL(url);
+    const key = extractFromPath(u.pathname);
+    if (key) return key;
+  } catch {
+    // war wohl keine absolute URL
+  }
+
+  // Fallback: relative URL oder schon ein Key
+  const noLead = url.replace(/^\/+/, "");
+  const key = extractFromPath(noLead);
+  if (key) return key;
+
+  // letzter Fallback: wenn's halbwegs "key-artig" aussieht
+  return url.includes(" ") ? null : noLead;
+}
+
 export function s3EnvSummary() {
   return {
     hasS3: hasS3Env(),

@@ -2,6 +2,10 @@
 import { z } from "zod";
 
 export const CreateJobSchema = z.object({
+  title: z
+    .string()
+    .min(3, "Titel muss mindestens 3 Zeichen haben.")
+    .max(140, "Titel darf max. 140 Zeichen haben."),
   prompt: z.string().min(3, "Prompt zu kurz"),
   preset: z.string().trim().min(1).optional().nullable(),
   durationSec: z

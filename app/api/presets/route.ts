@@ -1,6 +1,6 @@
 // app/api/presets/route.ts
-import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { jsonOk, jsonError } from "@/lib/api";
 
 export const runtime = "nodejs";
 
@@ -12,26 +12,33 @@ export async function GET() {
     });
 
     if (presets.length === 0) {
-      return NextResponse.json([
-        { id: "classic-asmr", label: "Classic ASMR (Whisper, Tapping)" },
-        { id: "sleep-story", label: "Sleep Story (Calm, Slow)" },
-        { id: "meditation", label: "Meditation (Breath, Soft Tone)" },
-      ]);
+      return jsonOk(
+        [
+          { id: "classic-asmr", label: "Classic ASMR (Whisper, Tapping)" },
+          { id: "sleep-story", label: "Sleep Story (Calm, Slow)" },
+          { id: "meditation", label: "Meditation (Breath, Soft Tone)" },
+        ],
+        200
+      );
     }
 
-    return NextResponse.json(
+    return jsonOk(
       presets.map((p) => ({
         id: p.slug,
         label: p.label,
-      }))
+      })),
+      200
     );
   } catch {
     // Fallback, falls Tabelle (noch) nicht vorhanden ist
-    return NextResponse.json([
-      { id: "classic-asmr", label: "Classic ASMR (Whisper, Tapping)" },
-      { id: "sleep-story", label: "Sleep Story (Calm, Slow)" },
-      { id: "meditation", label: "Meditation (Breath, Soft Tone)" },
-    ]);
+    return jsonOk(
+      [
+        { id: "classic-asmr", label: "Classic ASMR (Whisper, Tapping)" },
+        { id: "sleep-story", label: "Sleep Story (Calm, Slow)" },
+        { id: "meditation", label: "Meditation (Breath, Soft Tone)" },
+      ],
+      200
+    );
   }
 }
 
@@ -40,10 +47,7 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => null);
 
   if (!body || !body.slug || !body.label) {
-    return NextResponse.json(
-      { error: "slug und label erforderlich" },
-      { status: 400 }
-    );
+    return jsonError("slug und label erforderlich", 400);
   }
 
   const saved = await prisma.preset.upsert({
@@ -55,5 +59,5 @@ export async function POST(req: Request) {
     },
   });
 
-  return NextResponse.json(saved, { status: 201 });
+  return jsonOk(saved, 201);
 }

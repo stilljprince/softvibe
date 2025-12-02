@@ -1,72 +1,115 @@
-// app/api/tracks/[id]/share/route.ts
+// app/api/tracks/[id]/route.ts
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/config";
 import { prisma } from "@/lib/prisma";
+import { headers } from "next/headers";
+import { log } from "@/lib/log";
+import { jsonOk, jsonError } from "@/lib/api";
 
 export const runtime = "nodejs";
 
-type Body = {
-  isPublic?: boolean;
+type PatchBody = {
+  title?: string;
 };
 
-function makeSlug(len = 10) {
-  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
-  let s = "";
-  for (let i = 0; i < len; i++) s += alphabet[Math.floor(Math.random() * alphabet.length)];
-  return s;
+function sanitizeTitle(t: string): string {
+  const trimmed = t.trim();
+  const noCtrls = trimmed.replace(/[\u0000-\u001F\u007F]/g, "");
+  return noCtrls.slice(0, 140);
 }
 
+// PATCH /api/tracks/[id]  -> Titel umbenennen
 export async function PATCH(
   req: Request,
   ctx: { params: Promise<{ id: string }> }
 ) {
-  const { id } = await ctx.params;
-
+  const h = await headers();
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    log.warn(h, "tracks:rename:unauthorized");
+    return jsonError("UNAUTHORIZED", 401);
   }
 
-  let body: Body = {};
+  const { id } = await ctx.params;
+  log.info(h, "tracks:rename:start", { id });
+
+  let body: PatchBody = {};
   try {
-    body = (await req.json()) as Body;
+    body = (await req.json()) as PatchBody;
   } catch {
     // ignore
   }
 
-  const track = await prisma.track.findFirst({
-    where: { id, userId: session.user.id },
-    select: { id: true, isPublic: true, shareSlug: true },
+  if (!body.title || body.title.trim().length === 0) {
+    log.warn(h, "tracks:rename:invalid_title", { id });
+    return jsonError("INVALID_TITLE", 400, { message: "Titel darf nicht leer sein." });
+  }
+
+  const title = sanitizeTitle(body.title);
+
+  const updated = await prisma.track
+    .update({
+      where: { id },
+      data: { title },
+      select: {
+        id: true,
+        title: true,
+        url: true,
+        durationSeconds: true,
+        createdAt: true,
+        userId: true,
+      },
+    })
+    .catch(() => null);
+
+  if (!updated) {
+    log.warn(h, "tracks:rename:not_found", { id });
+    return jsonError("NOT_FOUND", 404);
+  }
+
+  if (updated.userId !== session.user.id) {
+    log.warn(h, "tracks:rename:forbidden", { id });
+    return jsonError("FORBIDDEN", 403);
+  }
+
+  const { userId, ...safe } = updated;
+  log.info(h, "tracks:rename:ok", { id });
+  return jsonOk(safe, 200);
+}
+
+// DELETE /api/tracks/[id] -> Track löschen (DB)
+export async function DELETE(
+  _req: Request,
+  ctx: { params: Promise<{ id: string }> }
+) {
+  const h = await headers();
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) {
+    log.warn(h, "tracks:delete:unauthorized");
+    return jsonError("UNAUTHORIZED", 401);
+  }
+
+  const { id } = await ctx.params;
+  log.info(h, "tracks:delete:start", { id });
+
+  const track = await prisma.track.findUnique({
+    where: { id },
+    select: { id: true, userId: true },
   });
+
   if (!track) {
-    return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
+    log.warn(h, "tracks:delete:not_found", { id });
+    return jsonError("NOT_FOUND", 404);
+  }
+  if (track.userId !== session.user.id) {
+    log.warn(h, "tracks:delete:forbidden", { id });
+    return jsonError("FORBIDDEN", 403);
   }
 
-  const wantPublic = !!body.isPublic;
+  await prisma.track.delete({ where: { id } });
+  log.info(h, "tracks:delete:ok", { id });
 
-  if (wantPublic) {
-    let slug = track.shareSlug ?? makeSlug(10);
-    // falls Kollision (sehr unwahrscheinlich), neu würfeln
-    // (Kleine Schleife, max. 5 Versuche)
-    for (let i = 0; i < 5; i++) {
-      const clash = await prisma.track.findUnique({ where: { shareSlug: slug } });
-      if (!clash || clash.id === track.id) break;
-      slug = makeSlug(10);
-    }
-
-    const updated = await prisma.track.update({
-      where: { id },
-      data: { isPublic: true, shareSlug: slug },
-      select: { id: true, isPublic: true, shareSlug: true },
-    });
-    return NextResponse.json(updated);
-  } else {
-    const updated = await prisma.track.update({
-      where: { id },
-      data: { isPublic: false, shareSlug: null },
-      select: { id: true, isPublic: true, shareSlug: true },
-    });
-    return NextResponse.json(updated);
-  }
+  // 204: kein Body → bewusst ohne jsonOk
+  return new NextResponse(null, { status: 204 });
 }

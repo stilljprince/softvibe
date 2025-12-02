@@ -1,18 +1,15 @@
-// app/api/jobs/[id]/complete/route.ts
-import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
+import { NextResponse } from "next/server";
 import { authOptions } from "@/lib/auth/config";
 import { prisma } from "@/lib/prisma";
 import { $Enums } from "@prisma/client";
 import path from "node:path";
 import fs from "node:fs/promises";
-
-// 👉 wenn du lib/s3 exporte hast, nutze sie:
+import { rateLimit, clientIpFromRequest } from "@/lib/rate";
 import { uploadMP3ToS3, s3KeyForJob, hasS3Env } from "@/lib/s3";
-// Falls du KEIN hasS3Env() exportierst, kannst du ersatzweise:
-// const hasS3Env = () =>
-//   !!process.env.S3_BUCKET && !!process.env.S3_REGION && !!process.env.S3_ACCESS_KEY_ID && !!process.env.S3_SECRET_ACCESS_KEY;
-
+import { addDebugLog } from "@/lib/debug-log";
+import { headers as nextHeaders } from "next/headers";
+import { jsonOk, jsonError } from "@/lib/api";
 export const runtime = "nodejs";
 
 type CompleteBody = {
@@ -20,17 +17,47 @@ type CompleteBody = {
   durationSec?: number;
   error?: string;
 };
+function makeTitleFromPrompt(
+  prompt: string | null | undefined,
+  fallback = "SoftVibe Track"
+): string {
+  const raw = (prompt ?? "").trim();
+  if (!raw) return fallback;
+
+  // hier kannst du die 80 Zeichen anpassen, wenn du willst
+  return raw.length > 80 ? raw.slice(0, 77) + "…" : raw;
+}
 
 function settingsForPreset(preset?: string) {
   switch (preset) {
     case "classic-asmr":
-      return { stability: 0.25, similarity_boost: 0.9, style: 0.75, use_speaker_boost: false };
+      return {
+        stability: 0.25,
+        similarity_boost: 0.9,
+        style: 0.75,
+        use_speaker_boost: false,
+      };
     case "sleep-story":
-      return { stability: 0.55, similarity_boost: 0.85, style: 0.45, use_speaker_boost: false };
+      return {
+        stability: 0.55,
+        similarity_boost: 0.85,
+        style: 0.45,
+        use_speaker_boost: false,
+      };
     case "meditation":
-      return { stability: 0.4, similarity_boost: 0.9, style: 0.6, use_speaker_boost: false };
+      return {
+        stability: 0.4,
+        similarity_boost: 0.9,
+        style: 0.6,
+        use_speaker_boost: false,
+      };
     default:
-      return { stability: 0.5, similarity_boost: 0.75, style: 0.3, use_speaker_boost: false };
+      return {
+        stability: 0.5,
+        similarity_boost: 0.75,
+        style: 0.3,
+        use_speaker_boost: false,
+      };
   }
 }
 
@@ -39,10 +66,45 @@ export async function POST(
   ctx: { params: Promise<{ id: string }> }
 ) {
   const { id } = await ctx.params;
+  const h = await nextHeaders();
+  const reqId = h.get("x-request-id") ?? undefined;
 
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    addDebugLog({
+      ts: new Date().toISOString(),
+      level: "warn",
+      route: "/api/jobs/[id]/complete POST",
+      userId: null,
+      message: "Unauthorized",
+      data: { id },
+      reqId,
+    });
+    return jsonError("Unauthorized", 401);
+  }
+
+  const key = session.user.id
+    ? `u:${session.user.id}:complete`
+    : `ip:${clientIpFromRequest(req)}:complete`;
+  const rl = rateLimit(key, 10, 60_000);
+  if (!rl.ok) {
+    addDebugLog({
+      ts: new Date().toISOString(),
+      level: "warn",
+      route: "/api/jobs/[id]/complete POST",
+      userId: session.user.id as string,
+      message: "Rate limited",
+      data: { id },
+      reqId,
+    });
+    return new NextResponse(
+      JSON.stringify({
+        ok: false,
+        error: "RATE_LIMITED",
+        message: "Zu viele Abschlüsse. Bitte kurz warten.",
+      }),
+      { status: 429, headers: rl.headers }
+    );
   }
 
   const job = await prisma.job.findFirst({
@@ -55,25 +117,37 @@ export async function POST(
       preset: true,
       durationSec: true,
       createdAt: true,
+      title: true, // 👈 NEU
     },
   });
   if (!job) {
-    return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
+    addDebugLog({
+      ts: new Date().toISOString(),
+      level: "warn",
+      route: "/api/jobs/[id]/complete POST",
+      userId: session.user.id as string,
+      message: "Job not found",
+      data: { id },
+      reqId,
+    });
+    return jsonError("NOT_FOUND", 404);
   }
 
-  // optionaler Body
   let body: CompleteBody = {};
   try {
     body = (await req.json()) as CompleteBody;
   } catch {
-    // kein Body ist ok
+    /* empty body ok */
   }
 
-  // Client meldet Fehler -> FAIL
   if (body.error && body.error.trim() !== "") {
     const failed = await prisma.job.update({
       where: { id },
-      data: { status: $Enums.JobStatus.FAILED, error: body.error, resultUrl: job.resultUrl ?? null },
+      data: {
+        status: $Enums.JobStatus.FAILED,
+        error: body.error,
+        resultUrl: job.resultUrl ?? null,
+      },
       select: {
         id: true,
         status: true,
@@ -82,52 +156,74 @@ export async function POST(
         prompt: true,
         preset: true,
         createdAt: true,
+        title: true, // 👈 NEU
       },
     });
-    return NextResponse.json(failed);
+    addDebugLog({
+      ts: new Date().toISOString(),
+      level: "warn",
+      route: "/api/jobs/[id]/complete POST",
+      userId: session.user.id as string,
+      message: "Client failed job",
+      data: { id, error: body.error },
+      reqId,
+    });
+    return jsonOk(failed, 200);
   }
 
-  // Falls der Client bereits eine resultUrl liefert, übernehmen (z.B. extern)
   let nextResultUrl = body.resultUrl ?? null;
-
-  // Wir versuchen zusätzlich, die Dauer zu bestimmen – niemals fatal
   let detectedDuration: number | undefined;
 
-  // Zielpfad für lokale Kopie (Fallback/Entwicklungsmodus)
   const localRel = `/generated/${id}.mp3`;
   const localAbs = path.join(process.cwd(), "public", "generated", `${id}.mp3`);
 
   if (!nextResultUrl) {
-    // === ElevenLabs Synthese ===
     const apiKey = process.env.ELEVENLABS_API_KEY;
-    const voiceId = process.env.ELEVENLABS_VOICE_ID || "21m00Tcm4TlvDq8ikWAM";
-    const modelId = process.env.ELEVENLABS_MODEL_ID || "eleven_multilingual_v2";
+    const voiceId =
+      process.env.ELEVENLABS_VOICE_ID || "21m00Tcm4TlvDq8ikWAM";
+    const modelId =
+      process.env.ELEVENLABS_MODEL_ID || "eleven_multilingual_v2";
 
     if (!apiKey) {
       await prisma.job.update({
         where: { id },
-        data: { status: $Enums.JobStatus.FAILED, error: "ELEVENLABS_API_KEY missing" },
+        data: {
+          status: $Enums.JobStatus.FAILED,
+          error: "ELEVENLABS_API_KEY missing",
+        },
       });
-      return NextResponse.json({ error: "ELEVENLABS_API_KEY missing" }, { status: 500 });
+      addDebugLog({
+        ts: new Date().toISOString(),
+        level: "error",
+        route: "/api/jobs/[id]/complete POST",
+        userId: session.user.id as string,
+        message: "Missing ELEVENLABS_API_KEY",
+        data: { id },
+        reqId,
+      });
+      return jsonError("ELEVENLABS_API_KEY missing", 500);
     }
 
     const text = job.prompt?.trim() || "SoftVibe Demo Clip";
     const voiceSettings = settingsForPreset(job.preset ?? undefined);
 
     try {
-      const resp = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
-        method: "POST",
-        headers: {
-          "xi-api-key": apiKey,
-          "Content-Type": "application/json",
-          Accept: "audio/mpeg",
-        },
-        body: JSON.stringify({
-          text,
-          model_id: modelId,
-          voice_settings: voiceSettings,
-        }),
-      });
+      const resp = await fetch(
+        `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
+        {
+          method: "POST",
+          headers: {
+            "xi-api-key": apiKey,
+            "Content-Type": "application/json",
+            Accept: "audio/mpeg",
+          },
+          body: JSON.stringify({
+            text,
+            model_id: modelId,
+            voice_settings: voiceSettings,
+          }),
+        }
+      );
 
       if (!resp.ok) {
         const errTxt = await resp.text().catch(() => String(resp.status));
@@ -136,7 +232,6 @@ export async function POST(
 
       const buf = Buffer.from(await resp.arrayBuffer());
 
-      // Dauer erkennen (best-effort, niemals fatal)
       try {
         const { parseBuffer } = await import("music-metadata");
         const meta = await parseBuffer(buf, "audio/mpeg");
@@ -144,14 +239,12 @@ export async function POST(
           detectedDuration = Math.round(meta.format.duration);
         }
       } catch {
-        // ignorieren
+        /* ignore */
       }
 
-      // === S3 bevorzugen, sonst lokal speichern ===
       try {
         if (hasS3Env()) {
           await uploadMP3ToS3(s3KeyForJob(id), buf);
-          // Proxy-Route liefert aus S3 (oder lokal, je nach Implementierung)
           nextResultUrl = `/api/jobs/${id}/audio`;
         } else {
           await fs.mkdir(path.dirname(localAbs), { recursive: true });
@@ -159,25 +252,41 @@ export async function POST(
           nextResultUrl = `/api/jobs/${id}/audio`;
         }
       } catch (e) {
-        // Falls Upload/Write schief geht → FAIL
         const msg = e instanceof Error ? e.message : "Store audio failed";
         await prisma.job.update({
           where: { id },
           data: { status: $Enums.JobStatus.FAILED, error: msg },
         });
-        return NextResponse.json({ error: msg }, { status: 500 });
+        addDebugLog({
+          ts: new Date().toISOString(),
+          level: "error",
+          route: "/api/jobs/[id]/complete POST",
+          userId: session.user.id as string,
+          message: "Store audio failed",
+          data: { id, error: msg },
+          reqId,
+        });
+        return jsonError(msg, 500);
       }
-    } catch (e: unknown) {
+    } catch (e) {
       const msg = e instanceof Error ? e.message : "TTS failed";
       await prisma.job.update({
         where: { id },
         data: { status: $Enums.JobStatus.FAILED, error: msg },
       });
-      return NextResponse.json({ error: msg }, { status: 500 });
+      addDebugLog({
+        ts: new Date().toISOString(),
+        level: "error",
+        route: "/api/jobs/[id]/complete POST",
+        userId: session.user.id as string,
+        message: "TTS failed",
+        data: { id, error: msg },
+        reqId,
+      });
+      return jsonError(msg, 500);
     }
   }
 
-  // Dauer final wählen (Body > erkannt > bisher)
   const nextDuration =
     typeof body.durationSec === "number" && !Number.isNaN(body.durationSec)
       ? body.durationSec
@@ -185,7 +294,6 @@ export async function POST(
       ? detectedDuration
       : job.durationSec ?? undefined;
 
-  // Job abschließen
   const updated = await prisma.job.update({
     where: { id },
     data: {
@@ -202,10 +310,10 @@ export async function POST(
       prompt: true,
       preset: true,
       createdAt: true,
+      title: true, // 👈 NEU
     },
   });
 
-  // Track-Dauer mitziehen (falls es einen Track zu diesem Job gibt)
   if (typeof nextDuration === "number") {
     await prisma.track.updateMany({
       where: { jobId: id },
@@ -213,5 +321,60 @@ export async function POST(
     });
   }
 
-  return NextResponse.json(updated);
+  /* 👇 NEU: falls noch kein Track zu diesem Audio existiert, einen anlegen */
+  try {
+  const url = updated.resultUrl ?? null;
+  if (url) {
+    const existing = await prisma.track.findFirst({
+      where: { userId: session.user.id as string, url },
+      select: { id: true },
+    });
+
+    const safeTitle =
+      updated.title && updated.title.trim() !== ""
+        ? updated.title.trim().slice(0, 80)
+        : makeTitleFromPrompt(updated.prompt, "SoftVibe Track");
+
+    if (!existing) {
+      await prisma.track.create({
+        data: {
+          userId: session.user.id as string,
+          jobId: updated.id,
+          title: safeTitle,
+          url,
+          durationSeconds:
+            typeof updated.durationSec === "number"
+              ? updated.durationSec
+              : typeof nextDuration === "number"
+              ? nextDuration
+              : null,
+        },
+      });
+    } else if (typeof nextDuration === "number") {
+      await prisma.track.update({
+        where: { id: existing.id },
+        data: { durationSeconds: nextDuration },
+      });
+    }
+  }
+  } catch {
+    // Track-Erstellung darf den Job-Abschluss nicht scheitern lassen
+  }
+  /* 👆 NEU Ende */
+
+  addDebugLog({
+    ts: new Date().toISOString(),
+    level: "info",
+    route: "/api/jobs/[id]/complete POST",
+    userId: session.user.id as string,
+    message: "Complete OK",
+    data: {
+      id: updated.id,
+      status: updated.status,
+      durationSec: updated.durationSec ?? null,
+    },
+    reqId,
+  });
+
+  return jsonOk(updated, 200);
 }

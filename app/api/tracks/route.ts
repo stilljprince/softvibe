@@ -1,8 +1,9 @@
 // app/api/tracks/route.ts
-import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/config";
 import { prisma } from "@/lib/prisma";
+import type { Prisma } from "@prisma/client";
+import { jsonOk, jsonError } from "@/lib/api";
 
 export const runtime = "nodejs";
 
@@ -15,11 +16,14 @@ type CreateBody = {
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return jsonError("Unauthorized", 401);
   }
 
   const { searchParams } = new URL(req.url);
-  const take = Math.min(Math.max(Number(searchParams.get("take") ?? "10"), 1), 50);
+  const take = Math.min(
+    Math.max(Number(searchParams.get("take") ?? "10"), 1),
+    50
+  );
   const q = (searchParams.get("q") ?? "").trim();
   const cursor = searchParams.get("cursor") ?? "";
 
@@ -36,17 +40,30 @@ export async function GET(req: Request) {
     }
   }
 
-  const whereBase = {
+  // Basis-Filter: Tracks des Users
+      const whereBase: Prisma.TrackWhereInput = {
     userId: session.user.id,
-    ...(q
-      ? {
-          title: {
-            contains: q,
-            mode: "insensitive" as const,
-          },
-        }
-      : {}),
   };
+
+  // Optional: Textsuche in Titel oder Prompt (vom Job)
+  if (q) {
+    whereBase.OR = [
+      {
+        title: {
+          contains: q,
+          mode: "insensitive",
+        },
+      },
+      {
+        job: {
+          prompt: {
+            contains: q,
+            mode: "insensitive",
+          },
+        },
+      },
+    ];
+  }
 
   const whereWithCursor =
     createdAtCursor && idCursor
@@ -56,41 +73,69 @@ export async function GET(req: Request) {
             {
               OR: [
                 { createdAt: { lt: createdAtCursor } },
-                { AND: [{ createdAt: createdAtCursor }, { id: { lt: idCursor } }] },
+                {
+                  AND: [
+                    { createdAt: createdAtCursor },
+                    { id: { lt: idCursor } },
+                  ],
+                },
               ],
             },
           ],
         }
       : whereBase;
 
-  const items = await prisma.track.findMany({
+  // 🔹 WICHTIG: Job-Relation mitladen, damit wir title/prompt vom Job haben
+  const rows = await prisma.track.findMany({
     where: whereWithCursor,
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    select: { id: true, title: true, url: true, durationSeconds: true, createdAt: true },
+    include: {
+      job: {
+        select: {
+          title: true,
+          prompt: true,
+        },
+      },
+    },
     take,
   });
 
-  const last = items[items.length - 1];
-  const nextCursor = last ? `${last.createdAt.toISOString()}::${last.id}` : null;
+  const last = rows[rows.length - 1];
+  const nextCursor = last
+    ? `${last.createdAt.toISOString()}::${last.id}`
+    : null;
 
-  return NextResponse.json(
+  // 🔹 Titel & Prompt ausschließlich vom Job ableiten
+  const items = rows.map((t) => {
+    const jobTitle = (t.job?.title ?? "").trim();
+    const jobPrompt = (t.job?.prompt ?? "").trim();
+
+    return {
+      id: t.id,
+      title: jobTitle || "SoftVibe Track",
+      prompt: jobPrompt || null,
+      url: t.url,
+      durationSeconds: t.durationSeconds,
+      createdAt: t.createdAt.toISOString(),
+      isPublic: t.isPublic,
+      shareSlug: t.shareSlug,
+    };
+  });
+
+  return jsonOk(
     {
-      items: items.map((t) => ({
-        ...t,
-        createdAt: t.createdAt.toISOString(),
-      })),
+      items,
       nextCursor,
     },
-    { status: 200 }
+    200
   );
 }
-
 // POST /api/tracks  body: { jobId, title? }
 // Upsert-Logik: Falls (userId,url) schon existiert → Titel (falls mitgegeben) aktualisieren statt duplizieren
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return jsonError("Unauthorized", 401);
   }
 
   let body: CreateBody | null = null;
@@ -100,7 +145,7 @@ export async function POST(req: Request) {
     // ignore
   }
   if (!body || !body.jobId) {
-    return NextResponse.json({ error: "Missing jobId" }, { status: 400 });
+    return jsonError("Missing jobId", 400);
   }
 
   const job = await prisma.job.findFirst({
@@ -108,10 +153,10 @@ export async function POST(req: Request) {
     select: { id: true, resultUrl: true, durationSec: true, prompt: true },
   });
   if (!job) {
-    return NextResponse.json({ error: "JOB_NOT_FOUND" }, { status: 404 });
+    return jsonError("JOB_NOT_FOUND", 404);
   }
   if (!job.resultUrl) {
-    return NextResponse.json({ error: "JOB_HAS_NO_AUDIO" }, { status: 400 });
+    return jsonError("JOB_HAS_NO_AUDIO", 400);
   }
 
   const proposedTitle =
@@ -133,15 +178,15 @@ export async function POST(req: Request) {
         data: { title: proposedTitle },
         select: { id: true, title: true, url: true, durationSeconds: true, createdAt: true },
       });
-      return NextResponse.json(
+      return jsonOk(
         { ...updated, createdAt: updated.createdAt.toISOString(), updated: true },
-        { status: 200 }
+        200
       );
     }
     // sonst idempotent zurückgeben
-    return NextResponse.json(
+    return jsonOk(
       { ...existing, createdAt: existing.createdAt.toISOString(), updated: false },
-      { status: 200 }
+      200
     );
   }
 
@@ -157,8 +202,8 @@ export async function POST(req: Request) {
     select: { id: true, title: true, url: true, durationSeconds: true, createdAt: true },
   });
 
-  return NextResponse.json(
+  return jsonOk(
     { ...created, createdAt: created.createdAt.toISOString(), created: true },
-    { status: 201 }
+    201
   );
 }

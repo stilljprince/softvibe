@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/config";
 import { prisma } from "@/lib/prisma";
-
+import { jsonOk, jsonError } from "@/lib/api";
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
@@ -12,7 +12,7 @@ export async function POST(req: Request) {
   const jobId = parts[3];
 
   if (!jobId) {
-    return NextResponse.json({ error: "Job ID missing" }, { status: 400 });
+    return jsonError("Job ID missing", 400);
   }
 
   const systemSecret = req.headers.get("x-softvibe-job-secret");
@@ -23,7 +23,7 @@ export async function POST(req: Request) {
   if (!isSystem) {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return jsonError("Unauthorized", 401);
     }
     userId = session.user.id;
   }
@@ -37,11 +37,11 @@ export async function POST(req: Request) {
   });
 
   if (!job) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return jsonError("Not found", 404);
   }
 
   if (!isSystem && job.userId !== userId) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    return jsonError("Forbidden", 403);
   }
 
   const updated = await prisma.job.update({
@@ -62,5 +62,5 @@ export async function POST(req: Request) {
     },
   });
 
-  return NextResponse.json(updated);
+  return jsonOk(updated, 200);
 }

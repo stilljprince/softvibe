@@ -13,15 +13,24 @@ model User {
   email        String   @unique
   name         String?
   passwordHash String
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  Job          Job[]
-  Track        Track[]
+
+  // 🔹 Stripe + Credits
+  stripeCustomerId     String? @unique
+  stripeSubscriptionId String? @unique
+  credits              Int     @default(0)
+  isAdmin              Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  Job   Job[]
+  Track Track[]
 }
 
 model Job {
   id          String    @id @default(cuid())
   userId      String
+  title       String?   
   prompt      String
   preset      String?
   status      JobStatus @default(QUEUED)
@@ -30,8 +39,9 @@ model Job {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   durationSec Int?
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tracks      Track[]
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tracks Track[]
 }
 
 model Track {
