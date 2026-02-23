@@ -16,7 +16,6 @@
     "backfill:track-titles": "node scripts/backfill-track-titles.cjs",
     "normalize:track-titles": "node scripts/normalize-track-titles.cjs"
   },
-  
   "dependencies": {
     "@aws-sdk/client-s3": "^3.922.0",
     "@heroicons/react": "^2.2.0",
@@ -25,7 +24,7 @@
     "bcryptjs": "^3.0.2",
     "dotenv": "^17.2.2",
     "music-metadata": "^11.9.0",
-    "next": "15.5.3",
+    "next": "15.5.9",
     "next-auth": "^4.24.11",
     "nodemailer": "^6.10.1",
     "react": "19.1.0",
