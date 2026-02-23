@@ -1,12 +1,18 @@
-// app/api/jobs/[id]/route.ts
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/config";
 import { prisma } from "@/lib/prisma";
 import { jsonOk, jsonError } from "@/lib/api";
-import { hasS3Env, deleteObjectByKey, s3KeyFromUrl, s3KeyForJob } from "@/lib/s3";
+import {
+  hasS3Env,
+  deleteObjectByKey,
+  s3KeyFromUrl,
+  s3KeyForJob,
+} from "@/lib/s3";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
 /**
  * GET /api/jobs/[id]
@@ -16,7 +22,7 @@ export async function GET(
   req: Request,
   ctx: { params: Promise<{ id: string }> }
 ) {
-   const session = await getServerSession(authOptions);
+  const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
     return jsonError("UNAUTHORIZED", 401, { message: "Bitte einloggen." });
   }
@@ -26,12 +32,12 @@ export async function GET(
     return jsonError("JOB_ID_MISSING", 400, { message: "Job ID missing" });
   }
 
-
   const job = await prisma.job.findUnique({
     where: { id: jobId },
     select: {
       id: true,
       userId: true,
+      title: true,
       prompt: true,
       preset: true,
       status: true,
@@ -40,6 +46,7 @@ export async function GET(
       createdAt: true,
       updatedAt: true,
       durationSec: true,
+    
     },
   });
 
@@ -70,16 +77,15 @@ export async function DELETE(
   req: Request,
   ctx: { params: Promise<{ id: string }> }
 ) {
-  
   const { id: jobId } = await ctx.params; // ✅
 
   if (!jobId) {
     return jsonError("JOB_ID_MISSING", 400, { message: "Job ID missing" });
   }
 
-
   const systemSecret = req.headers.get("x-softvibe-job-secret");
-  const isSystem = systemSecret && systemSecret === process.env.JOB_SYSTEM_SECRET;
+  const isSystem =
+    systemSecret && systemSecret === process.env.JOB_SYSTEM_SECRET;
 
   let userId: string | null = null;
 
@@ -127,7 +133,11 @@ export async function DELETE(
         try {
           await deleteObjectByKey(key);
         } catch (err) {
-          console.error("[jobs:delete] S3 delete failed for track", t.id, err);
+          console.error(
+            "[jobs:delete] S3 delete failed for track",
+            t.id,
+            err
+          );
         }
       }
     }

@@ -10,7 +10,7 @@ import { addDebugLog } from "@/lib/debug-log";
 import { toErrData } from "@/lib/error";
 import { jsonOk, jsonError } from "@/lib/api";
 import { makeTitleFromPrompt } from "@/lib/title";
-
+console.log("[BOOT] jobs route loaded from:", __filename);
 export const runtime = "nodejs";
 
 /* ---- Helpers for robust parsing ---- */
@@ -21,6 +21,10 @@ type RawCreateJob = {
   text?: unknown;
   duration?: unknown;
   title?: unknown;
+  language?: unknown;
+ 
+  voiceStyle?: unknown;
+  voiceGender?: unknown;
 };
 
 async function readCreateJobBody(req: Request): Promise<RawCreateJob> {
@@ -99,55 +103,98 @@ export async function GET(req: Request) {
     return jsonError("Unauthorized", 401);
   }
 
-  try {
-    const { searchParams } = new URL(req.url);
-    const take = Number(searchParams.get("take") ?? "20");
-    const skip = Number(searchParams.get("skip") ?? "0");
+ try {
+  const { searchParams } = new URL(req.url);
+  const take = Number(searchParams.get("take") ?? "20");
+  const skip = Number(searchParams.get("skip") ?? "0");
 
-    const jobs = await prisma.job.findMany({
-      where: { userId: session.user.id as string },
-      orderBy: { createdAt: "desc" },
-      select: {
-        id: true,
-        status: true,
-        resultUrl: true,
-        prompt: true,
-        preset: true,
-        durationSec: true,
-        createdAt: true,
-        title: true, // Titel mitschicken
-      },
-      take: Math.min(isFinite(take) ? take : 20, 50),
-      skip: Math.max(isFinite(skip) ? skip : 0, 0),
-    });
+  const jobs = await prisma.job.findMany({
+    where: { userId: session.user.id as string },
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      status: true,
+      resultUrl: true,
+      prompt: true,
+      preset: true,
+      durationSec: true,
+      createdAt: true,
+      title: true,
+      language: true,
+      voiceGender: true,
+      voiceStyle: true,
+      _count: { select: { tracks: true } },
+    },
+    take: Math.min(isFinite(take) ? take : 20, 50),
+    skip: Math.max(isFinite(skip) ? skip : 0, 0),
+  });
 
-    log.info(h, "jobs:list:ok", { count: jobs.length });
-    addDebugLog({
-      ts: new Date().toISOString(),
-      level: "info",
-      route: "/api/jobs GET",
-      userId: session.user.id as string,
-      message: "List OK",
-      data: { count: jobs.length, take, skip },
-      reqId: h.get("x-request-id") ?? undefined,
-    });
-    return jsonOk(jobs, 200);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "unknown";
-    log.error(h, "jobs:list:failed", { msg });
-    addDebugLog({
-      ts: new Date().toISOString(),
-      level: "error",
-      route: "/api/jobs GET",
-      userId: session.user.id as string,
-      message: "List failed",
-      data: { msg },
-      reqId: h.get("x-request-id") ?? undefined,
-    });
-    return jsonError("INTERNAL_ERROR", 500, { message: msg });
-  }
+  // 🔹 NEU: Story-Metadaten anreichern
+  const jobsWithStory = await Promise.all(
+    jobs.map(async (j) => {
+      const first = await prisma.track.findFirst({
+        where: {
+          jobId: j.id,
+          storyId: { not: null },
+          partIndex: 0,
+        },
+        select: {
+          storyId: true,
+          partTitle: true,
+        },
+      });
+
+      if (!first?.storyId) {
+        return {
+          ...j,
+          storyId: null as string | null,
+          chapterCount: 0,
+          firstPartTitle: null as string | null,
+        };
+      }
+
+      const chapterCount = await prisma.track.count({
+        where: { storyId: first.storyId },
+      });
+
+      return {
+        ...j,
+        storyId: first.storyId,
+        chapterCount,
+        firstPartTitle: first.partTitle ?? null,
+      };
+    })
+  );
+
+  log.info(h, "jobs:list:ok", { count: jobsWithStory.length });
+  addDebugLog({
+    ts: new Date().toISOString(),
+    level: "info",
+    route: "/api/jobs GET",
+    userId: session.user.id as string,
+    message: "List OK",
+    data: { count: jobsWithStory.length, take, skip },
+    reqId: h.get("x-request-id") ?? undefined,
+  });
+
+  return jsonOk(jobsWithStory, 200);
+
+} catch (e) {
+  const msg = e instanceof Error ? e.message : "unknown";
+  log.error(h, "jobs:list:failed", { msg });
+  addDebugLog({
+    ts: new Date().toISOString(),
+    level: "error",
+    route: "/api/jobs GET",
+    userId: session.user.id as string,
+    message: "List failed",
+    data: { msg },
+    reqId: h.get("x-request-id") ?? undefined,
+  });
+  return jsonError("INTERNAL_ERROR", 500, { message: msg });
 }
 
+}
 /* ---- CREATE ---- */
 export async function POST(req: Request) {
   const h = await headers();
@@ -189,8 +236,27 @@ export async function POST(req: Request) {
           ? raw.preset.trim()
           : null,
       durationSec: coerceNumber(raw.durationSec ?? raw.duration),
-    };
+      language:
+        raw.language === "en" || raw.language === "de"
+          ? raw.language
+          : "de",
 
+    
+  
+    // NEU
+  voiceGender:
+    raw.voiceGender === "male" || raw.voiceGender === "female"
+      ? raw.voiceGender
+      : "female",
+
+  voiceStyle:
+    raw.voiceStyle === "whisper" || raw.voiceStyle === "soft"
+      ? raw.voiceStyle
+      : "soft",
+  
+  };
+
+    
     // 🔹 Eigene minimale Validierung statt Zod
     if (!normalized.prompt || normalized.prompt.trim().length < 3) {
       addDebugLog({
@@ -356,6 +422,10 @@ export async function POST(req: Request) {
         status: $Enums.JobStatus.QUEUED,
         durationSec: typeof durationSec === "number" ? durationSec : null,
         title: effectiveTitle,
+        language: normalized.language,
+        
+        voiceGender: normalized.voiceGender,
+        voiceStyle: normalized.voiceStyle,
       },
       select: { id: true, status: true, title: true, prompt: true },
     });

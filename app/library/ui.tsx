@@ -7,6 +7,8 @@ import type React from "react";
 import CustomPlayer from "@/app/components/CustomPlayer";
 import EmptyState from "../components/EmptyState";
 import HeaderCredits from "@/app/components/HeaderCredits";
+import { useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 
 type Track = {
   id: string;
@@ -19,6 +21,10 @@ type Track = {
   // 🔹 Sharing
   isPublic?: boolean | null;
   shareSlug?: string | null;
+  storyId?: string | null;
+storyTitle?: string | null;
+partIndex?: number | null;
+partTitle?: string | null;
 };
 
 type TrackItem = {
@@ -77,7 +83,7 @@ function isOkDataResp(v: unknown): v is OkDataResp {
 export default function LibraryClient() {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [loading, setLoading] = useState(false);
-
+const [playerRev, setPlayerRev] = useState<Record<string, number>>({});
   // Pagination (neu)
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -119,8 +125,35 @@ export default function LibraryClient() {
       ? "/softvibe-logo-dark.svg"
       : "/softvibe-logo-pastel.svg";
 
-    
-                                             const [detailTrack, setDetailTrack] = useState<Track | null>(null);
+const sp = useSearchParams();
+const storyIdFromUrl = (sp.get("story") ?? "").trim();
+const isStoryMode = !!storyIdFromUrl;
+useEffect(() => {
+  if (storyIdFromUrl) {
+    void openStory(storyIdFromUrl);
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [storyIdFromUrl]);
+
+const [detailTrack, setDetailTrack] = useState<Track | null>(null);
+
+const [storyLoading, setStoryLoading] = useState(false);
+const [storyTracks, setStoryTracks] = useState<Track[]>([]);
+const [storyMeta, setStoryMeta] = useState<{ id: string; title: string } | null>(null);
+const [storyIndex, setStoryIndex] = useState(0);
+const router = useRouter();
+
+const navBtnStyle: React.CSSProperties = {
+  padding: "8px 10px",
+  borderRadius: 10,
+  border: "1px solid var(--color-nav-bg)",
+  background: "var(--color-bg)",
+  color: "var(--color-text)",
+  cursor: "pointer",
+  fontWeight: 800,
+};
+
+
 
 const detailTitle = (() => {
   if (!detailTrack) return "";
@@ -323,6 +356,7 @@ const detailPrompt = (() => {
     }
     return arr;
   }, [q, tracks, sortKey]);
+const listItems: Track[] = isStoryMode ? storyTracks : filtered;
 
   function beginEdit(t: Track) {
     const start = (t.title ?? t.prompt ?? "").trim();
@@ -364,47 +398,159 @@ const detailPrompt = (() => {
     a.remove();
   }
 
-  async function copyLink(t: Track) {
-    try {
-      const publicUrl = t.isPublic && t.shareSlug ? `${getOrigin()}/p/${t.shareSlug}` : null;
-      const privateUrl = toAbsoluteUrl(t.url);
-      const finalUrl = publicUrl ?? privateUrl;
-
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(finalUrl);
-      } else {
-        const tmp = document.createElement("textarea");
-        tmp.value = finalUrl;
-        document.body.appendChild(tmp);
-        tmp.select();
-        document.execCommand("copy");
-        tmp.remove();
-      }
-      showToast("Link kopiert.", "ok");
-    } catch {
-      showToast("Kopieren fehlgeschlagen.", "err");
-    }
+function unwrapJsonOk<T>(raw: unknown): T {
+  if (!raw || typeof raw !== "object") {
+    throw new Error("Invalid JSON response");
   }
 
-  async function toggleShare(t: Track) {
-    const want = !t.isPublic;
-    const res = await fetch(`/api/tracks/${encodeURIComponent(t.id)}/share`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ isPublic: want }),
-    });
-    if (!res.ok) {
-      showToast("Konnte Freigabe nicht ändern.", "err");
+  // jsonOk(...) liefert oft { ok: true, data: ... }
+  const obj = raw as Record<string, unknown>;
+  const data = obj.data;
+
+  return (data !== undefined ? data : obj) as T;
+}
+
+ async function copyLink(t: Track) {
+  try {
+    if (!t.isPublic || !t.shareSlug) {
+      showToast("Aktiviere zuerst „Öffentlich teilen“.", "err");
       return;
     }
-    const data: { isPublic: boolean; shareSlug: string | null } = await res.json();
-    setTracks((prev) =>
-      prev.map((x) =>
-        x.id === t.id ? { ...x, isPublic: data.isPublic, shareSlug: data.shareSlug ?? null } : x
-      )
-    );
-    showToast(want ? "Öffentlich freigegeben." : "Freigabe entfernt.", "ok");
+
+    const publicUrl = `${getOrigin()}/p/${t.shareSlug}`;
+
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(publicUrl);
+    } else {
+      const tmp = document.createElement("textarea");
+      tmp.value = publicUrl;
+      document.body.appendChild(tmp);
+      tmp.select();
+      document.execCommand("copy");
+      tmp.remove();
+    }
+
+    showToast("Öffentlicher Link kopiert.", "ok");
+  } catch {
+    showToast("Kopieren fehlgeschlagen.", "err");
   }
+}
+
+type StoryTracksResponse = {
+  story: { id: string; title: string };
+  tracks: Track[];
+};
+
+async function openStory(storyId: string) {
+  setStoryLoading(true);
+  try {
+    // ✅ benutzt deinen bestehenden tracks endpoint, der storyId/partIndex/partTitle schon liefert
+    const res = await fetch(`/api/tracks?storyId=${encodeURIComponent(storyId)}&take=200`);
+    if (!res.ok) throw new Error("story fetch failed");
+    const raw: unknown = await res.json();
+
+    // jsonOk entpacken, ohne any
+    const r = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+    const inner =
+      r.data && typeof r.data === "object"
+        ? (r.data as Record<string, unknown>)
+        : r;
+
+    const itemsRaw = Array.isArray(inner.items) ? inner.items : [];
+    const items = itemsRaw.filter((x): x is Track => !!x && typeof x === "object") as Track[];
+
+    // sort by partIndex
+    const sorted = [...items].sort((a, b) => (a.partIndex ?? 0) - (b.partIndex ?? 0));
+
+    setStoryTracks(sorted);
+    setStoryIndex(0);
+
+    // meta: Titel aus erstem Track ableiten
+    const title = (sorted[0]?.storyTitle ?? "Story").trim();
+    setStoryMeta({ id: storyId, title });
+  } finally {
+    setStoryLoading(false);
+  }
+}
+
+function handleStoryEnded() {
+  setStoryIndex((i) => {
+    const next = i + 1;
+    return next >= storyTracks.length ? i : next;
+  });
+}
+
+  async function toggleShare(t: Track) {
+  const want = !t.isPublic;
+  const res = await fetch(`/api/tracks/${encodeURIComponent(t.id)}/share`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ isPublic: want }),
+  });
+
+  if (!res.ok) {
+    showToast("Konnte Freigabe nicht ändern.", "err");
+    return;
+  }
+
+  const raw: unknown = await res.json();
+
+  // jsonOk entpacken: entweder { ok, data:{...} } oder direkt { isPublic, shareSlug }
+  let isPublic: boolean | undefined;
+  let shareSlug: string | null | undefined;
+
+  if (raw && typeof raw === "object") {
+    const r = raw as Record<string, unknown>;
+    const inner =
+      r.data && typeof r.data === "object"
+        ? (r.data as Record<string, unknown>)
+        : r;
+
+    if (typeof inner.isPublic === "boolean") {
+      isPublic = inner.isPublic;
+    }
+    if (
+      typeof inner.shareSlug === "string" ||
+      inner.shareSlug === null ||
+      typeof inner.shareSlug === "undefined"
+    ) {
+      shareSlug = inner.shareSlug as string | null | undefined;
+    }
+  }
+
+  if (typeof isPublic !== "boolean") {
+    showToast("Antwort vom Server war unerwartet.", "err");
+    return;
+  }
+
+  setTracks((prev) =>
+    prev.map((x) =>
+      x.id === t.id
+        ? {
+            ...x,
+            isPublic,
+            shareSlug: shareSlug ?? null,
+          }
+        : x
+    )
+  );
+
+if (detailTrack?.id === t.id) {
+  setDetailTrack((prev) =>
+    prev ? { ...prev, isPublic, shareSlug: shareSlug ?? null } : prev
+  );
+}
+
+  if (!isPublic) {
+  setPlayerRev((prev) => ({
+    ...prev,
+    [t.id]: (prev[t.id] ?? 0) + 1,
+  }));
+}
+
+
+  showToast(want ? "Öffentlich freigegeben." : "Freigabe entfernt.", "ok");
+}
 
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
@@ -589,7 +735,7 @@ const detailPrompt = (() => {
         {/* Liste */}
         {loading ? (
           <p style={{ opacity: 0.65 }}>Lade…</p>
-        ) : (filtered ?? []).length === 0 ? (
+       ) : listItems.length === 0 ? (
           <EmptyState
             title="Keine Einträge"
             hint="Hier landen deine generierten Audios."
@@ -597,8 +743,76 @@ const detailPrompt = (() => {
           />
         ) : (
           <>
+           
+
+{isStoryMode && (
+  <div
+    style={{
+      marginBottom: 14,
+      border: "1px solid var(--color-nav-bg)",
+      borderRadius: 12,
+      background: "var(--color-card)",
+      padding: 12,
+    }}
+  >
+    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <Link
+        href="/library"
+        style={{
+          padding: "8px 10px",
+          borderRadius: 10,
+          border: "1px solid var(--color-nav-bg)",
+          background: "var(--color-bg)",
+          color: "var(--color-text)",
+          fontWeight: 800,
+          textDecoration: "none",
+        }}
+      >
+        ← Zurück
+      </Link>
+
+      <div style={{ fontWeight: 900 }}>
+        {storyMeta?.title ?? "Story"} · {storyTracks.length} Kapitel
+      </div>
+    </div>
+
+    <div style={{ marginTop: 10 }}>
+      <div style={{ fontSize: "0.85rem", opacity: 0.8, marginBottom: 8 }}>
+        Chapter {storyIndex + 1}/{storyTracks.length}:{" "}
+        {storyTracks[storyIndex]?.partTitle ?? ""}
+      </div>
+
+      <CustomPlayer
+        key={`story:${storyMeta?.id ?? "x"}:${storyIndex}`} // wichtig
+        src={storyTracks[storyIndex]?.url ?? ""}
+        preload="auto"
+        showTitle={false}
+        autoPlay={true}
+        onEnded={handleStoryEnded}
+      />
+    </div>
+
+    <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
+      <button
+        disabled={storyIndex <= 0}
+        onClick={() => setStoryIndex((i) => Math.max(0, i - 1))}
+        style={navBtnStyle}
+      >
+        ◀︎ Zurück
+      </button>
+
+      <button
+        disabled={storyIndex >= storyTracks.length - 1}
+        onClick={() => setStoryIndex((i) => Math.min(storyTracks.length - 1, i + 1))}
+        style={navBtnStyle}
+      >
+        Weiter ▶︎
+      </button>
+    </div>
+  </div>
+)}
             <ul style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {(filtered ?? []).map((t) => {
+              {listItems.map((t) => {
   const isEditing = editingId === t.id;
   const isActive = openMenuId === t.id;
   const isHovering = hoverId === t.id;
@@ -606,6 +820,13 @@ const detailPrompt = (() => {
   const trackTitle = (t.title ?? "").trim();
   const jobTitle = (t.jobTitle ?? "").trim();
   const promptText = (t.prompt ?? "").trim();
+const isChapter = t.storyId && typeof t.partIndex === "number";
+
+// nur im "normalen" Library-Mode wollen wir nur Chapter 1 sehen,
+// damit die Liste nicht zugemüllt wird.
+if (!isStoryMode && isChapter && t.partIndex !== 0) {
+  return null;
+}
 
   const effectiveTitle =
     trackTitle && trackTitle !== jobTitle
@@ -680,7 +901,7 @@ const detailPrompt = (() => {
                           </>
                         ) : (
                           <button
-                            onClick={() => beginEdit(t)}
+                            onClick={() => router.push(`/t/${t.id}`)}
                             title="Titel bearbeiten"
                             style={{
                               appearance: "none",
@@ -707,11 +928,20 @@ const detailPrompt = (() => {
                         {t.durationSeconds ? `${t.durationSeconds}s · ` : ""}
                         {t.createdAt ? new Date(t.createdAt).toLocaleString("de-DE") : ""}
                         {t.isPublic ? " · Öffentlich" : ""}
+                        {t.storyId && typeof t.partIndex === "number"
+  ? ` · Chapter ${t.partIndex + 1}`
+  : ""}
                       </div>
                       {/* Player */}
-                      <div style={{ marginTop: 10 }}>
-                        <CustomPlayer src={t.url} preload="auto" showTitle={false} />
-                      </div>
+{/* Player */}
+<div style={{ marginTop: 10 }}>
+  <CustomPlayer
+    key={`${t.id}:${playerRev[t.id] ?? 0}`}
+    src={t.url}
+    preload="auto"
+    showTitle={false}
+  />
+</div>
                     </div>
 
                     {/* rechte Spalte: Menü */}
@@ -868,6 +1098,19 @@ const detailPrompt = (() => {
                             Download
                           </button>
 
+{t.storyId ? (
+  <button
+    onClick={() => {
+      router.push(`/library?story=${encodeURIComponent(t.storyId!)}`);
+      setOpenMenuId(null);
+      setOpenMode(null);
+    }}
+    style={menuItemStyle}
+  >
+    Album öffnen
+  </button>
+) : null}
+
 {/* 🔹 NEU: Details ansehen */}
     <button
       onClick={() => {
@@ -907,7 +1150,115 @@ const detailPrompt = (() => {
                   </li>
                 );
               })}
+            
             </ul>
+
+{/* ✅ DETAIL PANEL (NEU) */}
+{detailTrack && (
+  <div
+    style={{
+      marginTop: 14,
+      border: "1px solid var(--color-nav-bg)",
+      borderRadius: 12,
+      background: "var(--color-card)",
+      padding: 12,
+    }}
+  >
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+      <div style={{ fontWeight: 800 }}>{(detailTrack.title ?? "").trim() || "Details"}</div>
+      <button
+        onClick={() => setDetailTrack(null)}
+        style={{
+          padding: "6px 10px",
+          borderRadius: 10,
+          border: "1px solid var(--color-nav-bg)",
+          background: "var(--color-bg)",
+          cursor: "pointer",
+          fontWeight: 700,
+        }}
+      >
+        Schließen
+      </button>
+    </div>
+
+    <div style={{ fontSize: "0.85rem", opacity: 0.8, marginTop: 6 }}>
+      {detailTrack.createdAt ? new Date(detailTrack.createdAt).toLocaleString("de-DE") : null}
+      {detailTrack.durationSeconds ? ` · ${detailTrack.durationSeconds}s` : ""}
+      {detailTrack.isPublic ? " · Öffentlich" : ""}
+      {detailTrack.partTitle ? ` · ${detailTrack.partTitle}` : ""}
+    </div>
+
+    {/* ✅ Story-Button nur wenn Story */}
+    {detailTrack.storyId ? (
+      <div style={{ marginTop: 12 }}>
+        <button
+          onClick={() => {
+  const sid = detailTrack.storyId;
+  if (!sid) return;
+  setDetailTrack(null); // Modal schließen
+  router.push(`/library?story=${encodeURIComponent(sid)}`);
+}}
+          style={{
+            padding: "10px 12px",
+            borderRadius: 10,
+            border: "1px solid var(--color-nav-bg)",
+            background: "var(--color-bg)",
+            color: "var(--color-text)",
+            fontWeight: 800,
+            cursor: "pointer",
+            width: "100%",
+            textAlign: "left",
+          }}
+        >
+          Kapitel laden
+        </button>
+
+        {storyLoading ? (
+          <div style={{ marginTop: 10, opacity: 0.7 }}>Lade Kapitel…</div>
+        ) : storyTracks.length ? (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: "0.85rem", opacity: 0.8, marginBottom: 8 }}>
+              {storyMeta?.title ?? "Story"} · Chapter {storyIndex + 1}/{storyTracks.length}
+            </div>
+
+            <CustomPlayer
+              key={`${storyMeta?.id ?? "story"}:${storyIndex}:${playerRev[storyMeta?.id ?? "story"] ?? 0}`}
+              src={storyTracks[storyIndex]?.url ?? ""}
+              preload="auto"
+              showTitle={false}
+              autoPlay={true}
+              onEnded={handleStoryEnded}
+            />
+
+            <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
+              <button
+                disabled={storyIndex <= 0}
+                onClick={() => setStoryIndex((i) => Math.max(0, i - 1))}
+                style={navBtnStyle}
+              >
+                ◀︎ Zurück
+              </button>
+
+              <button
+                disabled={storyIndex >= storyTracks.length - 1}
+                onClick={() => setStoryIndex((i) => Math.min(storyTracks.length - 1, i + 1))}
+                style={navBtnStyle}
+              >
+                Weiter ▶︎
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ marginTop: 10, opacity: 0.7 }}>Noch keine Kapitel geladen.</div>
+        )}
+      </div>
+    ) : (
+      <div style={{ marginTop: 12 }}>
+        <CustomPlayer src={detailTrack.url} preload="auto" showTitle={false} />
+      </div>
+    )}
+  </div>
+)}
 
             {/* Load more (neu) */}
             {nextCursor && (

@@ -19,6 +19,60 @@ function sanitizeTitle(t: string): string {
   const noCtrls = trimmed.replace(/[\u0000-\u001F\u007F]/g, "");
   return noCtrls.slice(0, 140);
 }
+// GET /api/tracks/[id] -> Track Details (intern)
+export async function GET(
+  _req: Request,
+  ctx: { params: Promise<{ id: string }> }
+) {
+  const h = await headers();
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) {
+    log.warn(h, "tracks:get:unauthorized");
+    return jsonError("UNAUTHORIZED", 401);
+  }
+
+  const { id } = await ctx.params;
+  log.info(h, "tracks:get:start", { id });
+
+  const t = await prisma.track.findUnique({
+    where: { id },
+    include: {
+      job: { select: { title: true, prompt: true } },
+      story: { select: { id: true, title: true } },
+    },
+  });
+
+  if (!t) {
+    log.warn(h, "tracks:get:not_found", { id });
+    return jsonError("NOT_FOUND", 404);
+  }
+
+  if (t.userId !== session.user.id) {
+    log.warn(h, "tracks:get:forbidden", { id });
+    return jsonError("FORBIDDEN", 403);
+  }
+
+  const out = {
+    id: t.id,
+    title: t.title,
+    url: t.url,
+    durationSeconds: t.durationSeconds,
+    createdAt: t.createdAt.toISOString(),
+    isPublic: t.isPublic,
+    shareSlug: t.shareSlug,
+
+    storyId: t.storyId ?? null,
+    storyTitle: (t.story?.title ?? "").trim() || null,
+    partIndex: typeof t.partIndex === "number" ? t.partIndex : null,
+    partTitle: (t.partTitle ?? "").trim() || null,
+
+    jobTitle: (t.job?.title ?? "").trim() || null,
+    prompt: (t.job?.prompt ?? "").trim() || null,
+  };
+
+  log.info(h, "tracks:get:ok", { id });
+  return jsonOk(out, 200);
+}
 
 // PATCH /api/tracks/[id]  -> Titel umbenennen
 export async function PATCH(

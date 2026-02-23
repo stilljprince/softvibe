@@ -10,6 +10,7 @@ export const runtime = "nodejs";
 type CreateBody = {
   jobId: string;
   title?: string;
+  partIndex?: number;
 };
 
 // GET /api/tracks?take=10&cursor=2025-11-05T10:00:00.000Z::ckxyz...&q=story
@@ -26,6 +27,7 @@ export async function GET(req: Request) {
   );
   const q = (searchParams.get("q") ?? "").trim();
   const cursor = searchParams.get("cursor") ?? "";
+const storyId = (searchParams.get("storyId") ?? "").trim();
 
   let createdAtCursor: Date | null = null;
   let idCursor: string | null = null;
@@ -43,6 +45,7 @@ export async function GET(req: Request) {
   // Basis-Filter: Tracks des Users
       const whereBase: Prisma.TrackWhereInput = {
     userId: session.user.id,
+    ...(storyId ? { storyId } : {} ),
   };
 
   // Optional: Textsuche in Titel oder Prompt (vom Job)
@@ -90,15 +93,26 @@ export async function GET(req: Request) {
     where: whereWithCursor,
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     include: {
-      job: {
-        select: {
-          title: true,
-          prompt: true,
-        },
-      },
-    },
+  job: { select: { title: true, prompt: true } },
+  story: { select: { id: true, title: true } },
+},
     take,
   });
+// ✅ Quick-fix: Kapitel innerhalb einer Story sauber sortieren
+rows.sort((a, b) => {
+  const as = a.storyId ?? "";
+  const bs = b.storyId ?? "";
+
+  // gleiche Story -> nach partIndex aufsteigend
+  if (as && bs && as === bs) {
+    const ai = typeof a.partIndex === "number" ? a.partIndex : 0;
+    const bi = typeof b.partIndex === "number" ? b.partIndex : 0;
+    return ai - bi;
+  }
+
+  // sonst wie vorher: neueste zuerst
+  return b.createdAt.getTime() - a.createdAt.getTime();
+});
 
   const last = rows[rows.length - 1];
   const nextCursor = last
@@ -107,20 +121,34 @@ export async function GET(req: Request) {
 
   // 🔹 Titel & Prompt ausschließlich vom Job ableiten
   const items = rows.map((t) => {
-    const jobTitle = (t.job?.title ?? "").trim();
-    const jobPrompt = (t.job?.prompt ?? "").trim();
+  const jobTitle = (t.job?.title ?? "").trim();   // ✅ fehlt bei dir
+  const jobPrompt = (t.job?.prompt ?? "").trim();
+const baseTitle = (t.title ?? "").trim() || jobTitle || "SoftVibe Track";
+const withChapter =
+  t.storyId && typeof t.partIndex === "number"
+    ? `${baseTitle} · ${t.partTitle?.trim() || `Chapter ${t.partIndex + 1}`}`
+    : baseTitle;
 
-    return {
-      id: t.id,
-      title: jobTitle || "SoftVibe Track",
-      prompt: jobPrompt || null,
-      url: t.url,
-      durationSeconds: t.durationSeconds,
-      createdAt: t.createdAt.toISOString(),
-      isPublic: t.isPublic,
-      shareSlug: t.shareSlug,
-    };
-  });
+  const chapterLabel =
+    t.storyId && typeof t.partIndex === "number"
+      ? `Chapter ${t.partIndex + 1}`
+      : null;
+
+  return {
+    id: t.id,
+    title: withChapter,
+    prompt: jobPrompt || null,
+    url: t.url,
+    durationSeconds: t.durationSeconds,
+    createdAt: t.createdAt.toISOString(),
+    isPublic: t.isPublic,
+    shareSlug: t.shareSlug,
+    storyId: t.storyId ?? null,
+    storyTitle: (t.story?.title ?? "").trim() || null,
+    partIndex: typeof t.partIndex === "number" ? t.partIndex : null,
+    partTitle: (t.partTitle ?? "").trim() || chapterLabel || null, // optional fallback
+  };
+});
 
   return jsonOk(
     {
@@ -147,6 +175,10 @@ export async function POST(req: Request) {
   if (!body || !body.jobId) {
     return jsonError("Missing jobId", 400);
   }
+const partIndex =
+  typeof body.partIndex === "number" && Number.isFinite(body.partIndex)
+    ? Math.max(0, Math.floor(body.partIndex))
+    : null;
 
   const job = await prisma.job.findFirst({
     where: { id: body.jobId, userId: session.user.id },
@@ -174,10 +206,13 @@ export async function POST(req: Request) {
     // optional Titel aktualisieren (nur wenn abweichend und body.title vorhanden ist)
     if (body.title && body.title.trim() !== "" && body.title.trim() !== existing.title) {
       const updated = await prisma.track.update({
-        where: { id: existing.id },
-        data: { title: proposedTitle },
-        select: { id: true, title: true, url: true, durationSeconds: true, createdAt: true },
-      });
+          where: { id: existing.id },
+          data: {
+            title: proposedTitle,
+            ...(partIndex !== null ? { partIndex } : {}),
+          },
+          select: { id: true, title: true, url: true, durationSeconds: true, createdAt: true },
+        });
       return jsonOk(
         { ...updated, createdAt: updated.createdAt.toISOString(), updated: true },
         200
@@ -198,6 +233,7 @@ export async function POST(req: Request) {
       title: proposedTitle,
       url: job.resultUrl,
       durationSeconds: job.durationSec ?? null,
+      ...(partIndex !== null ? { partIndex } : {}),
     },
     select: { id: true, title: true, url: true, durationSeconds: true, createdAt: true },
   });

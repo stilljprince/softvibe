@@ -9,6 +9,9 @@ type CustomPlayerProps = {
   title?: string;
   durationSeconds?: number | null;
   maxWidth?: number;
+
+  onEnded?: () => void;     // ✅ neu
+  autoPlay?: boolean;       // ✅ optional
 };
 
 // 🔹 globaler Audio-Ref pro Bundle – sorgt dafür, dass nur EIN Audio spielt
@@ -29,6 +32,8 @@ const CustomPlayer: React.FC<CustomPlayerProps> = ({
   title,
   durationSeconds,
   maxWidth,
+  onEnded,
+  autoPlay = false,
 }) => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -58,9 +63,10 @@ const CustomPlayer: React.FC<CustomPlayerProps> = ({
     };
 
     const handleEnded = () => {
-      setIsPlaying(false);
-      setProgress(0);
-    };
+  setIsPlaying(false);
+  setProgress(0);
+  onEnded?.(); // ✅ wichtig fürs Album
+};
 
     const handleTimeUpdate = () => {
       if (!audio.duration || Number.isNaN(audio.duration)) return;
@@ -101,9 +107,17 @@ const CustomPlayer: React.FC<CustomPlayerProps> = ({
       if (currentAudio === audio) {
         currentAudio = null;
       }
+      // Wenn src wechselt und autoPlay=true → direkt starten (Album next chapter)
+if (autoPlay) {
+  setTimeout(() => {
+    const a = audioRef.current;
+    if (!a) return;
+    a.play().catch(() => {});
+  }, 0);
+}
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [src]); // bei neuem src Listener neu binden
+  }, [src, autoPlay]); // bei neuem src Listener neu binden
 
   const handleTogglePlay = async () => {
     if (isDisabled) return;

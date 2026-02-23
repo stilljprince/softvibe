@@ -25,6 +25,11 @@ export const s3 = new S3Client({
   forcePathStyle: !!process.env.S3_FORCE_PATH_STYLE,
 });
 
+export function s3KeyForJobPart(jobId: string, partIndex: number) {
+  const n = String(partIndex + 1).padStart(3, "0");
+  return `jobs/${jobId}/part-${n}.mp3`;
+}
+
 /** Ist S3/R2 korrekt konfiguriert? */
 export function hasS3Env(): boolean {
   return Boolean(

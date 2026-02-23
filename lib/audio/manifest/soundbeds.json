@@ -1,0 +1,14 @@
+[
+ {
+    "id": "rain_soft_diffuse",
+    "label": "Soft rain (diffuse)",
+    "file": "/audio/soundbeds/rain_soft_diffuse.mp3",
+    "loop": true,
+    "tags": ["rain", "soft", "diffuse", "night", "sleep", "asmr"],
+    "intensity": "soft",
+    "lufs": -26,
+    "license": "Pixabay",
+    "source": "https://pixabay.com/de/sound-effects/cozy-soft-rain-under-umbrella-116183/"
+  }
+]
+

@@ -501,3 +501,18 @@ html, body {
 .pastel .sv-mobile-menu {
   background: #fdf7ff !important;
 }
+/* Hide scrollbar but keep scrolling */
+html, body {
+  scrollbar-width: none;      /* Firefox */
+}
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+  width: 0px;                 /* Safari/Chrome */
+  height: 0px;
+}
+
+/* Hide cursor everywhere when UI is hidden */
+html.sv-hide-cursor,
+html.sv-hide-cursor * {
+  cursor: none !important;
+}

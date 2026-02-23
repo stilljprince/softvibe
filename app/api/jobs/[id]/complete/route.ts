@@ -1,3 +1,4 @@
+// app/api/jobs/[id]/complete/route.ts
 import { getServerSession } from "next-auth";
 import { NextResponse } from "next/server";
 import { authOptions } from "@/lib/auth/config";
@@ -10,31 +11,38 @@ import { uploadMP3ToS3, s3KeyForJob, hasS3Env } from "@/lib/s3";
 import { addDebugLog } from "@/lib/debug-log";
 import { headers as nextHeaders } from "next/headers";
 import { jsonOk, jsonError } from "@/lib/api";
+import { makeTitleFromPrompt } from "@/lib/title";
+import { buildScriptV2 } from "@/lib/script-builder";
+import { buildScriptOpenAI } from "@/lib/script-builder-openai";
+import { applyV3Prosody } from "@/lib/tts/prosody-v3";
+import { s3KeyForJobPart } from "@/lib/s3";
+console.log("[prosody] typeof applyV3Prosody =", typeof applyV3Prosody);
+
+// 🔹 ElevenLabs-Adapter & Voice-Resolver
+import { elevenlabs, resolveVoiceId } from "@/lib/tts/elevenlabs";
+
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
+
+
+
 
 type CompleteBody = {
   resultUrl?: string;
   durationSec?: number;
   error?: string;
 };
-function makeTitleFromPrompt(
-  prompt: string | null | undefined,
-  fallback = "SoftVibe Track"
-): string {
-  const raw = (prompt ?? "").trim();
-  if (!raw) return fallback;
 
-  // hier kannst du die 80 Zeichen anpassen, wenn du willst
-  return raw.length > 80 ? raw.slice(0, 77) + "…" : raw;
-}
+
 
 function settingsForPreset(preset?: string) {
   switch (preset) {
     case "classic-asmr":
       return {
-        stability: 0.25,
-        similarity_boost: 0.9,
-        style: 0.75,
+        stability: 0.18,
+        similarity_boost: 0.55,
+        style: 0.05,
         use_speaker_boost: false,
       };
     case "sleep-story":
@@ -59,6 +67,81 @@ function settingsForPreset(preset?: string) {
         use_speaker_boost: false,
       };
   }
+}
+
+/**
+ * Entfernt "Meta/Anweisungen" aus dem Prompt, damit ElevenLabs diese nicht mit vorliest.
+ * (ElevenLabs liest alles 1:1, deshalb muss das vor dem TTS-Call bereinigt werden.)
+ */
+function stripTtsDirectives(input: string): string {
+  let out = input;
+
+  // fenced code blocks
+  out = out.replace(/```[\s\S]*?```/g, "");
+
+  // chat-role style lines
+  out = out.replace(/^\s*(system|assistant|developer)\s*:\s*.*$/gim, "");
+
+  // directive lines, e.g. [voice]: ..., voice: ..., instructions: ...
+  out = out.replace(
+    /^\s*\[(voice|style|tone|preset|instructions?)\]\s*:.*$/gim,
+    ""
+  );
+  out = out.replace(
+    /^\s*(voice|style|tone|preset|instructions?)\s*:\s*.*$/gim,
+    ""
+  );
+
+  // separator lines
+  out = out.replace(/^\s*-{3,}\s*$/gm, "");
+
+  // normalize spacing
+  out = out.replace(/\n{3,}/g, "\n\n");
+
+  out = out.trim();
+  return out.length > 0 ? out : input.trim();
+}
+
+function splitToChunks(text: string, maxLen: number): string[] {
+  const clean = (text ?? "").trim();
+  if (!clean) return [];
+
+  const parts: string[] = [];
+  let remaining = clean;
+
+  while (remaining.length > maxLen) {
+    // bevorzugt Absatzschnitt
+    let cut = remaining.lastIndexOf("\n\n", maxLen);
+
+    // sonst Satzgrenze
+    if (cut < 0) {
+      cut = Math.max(
+        remaining.lastIndexOf(". ", maxLen),
+        remaining.lastIndexOf("! ", maxLen),
+        remaining.lastIndexOf("? ", maxLen)
+      );
+    }
+
+    // fallback hard cut (aber nicht zu früh)
+    if (cut < 0 || cut < Math.floor(maxLen * 0.6)) cut = maxLen;
+
+    const chunk = remaining.slice(0, cut).trim();
+    if (chunk) parts.push(chunk);
+
+    remaining = remaining.slice(cut).trim();
+  }
+
+  if (remaining) parts.push(remaining);
+  return parts;
+}
+
+// Damit Sleep-Story Parts NICHT das gleiche S3-Key überschreiben:
+
+
+// Für local speichern analog:
+function localAbsForJobPart(baseDirAbs: string, jobId: string, partIndex: number) {
+  const n = String(partIndex + 1).padStart(3, "0");
+  return `${baseDirAbs}/${jobId}/part-${n}.mp3`;
 }
 
 export async function POST(
@@ -113,11 +196,14 @@ export async function POST(
       id: true,
       status: true,
       resultUrl: true,
+      title: true,
       prompt: true,
       preset: true,
       durationSec: true,
       createdAt: true,
-      title: true, // 👈 NEU
+      language: true,
+      voiceStyle: true,
+      voiceGender: true,
     },
   });
   if (!job) {
@@ -132,6 +218,7 @@ export async function POST(
     });
     return jsonError("NOT_FOUND", 404);
   }
+console.log("COMPLETE language:", job?.id, job?.language);
 
   let body: CompleteBody = {};
   try {
@@ -156,7 +243,7 @@ export async function POST(
         prompt: true,
         preset: true,
         createdAt: true,
-        title: true, // 👈 NEU
+        title: true,
       },
     });
     addDebugLog({
@@ -175,63 +262,233 @@ export async function POST(
   let detectedDuration: number | undefined;
 
   const localRel = `/generated/${id}.mp3`;
-  const localAbs = path.join(process.cwd(), "public", "generated", `${id}.mp3`);
+  const localAbs = path.join(
+    process.cwd(),
+    "public",
+    "generated",
+    `${id}.mp3`
+  );
 
-  if (!nextResultUrl) {
-    const apiKey = process.env.ELEVENLABS_API_KEY;
-    const voiceId =
-      process.env.ELEVENLABS_VOICE_ID || "21m00Tcm4TlvDq8ikWAM";
-    const modelId =
-      process.env.ELEVENLABS_MODEL_ID || "eleven_multilingual_v2";
+if (!nextResultUrl) {
+  const preset = job.preset ?? undefined;
+  const voiceSettings = settingsForPreset(preset);
 
-    if (!apiKey) {
-      await prisma.job.update({
-        where: { id },
-        data: {
-          status: $Enums.JobStatus.FAILED,
-          error: "ELEVENLABS_API_KEY missing",
-        },
-      });
-      addDebugLog({
-        ts: new Date().toISOString(),
-        level: "error",
-        route: "/api/jobs/[id]/complete POST",
-        userId: session.user.id as string,
-        message: "Missing ELEVENLABS_API_KEY",
-        data: { id },
-        reqId,
-      });
-      return jsonError("ELEVENLABS_API_KEY missing", 500);
-    }
+  const safePreset =
+    preset === "classic-asmr" || preset === "sleep-story" || preset === "meditation"
+      ? preset
+      : "classic-asmr";
+const isSleepStory = safePreset === "sleep-story";
 
-    const text = job.prompt?.trim() || "SoftVibe Demo Clip";
-    const voiceSettings = settingsForPreset(job.preset ?? undefined);
+// Sleep story: immer soft spoken (kein whisper), egal was UI sendet
+const voiceStyle =
+  isSleepStory ? "soft" : (job.voiceStyle === "whisper" ? "whisper" : "soft");
 
-    try {
-      const resp = await fetch(
-        `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
-        {
-          method: "POST",
-          headers: {
-            "xi-api-key": apiKey,
-            "Content-Type": "application/json",
-            Accept: "audio/mpeg",
-          },
-          body: JSON.stringify({
-            text,
-            model_id: modelId,
-            voice_settings: voiceSettings,
-          }),
+// Gender bleibt wie gewählt (fallback female)
+const voiceGender =
+  job.voiceGender === "male" ? "male" : "female";
+
+console.log("[SLEEP-STORY RULES]", { safePreset, isSleepStory, voiceStyle, voiceGender });  
+      
+  const language = job.language === "en" ? "en" : "de";
+
+  console.log("[PRESET INPUT]", {
+    jobId: job.id,
+    preset: job.preset,
+    language: job.language,
+    voiceStyle: job.voiceStyle,
+    voiceGender: job.voiceGender,
+  });
+
+  // Script bauen (OpenAI)
+  const out = await buildScriptOpenAI({
+    preset: safePreset,
+    userPrompt: (job.prompt ?? "").trim(),
+    targetDurationSec: typeof job.durationSec === "number" ? job.durationSec : undefined,
+    language,
+  });
+
+  // ✅ Hier entscheidest du: Nutzt du out.text oder einen Test-String?
+  // Für echten Betrieb:
+ const finalText = (out?.finalText ?? "").trim();
+
+console.log("[SLEEP CHECK] preset=", safePreset, "hasYou=", /\byou\b/i.test(finalText));
+console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
+
+  if (!finalText) {
+    const msg = "Script generation returned empty text";
+    await prisma.job.update({
+      where: { id },
+      data: { status: $Enums.JobStatus.FAILED, error: msg },
+    });
+    return jsonError(msg, 500);
+  }
+
+  // ✅ TTS-Basistext
+  const baseText = stripTtsDirectives(finalText);
+
+  const isV3 = (process.env.ELEVENLABS_MODEL_ID ?? "").includes("eleven_v3");
+  const speed = isV3 ? 1.08 : 1.0;
+
+
+
+  console.log("[VOICE RESOLUTION INPUT]", { preset: safePreset, voiceStyle, voiceGender });
+
+  const voiceId = resolveVoiceId(safePreset, voiceStyle, voiceGender);
+
+  console.log("[VOICE RESOLUTION OUTPUT]", { voiceId });
+  console.log("[voice] using voiceId =", voiceId);
+
+  if (voiceId === "soft" || voiceId === "whisper") {
+    throw new Error(`[BUG] voiceId is variant (${voiceId}) not an ElevenLabs voice id`);
+  }
+
+  const t0 = Date.now();
+
+  try {
+    // =========================================================
+    // ✅ SLEEP-STORY: MULTI-CHUNK -> mehrere Tracks (Album/Chapters)
+    // =========================================================
+    if (safePreset === "sleep-story") {
+      const MAX_CHARS = 2800; // unter 3000 bleiben (Puffer für Prosody/Whitespace)
+      const chunks = splitToChunks(baseText, MAX_CHARS);
+
+     const story = await prisma.story.create({
+  data: {
+    userId: session.user.id as string,
+    title: (job.title?.trim() || "Sleep Story"),
+    preset: "sleep-story",
+    language: job.language ?? null,
+  },
+  select: { id: true },
+});
+const storyId = story.id;
+
+      console.log("[sleep-story] chunks =", chunks.length);
+
+      // optional: alte Kapiteltracks zu diesem job löschen (falls du re-runs machst)
+      // await prisma.track.deleteMany({ where: { jobId: id, storyId } });
+
+      for (let partIndex = 0; partIndex < chunks.length; partIndex++) {
+        const partBase = chunks[partIndex];
+
+        const ttsTextPart = isV3
+          ? applyV3Prosody({
+              preset: safePreset,
+              text: partBase,
+              seed: `${job.id}:${partIndex}`,
+            })
+          : partBase;
+
+        const { audio } = await elevenlabs.speak({
+          text: ttsTextPart,
+          voiceId,
+          modelId: process.env.ELEVENLABS_MODEL_ID ?? "eleven_v3",
+          stability: 0.1,
+          similarityBoost: 0.62,
+          style: 0.25,
+          useSpeakerBoost: true,
+          speed,
+          preset: safePreset,
+        });
+
+        const buf = Buffer.from(audio);
+
+        // Dauer bestimmen (optional pro Part; erstmal skip/ignore)
+        // -> du kannst das später pro Part machen, ist aber nicht kritisch.
+
+        // MP3 speichern (S3 oder lokal) pro Part mit eigenem Key
+        try {
+          if (hasS3Env()) {
+            await uploadMP3ToS3(s3KeyForJobPart(id, partIndex), buf);
+          } else {
+            // ⚠️ hier brauchst du deinen base folder / local abs root
+            // Beispiel: const partsAbs = path.join(process.cwd(), "data", "jobs");
+            const partsAbsRoot = path.dirname(localAbs); // <- wenn localAbs z.B. .../<id>.mp3 ist
+            const partAbs = localAbsForJobPart(partsAbsRoot, id, partIndex);
+            await fs.mkdir(path.dirname(partAbs), { recursive: true });
+            await fs.writeFile(partAbs, buf);
+          }
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : "Store audio failed";
+          await prisma.job.update({
+            where: { id },
+            data: { status: $Enums.JobStatus.FAILED, error: msg },
+          });
+          return jsonError(msg, 500);
         }
-      );
 
-      if (!resp.ok) {
-        const errTxt = await resp.text().catch(() => String(resp.status));
-        throw new Error(`ElevenLabs: ${resp.status} ${errTxt}`);
+        // URL fürs Kapitel
+        const partUrl = hasS3Env()
+          ? `/api/jobs/${id}/audio?part=${partIndex + 1}`
+          : `/api/jobs/${id}/audio?part=${partIndex + 1}`;
+const baseTitle =
+  (job.title && job.title.trim() !== "" ? job.title.trim() : "Sleep Story");
+
+          const partTitle = `Chapter ${partIndex + 1}/${chunks.length}`;
+
+          console.log("[STORY TRACK]", {
+  jobId: job.id,
+  storyId,
+  partIndex,
+  partTitle,
+  textLength: partBase.length,
+  url: partUrl,
+});
+        // Kapitel-Track anlegen
+        await prisma.track.create({
+          data: {
+            userId: session.user.id as string,
+            jobId: id,
+            title: `${baseTitle} — ${partTitle}`,   // ✅ eindeutig
+            url: partUrl,
+            durationSeconds: null,
+            storyId,
+            partIndex,
+            partTitle,
+          },
+        });
       }
 
-      const buf = Buffer.from(await resp.arrayBuffer());
+      console.log("[tts] sleep-story total speak ms =", Date.now() - t0);
+      
+      // Job DONE – resultUrl kannst du leer lassen oder auf Part 1 setzen.
+      nextResultUrl = `/api/jobs/${id}/audio?part=1`;
+console.log("[sleep-story] done, firstUrl =", nextResultUrl);
+      // detectedDuration optional: Summe später
+      detectedDuration = undefined as unknown as number;
 
+      // Sleep-story ist damit fertig -> skip single-file path
+    } else {
+      // =========================================================
+      // ✅ Single MP3 path (classic-asmr, meditation)
+      // =========================================================
+     const ttsText = isV3
+  ? applyV3Prosody({
+      preset: safePreset,
+      text: baseText,     // ✅ korrekt für deine Signatur
+      seed: job.id,
+    })
+  : baseText;
+
+      console.log("[tts] v3 text preview:\n", ttsText.slice(0, 260));
+
+      const { audio } = await elevenlabs.speak({
+        text: ttsText,
+        voiceId,
+        modelId: process.env.ELEVENLABS_MODEL_ID ?? "eleven_v3",
+        stability: 0.1,
+        similarityBoost: 0.62,
+        style: 0.25,
+        useSpeakerBoost: true,
+        speed,
+        preset: safePreset,
+      });
+
+      console.log("[tts] speak ms =", Date.now() - t0);
+
+      const buf = Buffer.from(audio);
+
+      // Dauer bestimmen (music-metadata)
       try {
         const { parseBuffer } = await import("music-metadata");
         const meta = await parseBuffer(buf, "audio/mpeg");
@@ -242,6 +499,7 @@ export async function POST(
         /* ignore */
       }
 
+      // MP3 speichern (S3 oder lokal)
       try {
         if (hasS3Env()) {
           await uploadMP3ToS3(s3KeyForJob(id), buf);
@@ -257,35 +515,18 @@ export async function POST(
           where: { id },
           data: { status: $Enums.JobStatus.FAILED, error: msg },
         });
-        addDebugLog({
-          ts: new Date().toISOString(),
-          level: "error",
-          route: "/api/jobs/[id]/complete POST",
-          userId: session.user.id as string,
-          message: "Store audio failed",
-          data: { id, error: msg },
-          reqId,
-        });
         return jsonError(msg, 500);
       }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "TTS failed";
-      await prisma.job.update({
-        where: { id },
-        data: { status: $Enums.JobStatus.FAILED, error: msg },
-      });
-      addDebugLog({
-        ts: new Date().toISOString(),
-        level: "error",
-        route: "/api/jobs/[id]/complete POST",
-        userId: session.user.id as string,
-        message: "TTS failed",
-        data: { id, error: msg },
-        reqId,
-      });
-      return jsonError(msg, 500);
     }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "TTS failed";
+    await prisma.job.update({
+      where: { id },
+      data: { status: $Enums.JobStatus.FAILED, error: msg },
+    });
+    return jsonError(msg, 500);
   }
+}
 
   const nextDuration =
     typeof body.durationSec === "number" && !Number.isNaN(body.durationSec)
@@ -307,10 +548,10 @@ export async function POST(
       status: true,
       resultUrl: true,
       durationSec: true,
+      title: true,
       prompt: true,
       preset: true,
       createdAt: true,
-      title: true, // 👈 NEU
     },
   });
 
@@ -321,46 +562,52 @@ export async function POST(
     });
   }
 
-  /* 👇 NEU: falls noch kein Track zu diesem Audio existiert, einen anlegen */
+  /* 👇 falls noch kein Track zu diesem Audio existiert, einen anlegen */
   try {
-  const url = updated.resultUrl ?? null;
-  if (url) {
-    const existing = await prisma.track.findFirst({
-      where: { userId: session.user.id as string, url },
-      select: { id: true },
-    });
-
-    const safeTitle =
-      updated.title && updated.title.trim() !== ""
-        ? updated.title.trim().slice(0, 80)
-        : makeTitleFromPrompt(updated.prompt, "SoftVibe Track");
-
-    if (!existing) {
-      await prisma.track.create({
-        data: {
-          userId: session.user.id as string,
-          jobId: updated.id,
-          title: safeTitle,
-          url,
-          durationSeconds:
-            typeof updated.durationSec === "number"
-              ? updated.durationSec
-              : typeof nextDuration === "number"
-              ? nextDuration
-              : null,
-        },
+    const url = updated.resultUrl ?? null;
+    if (url) {
+      const existing = await prisma.track.findFirst({
+        where: { userId: session.user.id as string, url },
+        select: { id: true },
       });
-    } else if (typeof nextDuration === "number") {
-      await prisma.track.update({
-        where: { id: existing.id },
-        data: { durationSeconds: nextDuration },
-      });
+
+      const safeTitle =
+        updated.title && updated.title.trim() !== ""
+          ? updated.title.trim().slice(0, 80)
+          : makeTitleFromPrompt(updated.prompt, "SoftVibe Track");
+
+      if (!existing) {
+        await prisma.track.create({
+          data: {
+            userId: session.user.id as string,
+            jobId: updated.id,
+            title: safeTitle,
+            url,
+            durationSeconds:
+              typeof updated.durationSec === "number"
+                ? updated.durationSec
+                : typeof nextDuration === "number"
+                ? nextDuration
+                : null,
+          },
+        });
+      } else if (typeof nextDuration === "number") {
+        await prisma.track.update({
+          where: { id: existing.id },
+          data: { durationSeconds: nextDuration },
+        });
+      }
     }
-  }
   } catch {
     // Track-Erstellung darf den Job-Abschluss nicht scheitern lassen
   }
-  /* 👆 NEU Ende */
+console.log("[SLEEP-STORY CHECK]", {
+  jobId: job.id,
+  preset: job.preset,
+  voiceStyle: job.voiceStyle,
+  voiceGender: job.voiceGender,
+  modelId: process.env.ELEVENLABS_MODEL_ID,
+});
 
   addDebugLog({
     ts: new Date().toISOString(),

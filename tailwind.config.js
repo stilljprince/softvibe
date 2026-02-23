@@ -1,5 +1,5 @@
 // tailwind.config.js
-export default {
+const config = {
   darkMode: "class",
   content: [
     "./app/**/*.{js,ts,jsx,tsx}",
@@ -8,18 +8,16 @@ export default {
   theme: {
     extend: {
       colors: {
-        testpink: "#ff00ff", // Testfarbe (knall-pink)
+        testpink: "#ff00ff",
       },
     },
   },
   plugins: [
     function ({ addVariant }) {
-      addVariant("pastel", [
-        "&.pastel",       // direkt am Element
-        ":is(.pastel &)", // falls <html class="pastel"> gesetzt ist
-      ]);
+      addVariant("pastel", ["&.pastel", ":is(.pastel &)"]);
     },
   ],
 };
 
+export default config;
 

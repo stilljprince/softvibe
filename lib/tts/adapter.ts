@@ -3,6 +3,7 @@ export type TTSSpeakInput = {
   text: string;
   voiceId?: string;
   modelId?: string;
+  preset?: string | null; // ✅ NEU
   stability?: number;         // 0..1
   similarityBoost?: number;   // 0..1
   style?: number;             // 0..100

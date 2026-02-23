@@ -26,6 +26,9 @@ type Job = {
   durationSec?: number | null;
   createdAt?: string;
   title?: string | null; // 👈 dazu
+  language?: "de" | "en" | null; // ✅ neu
+  storyId?: string | null;
+  chapterCount?: number | null;
 };
 
 type AccountSummary = {
@@ -59,10 +62,13 @@ export default function GenerateClient() {
   const [loadingList, setLoadingList] = useState(false);
   const [accountSummary, setAccountSummary] = useState<AccountSummary | null>(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
+  const [voiceStyle, setVoiceStyle] = useState<"soft" | "whisper">("soft");
+  const [voiceGender, setVoiceGender] = useState<"female" | "male">("female");
 
   // Credits aus eigener API; verwenden wir bevorzugt im Header
   const [credits, setCredits] = useState<number | null>(null);
 
+  const [language, setLanguage] = useState<"de" | "en">("de");
   // ---------- Toast ----------
   const [toast, setToast] = useState<{ msg: string; kind?: "ok" | "err" | "info" } | null>(null);
   const [retryLeft, setRetryLeft] = useState<number | null>(null);
@@ -237,11 +243,17 @@ export default function GenerateClient() {
   title: string;
   preset: string;
   prompt: string;
+  language: "de" | "en";
   durationSec?: number;
+  voiceStyle: "soft" | "whisper";
+  voiceGender: "female" | "male";
 } = {
-  title: title.trim(), // oder wie du das State-Field genannt hast
+  title: title.trim().length > 0 ? title.trim() : "", // oder wie du das State-Field genannt hast
   preset,
   prompt,
+  language,
+  voiceStyle,
+  voiceGender,
 };
 
     if (typeof durationSec === "number" && !Number.isNaN(durationSec)) {
@@ -680,6 +692,53 @@ useEffect(() => {
               </select>
             </div>
 
+
+<div>
+  <label className="sv-label">Voice Style</label>
+  <select
+    value={voiceStyle}
+onChange={(e) => setVoiceStyle(e.target.value as "soft" | "whisper")}
+    className="sv-input"
+  >
+    <option value="soft">Soft spoken (weniger Whisper)</option>
+    <option value="whisper">Full whisper (nah am Mikro)</option>
+  </select>
+</div>
+<div>
+  <label className="sv-label">Voice Gender</label>
+  <select
+    value={voiceGender}
+    onChange={(e) => setVoiceGender(e.target.value as "female" | "male")}
+    className="sv-input"
+  >
+    <option value="female">Female</option>
+    <option value="male">Male</option>
+  </select>
+</div>
+
+ <div>
+    <label className="sv-label">Sprache</label>
+    <div style={{ display: "flex", gap: 8 }}>
+      <button
+        type="button"
+        className={`sv-btn ${language === "de" ? "sv-btn--primary" : ""}`}
+        onClick={() => setLanguage("de")}
+      >
+        Deutsch
+      </button>
+      <button
+        type="button"
+        className={`sv-btn ${language === "en" ? "sv-btn--primary" : ""}`}
+        onClick={() => setLanguage("en")}
+      >
+        English
+      </button>
+    </div>
+    <p style={{ fontSize: "0.75rem", opacity: 0.6, marginTop: 4 }}>
+      Test: gleiche Voice, aber anderes Script in DE/EN.
+    </p>
+  </div>
+
             {/* 🔹 NEU: Titel */}
             <div>
               <label className="sv-label">
@@ -906,12 +965,17 @@ useEffect(() => {
                       }}
                     >
                       {j.preset || "—"}
+                      {j.language ? ` · ${j.language.toUpperCase()}` : ""}
                       {j.durationSec ? ` · ${j.durationSec}s` : ""}
                       {j.createdAt
                         ? ` · ${new Date(j.createdAt).toLocaleString(
                             "de-DE"
                           )}`
                         : ""}
+                      {typeof j.chapterCount === "number" && j.chapterCount > 1
+  ? ` · ${j.chapterCount} Kapitel`
+  : ""}  
+                        
                     </div>
                   </div>
                   <div
@@ -924,13 +988,36 @@ useEffect(() => {
                   >
                     <StatusPill status={j.status} />
                     {j.status === "DONE" && j.resultUrl ? (
-                      <CustomPlayer
-                        src={j.resultUrl}
-                        preload="metadata"
-                        showTitle={false}
-                        maxWidth={190}
-                      />
-                    ) : null}
+  typeof j.chapterCount === "number" && j.chapterCount > 1 ? (
+    // Story: kein Mini-Player, stattdessen Album-CTA
+    j.storyId ? (
+      <a
+        href={`/library?story=${encodeURIComponent(j.storyId)}`}
+        className="sv-btn"
+        style={{ padding: "4px 10px", textDecoration: "none", display: "inline-flex", alignItems: "center" }}
+      >
+        ▶ Album abspielen
+      </a>
+    ) : null
+  ) : (
+    // Normal: Mini-Player
+    <CustomPlayer
+      src={j.resultUrl}
+      preload="metadata"
+      showTitle={false}
+      maxWidth={190}
+    />
+  )
+) : null}
+                    {typeof j.chapterCount === "number" && j.chapterCount > 1 && j.storyId ? (
+  <a
+    href={`/library?story=${encodeURIComponent(j.storyId)}`}
+    className="sv-btn"
+    style={{ padding: "4px 10px", textDecoration: "none", display: "inline-flex", alignItems: "center" }}
+  >
+    Album öffnen
+  </a>
+) : null}
                     <button
                       type="button"
                       onClick={() => void deleteJob(j.id)}
