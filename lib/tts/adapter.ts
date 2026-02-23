@@ -8,6 +8,7 @@ export type TTSSpeakInput = {
   similarityBoost?: number;   // 0..1
   style?: number;             // 0..100
   useSpeakerBoost?: boolean;
+  
 };
 
 export type TTSSpeakResult = {

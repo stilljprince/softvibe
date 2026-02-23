@@ -327,7 +327,7 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
   const baseText = stripTtsDirectives(finalText);
 
   const isV3 = (process.env.ELEVENLABS_MODEL_ID ?? "").includes("eleven_v3");
-  const speed = isV3 ? 1.08 : 1.0;
+  
 
 
 
@@ -387,7 +387,6 @@ const storyId = story.id;
           similarityBoost: 0.62,
           style: 0.25,
           useSpeakerBoost: true,
-          speed,
           preset: safePreset,
         });
 
@@ -480,7 +479,7 @@ console.log("[sleep-story] done, firstUrl =", nextResultUrl);
         similarityBoost: 0.62,
         style: 0.25,
         useSpeakerBoost: true,
-        speed,
+        
         preset: safePreset,
       });
 
