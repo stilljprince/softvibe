@@ -146,7 +146,7 @@ voice_settings: {
   similarity_boost: input.similarityBoost ?? 0.8,
   style: input.style ?? 0,
   use_speaker_boost: input.useSpeakerBoost ?? true,
-  speed: input.speed ?? 1.0,
+  
 },
     };
 console.log("[tts] modelId=", modelId, "voiceId=", voiceId, "len=", finalText.length);
