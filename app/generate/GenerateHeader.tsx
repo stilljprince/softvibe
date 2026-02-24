@@ -107,7 +107,7 @@ export default function GenerateHeader({ creditsLabel }: Props) {
         <Link href="/library" style={navLinkStyle}>
           Bibliothek
         </Link>
-        <Link href="/pricing" style={navLinkStyle}>
+        <Link href="billing" style={navLinkStyle}>
           Credits
         </Link>
         <Link href="/account" style={navLinkStyle}>

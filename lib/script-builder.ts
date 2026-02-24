@@ -6,6 +6,7 @@ export type ScriptInput = {
   preset: ScriptPreset;
   userPrompt: string;
   targetDurationSec?: number; // v3 nutzt das aktiv
+  language?: "de" | "en";
 };
 
 export type ScriptOutput = {

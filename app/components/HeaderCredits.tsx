@@ -47,7 +47,7 @@ export default function HeaderCredits() {
         Credits:&nbsp;{data.isAdmin ? "∞" : data.credits}
       </span>
       {!data.isAdmin && (
-        <a href="/pricing" style={upgradeStyle}>
+        <a href="/billing" style={upgradeStyle}>
           Aufladen
         </a>
       )}

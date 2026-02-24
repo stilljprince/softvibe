@@ -1,11 +1,12 @@
-import { NextResponse } from "next/server";
+// app/api/contact/route.ts
 import nodemailer from "nodemailer";
+import { jsonOk, jsonError } from "@/lib/api";
+export const runtime = "nodejs";
 
 /** Utils */
 const clean = (v: unknown) => String(v ?? "").replace(/[\r\n]+/g, " ").trim();
 const nowYear = () => new Date().getFullYear();
 
-/** Basis-URL für absolute Links (Bilder etc.) */
 function getBaseUrl() {
   if (process.env.PUBLIC_BASE_URL) return process.env.PUBLIC_BASE_URL;
   if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
@@ -16,14 +17,14 @@ function getBaseUrl() {
 /** E-Mail-Template */
 function renderEmail(opts: {
   brand?: string;
-  logoUrl?: string;               // absolute PNG-URL
+  logoUrl?: string;
   headline: string;
   subline?: string;
   introLong?: string[];
   rows?: Array<{ label: string; value: string }>;
   outro?: string;
   footerNote?: string;
-  showBrandHeading?: boolean;     // << neu: steuert Text „SoftVibe“ unter dem Logo
+  showBrandHeading?: boolean;
 }) {
   const {
     brand = "SoftVibe",
@@ -34,7 +35,7 @@ function renderEmail(opts: {
     rows = [],
     outro,
     footerNote,
-    showBrandHeading = false,     // << per Default AUS, wie gewünscht
+    showBrandHeading = false,
   } = opts;
 
   const rowsHtml = rows
@@ -73,30 +74,15 @@ function renderEmail(opts: {
     <tr>
       <td align="center">
         <table role="presentation" width="640" cellpadding="0" cellspacing="0" style="width:640px;max-width:92%;background:#ffffff;border-radius:20px;box-shadow:0 10px 26px rgba(0,0,0,0.07);overflow:hidden;">
-          <!-- Header mit Logo -->
           <tr>
             <td style="padding:28px 28px 8px 28px;background:linear-gradient(180deg,#ffe9f3 0%, #fff 70%);">
               <div style="text-align:center;">
-                ${
-                  logoUrl
-                    ? `<img src="${logoUrl}" alt="${brand} Logo" width="140" style="display:inline-block;vertical-align:middle;margin-bottom:10px;height:auto;" />`
-                    : ""
-                }
+                ${logoUrl ? `<img src="${logoUrl}" alt="${brand} Logo" width="140" style="display:inline-block;vertical-align:middle;margin-bottom:10px;height:auto;" />` : ""}
               </div>
-              ${
-                showBrandHeading
-                  ? `<h1 style="margin:6px 0 0 0;font-size:22px;line-height:30px;text-align:center;font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;color:#2e2a2a;">${brand}</h1>`
-                  : ""
-              }
-              ${
-                subline
-                  ? `<p style="margin:4px 0 0 0;text-align:center;color:#6f6464;font-size:13px;font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;">${subline}</p>`
-                  : ""
-              }
+              ${showBrandHeading ? `<h1 style="margin:6px 0 0 0;font-size:22px;line-height:30px;text-align:center;font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;color:#2e2a2a;">${brand}</h1>` : ""}
+              ${subline ? `<p style="margin:4px 0 0 0;text-align:center;color:#6f6464;font-size:13px;font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;">${subline}</p>` : ""}
             </td>
           </tr>
-
-          <!-- Headline -->
           <tr>
             <td style="padding:18px 28px 0 28px;background:#fff;">
               <h2 style="margin:0 0 8px 0;font-size:20px;line-height:28px;color:#2f2a2a;font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;">
@@ -104,43 +90,27 @@ function renderEmail(opts: {
               </h2>
             </td>
           </tr>
-
-          <!-- Intro -->
           <tr>
             <td style="padding:8px 28px 6px 28px;background:#fff;">
               ${introHtml}
             </td>
           </tr>
-
-          ${
-            rows.length
-              ? `
-          <!-- Daten-Tabelle -->
+          ${rows.length ? `
           <tr>
             <td style="padding:4px 28px 10px 28px;background:#fff;">
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
                 ${rowsHtml}
               </table>
             </td>
-          </tr>`
-              : ""
-          }
-
-          ${
-            outro
-              ? `
-          <!-- Outro -->
+          </tr>` : ""}
+          ${outro ? `
           <tr>
             <td style="padding:6px 28px 18px 28px;background:#fff;">
               <p style="margin:0;font-size:14px;line-height:22px;color:#4a4242;font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;">
                 ${outro}
               </p>
             </td>
-          </tr>`
-              : ""
-          }
-
-          <!-- Fuß -->
+          </tr>` : ""}
           <tr>
             <td style="padding:16px 28px 24px 28px;background:#fff;">
               <hr style="border:none;border-top:1px solid #eee;margin:0 0 10px 0;">
@@ -149,7 +119,6 @@ function renderEmail(opts: {
               </p>
             </td>
           </tr>
-
         </table>
       </td>
     </tr>
@@ -160,10 +129,9 @@ function renderEmail(opts: {
 
 export async function POST(req: Request) {
   try {
-    // Body sicher parsen (ohne any)
     const json: unknown = await req.json().catch(() => ({}));
     if (json === null || typeof json !== "object") {
-      return NextResponse.json({ success: false, error: "Ungültiger Request-Body." }, { status: 400 });
+      return jsonError("Ungültiger Request-Body.", 400);
     }
     const obj = json as Record<string, unknown>;
     const name = clean(typeof obj.name === "string" ? obj.name : "");
@@ -171,18 +139,15 @@ export async function POST(req: Request) {
     const message = typeof obj.message === "string" ? obj.message.trim() : "";
 
     if (!name || !email || !message) {
-      return NextResponse.json({ success: false, error: "Bitte alle Felder korrekt ausfüllen." }, { status: 400 });
+      return jsonError("Bitte alle Felder korrekt ausfüllen.", 400);
     }
 
     const BRAND = "SoftVibe";
     const baseUrl = getBaseUrl();
-
-    // bevorzugt öffentlich erreichbare URL aus ENV, sonst Fallback + Cache-Buster
     const logoUrl =
       (process.env.EMAIL_LOGO_URL && process.env.EMAIL_LOGO_URL.trim()) ||
       `${baseUrl}/softvibe-logo-email.png?v=${Date.now()}`;
 
-    // SMTP Transport
     const transporter = nodemailer.createTransport({
       host: process.env.EMAIL_SERVER || "smtp.gmail.com",
       port: Number(process.env.EMAIL_PORT || 587),
@@ -196,22 +161,20 @@ export async function POST(req: Request) {
     const FROM_NAME = process.env.EMAIL_FROM_NAME || BRAND;
     const FROM_ADDR = process.env.EMAIL_FROM || process.env.EMAIL_USER;
 
-    /* ========== 1) ADMIN-Mail an dich ========== */
+    // Admin
     const adminHtml = renderEmail({
       brand: BRAND,
       logoUrl,
       headline: "Neue Kontaktanfrage",
       subline: "Über das SoftVibe Kontaktformular",
-      introLong: [
-        "Du hast soeben eine neue Nachricht erhalten. Unten findest du alle Angaben des Absenders in strukturierter Form.",
-      ],
+      introLong: ["Du hast soeben eine neue Nachricht erhalten. Unten findest du alle Angaben des Absenders in strukturierter Form."],
       rows: [
         { label: "Name", value: name },
         { label: "E-Mail", value: email },
         { label: "Nachricht", value: message },
       ],
       outro: "Du kannst direkt auf diese E-Mail antworten, der Reply-To ist bereits korrekt gesetzt.",
-      showBrandHeading: false, // << kein „SoftVibe“-Text unter Logo
+      showBrandHeading: false,
     });
 
     await transporter.sendMail({
@@ -219,13 +182,11 @@ export async function POST(req: Request) {
       to: process.env.EMAIL_RECEIVER || FROM_ADDR,
       replyTo: email,
       subject: `Kontakt · ${name}`,
-      text:
-        `Neue Kontaktanfrage\n\n` +
-        `Name: ${name}\nE-Mail: ${email}\n\nNachricht:\n${message}\n`,
+      text: `Neue Kontaktanfrage\n\nName: ${name}\nE-Mail: ${email}\n\nNachricht:\n${message}\n`,
       html: adminHtml,
     });
 
-    /* ========== 2) Nutzer-Bestätigung ========== */
+    // User
     const userIntro: string[] = [
       `Hallo <strong>${name}</strong>,`,
       `danke dir, dass du uns geschrieben hast! 🙏 Deine Nachricht ist sicher bei uns gelandet und wir schauen sie uns so schnell wie möglich an.`,
@@ -237,17 +198,16 @@ export async function POST(req: Request) {
     const userHtml = renderEmail({
       brand: BRAND,
       logoUrl,
-      headline: "Danke für deine Nachricht ✨", // << ohne „…bei SoftVibe“
+      headline: "Danke für deine Nachricht ✨",
       introLong: userIntro,
-      footerNote:
-        "Diese E-Mail wurde automatisch von SoftVibe generiert. Bitte antworte nicht direkt auf diese Nachricht.",
-      showBrandHeading: false, // << kein „SoftVibe“-Text unter Logo
+      footerNote: "Diese E-Mail wurde automatisch von SoftVibe generiert. Bitte antworte nicht direkt auf diese Nachricht.",
+      showBrandHeading: false,
     });
 
     await transporter.sendMail({
       from: { name: FROM_NAME, address: FROM_ADDR! },
       to: email,
-      subject: "Danke für deine Nachricht bei SoftVibe ✨", // Betreff bleibt wie von dir gewünscht
+      subject: "Danke für deine Nachricht bei SoftVibe ✨",
       text:
         `Hallo ${name},\n\n` +
         `danke dir, dass du uns geschrieben hast! Deine Nachricht ist sicher bei uns gelandet und wir schauen sie uns so schnell wie möglich an.\n\n` +
@@ -258,13 +218,9 @@ export async function POST(req: Request) {
       html: userHtml,
     });
 
-    return NextResponse.json({ success: true });
+    return jsonOk({ success: true }, 200);
   } catch (err) {
     console.error("Contact route error:", err);
-    return NextResponse.json(
-      { success: false, error: "Senden fehlgeschlagen. Bitte später erneut versuchen." },
-      { status: 500 }
-    );
+    return jsonError("Senden fehlgeschlagen. Bitte später erneut versuchen.", 500, { success: false });
   }
 }
-

@@ -1,0 +1,12 @@
+[
+  {
+    "id": "cup_clink_ceramic_01",
+    "label": "Cup clink (ceramic)",
+    "file": "/audio/sfx/cup_clink_ceramic_01.wav",
+    "loop": false,
+    "tags": ["cup", "ceramic", "cafe", "asmr"],
+    "gainDb": -12,
+    "license": "CC0|Pixabay|Custom",
+    "source": "url-or-note"
+  }
+]

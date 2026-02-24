@@ -169,7 +169,7 @@ export default function AccountClient({ user }: { user: AccountUser }) {
 
   const MAX_TITLE_LENGTH = 60;
 
-  const displayTitle = (t: Track) => {
+  const displayTrackTitle = (t: Track) => {
   const raw = (t.title ?? t.prompt ?? "").trim();
   if (!raw) return "(ohne Titel)";
 
@@ -559,7 +559,7 @@ export default function AccountClient({ user }: { user: AccountUser }) {
   }}
   title={(t.title ?? t.prompt ?? "").trim() || undefined} // 👈 voller Text im Tooltip
 >
-  {displayTitle(t)}
+  {displayTrackTitle(t)}
 </div>
         <div style={{ fontSize: "0.72rem", opacity: 0.6 }}>
           {(t.preset ?? "—") || "—"}

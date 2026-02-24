@@ -1,72 +1,46 @@
-// scripts/backfill-track-titles.ts
+// scripts/backfill-job-titles.ts
 import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
-// Gleiche Logik wie im Frontend, aber nur auf Prompt / alte Titel angewendet
-function makeTitleFromPrompt(src: string | null | undefined): string {
-  const base = (src ?? "").replace(/\s+/g, " ").trim();
+function makeTitle(prompt: string | null): string {
+  const base = (prompt ?? "").trim();
   if (!base) return "SoftVibe Track";
-
-  // Optional: ersten Satz/Fragment bisschen „knacken“
-  let out = base;
-  if (out.length > 80) {
-    out = out.slice(0, 77) + "…";
-  }
-  return out;
+  return base.length > 80 ? base.slice(0, 77) + "…" : base;
 }
 
 async function main() {
-  console.log("🔧 Starte Backfill für Track-Titel …");
+  console.log("Backfill Job.title ...");
 
-  // Wir holen alle Tracks inkl. Job, um ggf. aus Job.prompt etwas basteln zu können
-  const tracks = await prisma.track.findMany({
-    include: {
-      job: {
-        select: {
-          title: true,
-          prompt: true,
-        },
-      },
+  const jobs = await prisma.job.findMany({
+    where: {
+      OR: [
+        { title: null },
+        { title: "" },
+      ],
+    },
+    select: {
+      id: true,
+      prompt: true,
     },
   });
 
-  let changed = 0;
+  console.log(`Found ${jobs.length} jobs without title.`);
 
-  for (const t of tracks) {
-    const currentTitle = (t.title ?? "").trim();
-
-    // Wenn schon ein kurzer, brauchbarer Titel drin ist, nichts machen
-    if (currentTitle && currentTitle.length <= 80) {
-      continue;
-    }
-
-    // Quelle für neuen Titel: bevorzugt Job.title, sonst Job.prompt, sonst bisheriger Titel
-    const source =
-      (t.job?.title ?? "").trim() ||
-      (t.job?.prompt ?? "").trim() ||
-      currentTitle ||
-      null;
-
-    const nextTitle = makeTitleFromPrompt(source);
-
-    // Wenn sich nichts ändert, spare das Update
-    if (!nextTitle || nextTitle === t.title) continue;
-
-    await prisma.track.update({
-      where: { id: t.id },
-      data: { title: nextTitle },
+  for (const job of jobs) {
+    const title = makeTitle(job.prompt);
+    await prisma.job.update({
+      where: { id: job.id },
+      data: { title },
     });
-
-    changed++;
   }
 
-  console.log(`✅ Fertig. Aktualisierte Tracks: ${changed}`);
+  console.log("Done.");
 }
 
 main()
-  .catch((err) => {
-    console.error("❌ Fehler im Backfill-Script:", err);
+  .catch((e) => {
+    console.error(e);
     process.exit(1);
   })
   .finally(async () => {

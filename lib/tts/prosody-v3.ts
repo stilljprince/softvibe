@@ -1,4 +1,4 @@
-// lib/tts/prosody_v3.ts
+// lib/tts/prosody-v3.ts
 
 export type ScriptPreset = "classic-asmr" | "sleep-story" | "meditation";
 
