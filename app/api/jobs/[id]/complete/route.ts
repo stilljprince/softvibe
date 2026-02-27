@@ -12,7 +12,7 @@ import { addDebugLog } from "@/lib/debug-log";
 import { headers as nextHeaders } from "next/headers";
 import { jsonOk, jsonError } from "@/lib/api";
 import { makeTitleFromPrompt } from "@/lib/title";
-import { buildScriptV2 } from "@/lib/script-builder";
+import { buildScriptV2, enforceKidsSafety } from "@/lib/script-builder";
 import { buildScriptOpenAI } from "@/lib/script-builder-openai";
 import { applyV3Prosody } from "@/lib/tts/prosody-v3";
 import { s3KeyForJobPart } from "@/lib/s3";
@@ -57,6 +57,13 @@ function settingsForPreset(preset?: string) {
         stability: 0.4,
         similarity_boost: 0.9,
         style: 0.6,
+        use_speaker_boost: false,
+      };
+    case "kids-story":
+      return {
+        stability: 0.65,
+        similarity_boost: 0.90,
+        style: 0.35,
         use_speaker_boost: false,
       };
     default:
@@ -274,14 +281,15 @@ if (!nextResultUrl) {
   const voiceSettings = settingsForPreset(preset);
 
   const safePreset =
-    preset === "classic-asmr" || preset === "sleep-story" || preset === "meditation"
+    preset === "classic-asmr" || preset === "sleep-story" || preset === "meditation" || preset === "kids-story"
       ? preset
       : "classic-asmr";
 const isSleepStory = safePreset === "sleep-story";
+const isKidsStory = safePreset === "kids-story";
 
-// Sleep story: immer soft spoken (kein whisper), egal was UI sendet
+// Sleep story and kids story: always soft spoken (no whisper), regardless of UI setting
 const voiceStyle =
-  isSleepStory ? "soft" : (job.voiceStyle === "whisper" ? "whisper" : "soft");
+  isSleepStory || isKidsStory ? "soft" : (job.voiceStyle === "whisper" ? "whisper" : "soft");
 
 // Gender bleibt wie gewählt (fallback female)
 const voiceGender =
@@ -309,7 +317,7 @@ console.log("[SLEEP-STORY RULES]", { safePreset, isSleepStory, voiceStyle, voice
 
   // ✅ Hier entscheidest du: Nutzt du out.text oder einen Test-String?
   // Für echten Betrieb:
- const finalText = (out?.finalText ?? "").trim();
+ let finalText = (out?.finalText ?? "").trim();
 
 console.log("[SLEEP CHECK] preset=", safePreset, "hasYou=", /\byou\b/i.test(finalText));
 console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
@@ -321,6 +329,20 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
       data: { status: $Enums.JobStatus.FAILED, error: msg },
     });
     return jsonError(msg, 500);
+  }
+
+  // Non-overridable kids safety post-check (repair-first, fail-second)
+  if (isKidsStory) {
+    const safeResult = enforceKidsSafety(finalText);
+    if (!safeResult.safe) {
+      const safetyMsg = "Story content did not pass safety check after repair attempt.";
+      await prisma.job.update({
+        where: { id },
+        data: { status: $Enums.JobStatus.FAILED, error: safetyMsg },
+      });
+      return jsonError("CONTENT_SAFETY", 422, { message: safetyMsg });
+    }
+    finalText = safeResult.text;
   }
 
   // ✅ TTS-Basistext

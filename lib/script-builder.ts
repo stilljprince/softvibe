@@ -1,6 +1,6 @@
 // lib/script-builder.ts
 
-export type ScriptPreset = "classic-asmr" | "sleep-story" | "meditation";
+export type ScriptPreset = "classic-asmr" | "sleep-story" | "meditation" | "kids-story";
 
 export type ScriptInput = {
   preset: ScriptPreset;
@@ -35,6 +35,9 @@ export function buildScriptV3(input: ScriptInput): ScriptOutput {
       break;
     case "meditation":
       base = buildMeditation_v3(cleanedPrompt);
+      break;
+    case "kids-story":
+      base = buildKidsStory_v3(cleanedPrompt);
       break;
     default:
       base = cleanedPrompt;
@@ -126,6 +129,8 @@ function applyRhythm(text: string, preset: ScriptPreset): string {
         ? (i % 2 === 0 ? "…" : ".")
         : preset === "sleep-story"
         ? "."
+        : preset === "kids-story"
+        ? "."
         : "…";
 
     // ganz leichte "weiche" Satzöffnung
@@ -139,7 +144,7 @@ function applyRhythm(text: string, preset: ScriptPreset): string {
 
   // Absätze (mehr Luft)
   const paragraphEvery =
-    preset === "sleep-story" ? 3 : preset === "meditation" ? 2 : 2;
+    preset === "sleep-story" ? 3 : preset === "kids-story" ? 3 : preset === "meditation" ? 2 : 2;
 
   const out: string[] = [];
   for (let i = 0; i < withPauses.length; i++) {
@@ -153,7 +158,10 @@ function applyRhythm(text: string, preset: ScriptPreset): string {
 function estimateSpokenSeconds(text: string, preset: ScriptPreset): number {
   // grobe WPM Annahmen – für whisper/asmr langsamer
   const wpm =
-    preset === "classic-asmr" ? 115 : preset === "sleep-story" ? 135 : 120;
+    preset === "classic-asmr" ? 115
+    : preset === "sleep-story" ? 135
+    : preset === "kids-story" ? 120
+    : 120;
 
   const words = countWords(text);
   const speaking = (words / wpm) * 60;
@@ -393,4 +401,85 @@ function buildMeditation_v3(prompt: string): string {
     "Bleib ganz hier…",
     "Mehr brauchst du gerade nicht…",
   ].join("\n").trim();
+}
+
+function buildKidsStory_v3(prompt: string): string {
+  const p = prompt ? prompt : "Ein kleines Kind entdeckt einen magischen Stein im Wald.";
+  return [
+    "Es war einmal ein ganz besonderer Abend.",
+    "",
+    "Alles war warm und ruhig.",
+    "",
+    p,
+    "",
+    "Und dann passierte etwas Wunderbares.",
+    "Leise und sanft.",
+    "",
+    "Alles wurde gut.",
+    "",
+    "Und so, ganz langsam,",
+    "wurden die Augen immer schwerer.",
+    "",
+    "Gute Nacht.",
+  ].join("\n").trim();
+}
+
+/* ------------------------------------------------------------------ */
+/* Kids Story Safety – Non-Overridable Post-Check                       */
+/* ------------------------------------------------------------------ */
+
+const KIDS_FORBIDDEN: RegExp[] = [
+  /\b(dead|death|died|dying)\b/i,
+  /\b(kill(ed|ing|s)?|murder(ed|ing|s)?)\b/i,
+  /\bblood(y|ied|ying)?\b/i,
+  /\b(gore|gory)\b/i,
+  /\b(monster|demon|devil|evil)\b.{0,40}\b(attack|hurt|scare|chased?|threaten)\b/i,
+  /\b(violent|violence)\b/i,
+  /\b(horror|horrif(y|ied|ying)|terrif(y|ied|ying))\b/i,
+  /\bnightmare\b/i,
+  /\b(weapon|sword|knife|gun|stabbed?|wound(ed)?)\b/i,
+  /\b(existential|despair|hopeless|suicid)\b/i,
+];
+
+const KIDS_REPAIRS: Array<[RegExp, string]> = [
+  [/\b(dead|death|died|dying)\b/gi, "resting peacefully"],
+  [/\b(killed?|killing)\b/gi, "fell asleep"],
+  [/\b(murder(ed|ing)?)\b/gi, "went away"],
+  [/\bblood(y|ied|ying)?\b/gi, "rosy"],
+  [/\b(gore|gory)\b/gi, "surprising"],
+  [/\b(monster|demon|devil)\b/gi, "friendly creature"],
+  [/\b(violent|violence)\b/gi, "lively"],
+  [/\b(horror|horrif(y|ied|ying)|terrif(y|ied|ying))\b/gi, "surprised"],
+  [/\bnightmare\b/gi, "dream"],
+  [/\b(weapon|sword|knife|gun)\b/gi, "magic wand"],
+  [/\b(stabbed?|wound(ed)?)\b/gi, "touched"],
+];
+
+function repairKidsText(text: string): string {
+  let out = text;
+  for (const [pattern, replacement] of KIDS_REPAIRS) {
+    out = out.replace(pattern, replacement);
+  }
+  return out;
+}
+
+/**
+ * Enforces non-overridable kids safety on final text.
+ * Strategy: repair first, fail only if repair does not resolve the violation.
+ * Returns { safe: true, text } on success (text may be the repaired version).
+ * Returns { safe: false, text } if repair fails — caller must reject the job.
+ */
+export function enforceKidsSafety(
+  text: string
+): { safe: boolean; text: string } {
+  const hasForbidden = KIDS_FORBIDDEN.some((p) => p.test(text));
+  if (!hasForbidden) return { safe: true, text };
+
+  // First pass: attempt automatic repair
+  const repaired = repairKidsText(text);
+  const stillUnsafe = KIDS_FORBIDDEN.some((p) => p.test(repaired));
+  if (!stillUnsafe) return { safe: true, text: repaired };
+
+  // Repair did not fully resolve the violation — reject
+  return { safe: false, text };
 }

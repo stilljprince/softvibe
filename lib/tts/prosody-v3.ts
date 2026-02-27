@@ -1,6 +1,6 @@
 // lib/tts/prosody_v3.ts
 
-export type ScriptPreset = "classic-asmr" | "sleep-story" | "meditation";
+export type ScriptPreset = "classic-asmr" | "sleep-story" | "meditation" | "kids-story";
 
 function hashToFloat(seed: string) {
   // deterministische Pseudo-Random (0..1)
@@ -70,6 +70,19 @@ function tagsForPreset(preset: ScriptPreset) {
       paragraphChance: 0.45,
       sentenceChance: 0.18,
       maxChucklesPer250w: 1,
+    };
+  }
+
+  if (preset === "kids-story") {
+    return {
+      opener: ["[softly]", "[warmly]"],
+      positive: ["[warmly]", "[tenderly]"],
+      comfort: ["[softly]", "[warmly]"],
+      amused: ["[softly]"],
+      neutral: ["[softly]", "[calm]"],
+      paragraphChance: 0.30,
+      sentenceChance: 0.10,
+      maxChucklesPer250w: 0,
     };
   }
 
