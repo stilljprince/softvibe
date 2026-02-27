@@ -9,9 +9,10 @@ import type React from "react";
 import CustomPlayer from "@/app/components/CustomPlayer";
 
 const PRESETS = [
-  { id: "classic-asmr", label: "Classic ASMR (Whisper, Tapping)" },
-  { id: "sleep-story", label: "Sleep Story (Calm, Slow)" },
-  { id: "meditation", label: "Meditation (Breath, Soft Tone)" },
+  { id: "classic-asmr", label: "Classic ASMR",  desc: "Whisper · Tapping" },
+  { id: "sleep-story",  label: "Sleep Story",   desc: "Calm · Slow" },
+  { id: "meditation",   label: "Meditation",    desc: "Breath · Soft Tone" },
+  { id: "kids-story",   label: "Kids Story",    desc: "Gentle · Safe" },
 ];
 
 type JobStatus = "QUEUED" | "PROCESSING" | "DONE" | "FAILED";
@@ -53,7 +54,9 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 export default function GenerateClient() {
   const [preset, setPreset] = useState<string>(PRESETS[0].id);
   const [title, setTitle] = useState("");
-  const [prompt, setPrompt] = useState("");
+  const [rawPrompt, setRawPrompt] = useState("");
+  const [improvedPrompt, setImprovedPrompt] = useState<string | null>(null);
+  const [isImproving, setIsImproving] = useState(false);
   const [durationSec, setDurationSec] = useState<number | "">("");
   const [job, setJob] = useState<Job | null>(null);
   const [polling, setPolling] = useState(false);
@@ -112,9 +115,50 @@ export default function GenerateClient() {
   }, []);
   // ---------- Ende Toast ----------
 
-    const canSubmit = useMemo(() => {
+  async function improvePrompt() {
+    if (rawPrompt.trim().length < 3 || isImproving) return;
+    setIsImproving(true);
+    try {
+      const res = await fetch("/api/prompt-improve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: rawPrompt, preset }),
+        credentials: "include",
+      });
+      if (res.status === 401) {
+        showToast("Bitte einloggen, um Prompt zu verbessern.", "err", 4000);
+        return;
+      }
+      if (res.status === 429) {
+        showToast("Zu viele Anfragen. Bitte warte.", "info");
+        return;
+      }
+      if (!res.ok) {
+        showToast("Prompt-Verbesserung fehlgeschlagen.", "err");
+        return;
+      }
+      // jsonOk wraps the payload as { ok: true, data: { improvedPrompt } }
+      const json = (await res.json()) as {
+        ok?: boolean;
+        data?: { improvedPrompt?: string };
+        improvedPrompt?: string;
+      };
+      const improved = json.data?.improvedPrompt ?? json.improvedPrompt ?? "";
+      if (improved) {
+        setImprovedPrompt(improved);
+      } else {
+        showToast("Kein verbesserter Prompt erhalten.", "err");
+      }
+    } catch {
+      showToast("Prompt-Verbesserung fehlgeschlagen.", "err");
+    } finally {
+      setIsImproving(false);
+    }
+  }
+
+  const canSubmit = useMemo(() => {
     const titleOk = title.trim().length >= 3;
-    const promptOk = prompt.trim().length >= 3;
+    const promptOk = rawPrompt.trim().length >= 3;
     if (!titleOk || !promptOk) return false;
 
     // Wenn wir noch keine Summary haben (lädt), Button nicht blocken
@@ -125,7 +169,7 @@ export default function GenerateClient() {
 
     // Normale User brauchen Credits > 0
     return accountSummary.credits > 0;
-  }, [title, prompt, accountSummary]);
+  }, [title, rawPrompt, accountSummary]);
 
   useEffect(() => {
     void loadJobs(0);
@@ -248,9 +292,9 @@ export default function GenerateClient() {
   voiceStyle: "soft" | "whisper";
   voiceGender: "female" | "male";
 } = {
-  title: title.trim().length > 0 ? title.trim() : "", // oder wie du das State-Field genannt hast
+  title: title.trim().length > 0 ? title.trim() : "",
   preset,
-  prompt,
+  prompt: rawPrompt,
   language,
   voiceStyle,
   voiceGender,
@@ -677,19 +721,22 @@ useEffect(() => {
           }}
         >
           <div style={{ display: "grid", gap: 12 }}>
-                        <div>
+            <div>
               <label className="sv-label">Preset</label>
-              <select
-                value={preset}
-                onChange={(e) => setPreset(e.target.value)}
-                className="sv-input"
-              >
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 {PRESETS.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.label}
-                  </option>
+                  <button
+                    key={p.id}
+                    type="button"
+                    className={`sv-btn${preset === p.id ? " sv-btn--primary" : ""}`}
+                    onClick={() => setPreset(p.id)}
+                    style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", padding: "6px 14px" }}
+                  >
+                    <span style={{ fontWeight: 700, fontSize: "0.9rem" }}>{p.label}</span>
+                    <span style={{ fontSize: "0.72rem", opacity: 0.65, marginTop: 1 }}>{p.desc}</span>
+                  </button>
                 ))}
-              </select>
+              </div>
             </div>
 
 
@@ -758,14 +805,63 @@ onChange={(e) => setVoiceStyle(e.target.value as "soft" | "whisper")}
             </div>
 
             <div>
-              <label className="sv-label">Prompt</label>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                <label className="sv-label" style={{ margin: 0 }}>Prompt</label>
+                <button
+                  type="button"
+                  className="sv-btn"
+                  style={{ fontSize: "0.78rem", padding: "3px 10px" }}
+                  onClick={() => void improvePrompt()}
+                  disabled={rawPrompt.trim().length < 3 || isImproving}
+                >
+                  {isImproving ? "…" : "Verbessern"}
+                </button>
+              </div>
               <textarea
                 className="sv-input"
                 rows={4}
                 placeholder='Beschreibe, was du hören möchtest (z. B. "sanftes Flüstern…")'
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
+                value={rawPrompt}
+                onChange={(e) => setRawPrompt(e.target.value)}
               />
+              {improvedPrompt !== null && (
+                <div
+                  style={{
+                    marginTop: 8,
+                    padding: "10px 12px",
+                    borderRadius: 10,
+                    border: "1px solid var(--color-nav-bg)",
+                    background: "color-mix(in oklab, var(--color-card) 92%, var(--color-accent))",
+                  }}
+                >
+                  <label className="sv-label" style={{ display: "block", marginBottom: 6 }}>
+                    Verbesserter Prompt{" "}
+                    <span style={{ fontWeight: 400, opacity: 0.55 }}>(bearbeitbar)</span>
+                  </label>
+                  <textarea
+                    className="sv-input"
+                    rows={3}
+                    value={improvedPrompt}
+                    onChange={(e) => setImprovedPrompt(e.target.value)}
+                  />
+                  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                    <button
+                      type="button"
+                      className="sv-btn sv-btn--primary"
+                      onClick={() => { setRawPrompt(improvedPrompt); setImprovedPrompt(null); }}
+                    >
+                      Übernehmen
+                    </button>
+                    <button
+                      type="button"
+                      className="sv-btn"
+                      onClick={() => setImprovedPrompt(null)}
+                    >
+                      Verwerfen
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Dauer */}
@@ -992,7 +1088,7 @@ onChange={(e) => setVoiceStyle(e.target.value as "soft" | "whisper")}
     // Story: kein Mini-Player, stattdessen Album-CTA
     j.storyId ? (
       <a
-        href={`/library?story=${encodeURIComponent(j.storyId)}`}
+        href={`/s/${j.storyId}`}
         className="sv-btn"
         style={{ padding: "4px 10px", textDecoration: "none", display: "inline-flex", alignItems: "center" }}
       >
@@ -1011,7 +1107,7 @@ onChange={(e) => setVoiceStyle(e.target.value as "soft" | "whisper")}
 ) : null}
                     {typeof j.chapterCount === "number" && j.chapterCount > 1 && j.storyId ? (
   <a
-    href={`/library?story=${encodeURIComponent(j.storyId)}`}
+    href={`/s/${j.storyId}`}
     className="sv-btn"
     style={{ padding: "4px 10px", textDecoration: "none", display: "inline-flex", alignItems: "center" }}
   >

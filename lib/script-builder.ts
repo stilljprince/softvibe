@@ -436,23 +436,29 @@ const KIDS_FORBIDDEN: RegExp[] = [
   /\b(monster|demon|devil|evil)\b.{0,40}\b(attack|hurt|scare|chased?|threaten)\b/i,
   /\b(violent|violence)\b/i,
   /\b(horror|horrif(y|ied|ying)|terrif(y|ied|ying))\b/i,
+  /\b(scary|frightening|frightened)\b/i,
   /\bnightmare\b/i,
   /\b(weapon|sword|knife|gun|stabbed?|wound(ed)?)\b/i,
-  /\b(existential|despair|hopeless|suicid)\b/i,
+  /\b(existential|despair|hopeless)\b/i,
+  /\bsuicid\w+\b/i,
 ];
 
 const KIDS_REPAIRS: Array<[RegExp, string]> = [
   [/\b(dead|death|died|dying)\b/gi, "resting peacefully"],
-  [/\b(killed?|killing)\b/gi, "fell asleep"],
+  [/\b(killed?|killing|kills)\b/gi, "fell asleep"],
   [/\b(murder(ed|ing)?)\b/gi, "went away"],
   [/\bblood(y|ied|ying)?\b/gi, "rosy"],
   [/\b(gore|gory)\b/gi, "surprising"],
   [/\b(monster|demon|devil)\b/gi, "friendly creature"],
+  [/\bevil\b/gi, "grumpy"],
   [/\b(violent|violence)\b/gi, "lively"],
   [/\b(horror|horrif(y|ied|ying)|terrif(y|ied|ying))\b/gi, "surprised"],
+  [/\b(scary|frightening|frightened)\b/gi, "surprising"],
   [/\bnightmare\b/gi, "dream"],
   [/\b(weapon|sword|knife|gun)\b/gi, "magic wand"],
   [/\b(stabbed?|wound(ed)?)\b/gi, "touched"],
+  [/\b(existential|despair|hopeless)\b/gi, "uncertain"],
+  [/\bsuicid\w+\b/gi, "not feeling well"],
 ];
 
 function repairKidsText(text: string): string {
