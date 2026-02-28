@@ -137,7 +137,10 @@ export default function GenerateClient() {
         showToast("Prompt-Verbesserung fehlgeschlagen.", "err");
         return;
       }
-      // jsonOk wraps the payload as { ok: true, data: { improvedPrompt } }
+      // NOTE: lib/api.ts jsonOk always wraps its argument as { ok: true, data: <payload> }.
+      // The route returns jsonOk({ improvedPrompt }), so the wire format is
+      // { ok: true, data: { improvedPrompt: "..." } } — NOT { improvedPrompt: "..." } at the top level.
+      // Read from json.data.improvedPrompt, not json.improvedPrompt directly.
       const json = (await res.json()) as {
         ok?: boolean;
         data?: { improvedPrompt?: string };
