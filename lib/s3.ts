@@ -69,6 +69,26 @@ export async function uploadMP3ToS3(
   return key;
 }
 
+/** Prüft ob ein S3-Objekt existiert (true = exists, false = 404, andere Fehler → throw) */
+export async function s3ObjectExists(key: string): Promise<boolean> {
+  const Bucket = process.env.S3_BUCKET;
+  if (!Bucket) throw new Error("S3_BUCKET missing");
+  try {
+    await s3.send(new HeadObjectCommand({ Bucket, Key: key }));
+    return true;
+  } catch (err) {
+    const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
+    if (
+      e.name === "NotFound" ||
+      e.name === "NoSuchKey" ||
+      e.$metadata?.httpStatusCode === 404
+    ) {
+      return false;
+    }
+    throw err;
+  }
+}
+
 /** Head: nur Metadaten (ContentLength/Type) */
 export async function headObjectByKey(
   key: string

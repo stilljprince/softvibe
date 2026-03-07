@@ -7,7 +7,7 @@ import { $Enums } from "@prisma/client";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { rateLimit, clientIpFromRequest } from "@/lib/rate";
-import { uploadMP3ToS3, s3KeyForJob, hasS3Env } from "@/lib/s3";
+import { uploadMP3ToS3, s3KeyForJob, hasS3Env, s3ObjectExists } from "@/lib/s3";
 import { addDebugLog } from "@/lib/debug-log";
 import { headers as nextHeaders } from "next/headers";
 import { jsonOk, jsonError } from "@/lib/api";
@@ -16,6 +16,7 @@ import { buildScriptV2, enforceKidsSafety } from "@/lib/script-builder";
 import { buildScriptOpenAI } from "@/lib/script-builder-openai";
 import { applyV3Prosody } from "@/lib/tts/prosody-v3";
 import { s3KeyForJobPart } from "@/lib/s3";
+import { splitToChunksSafe, getMaxCharsPerRequest } from "@/lib/audio/chunks";
 console.log("[prosody] typeof applyV3Prosody =", typeof applyV3Prosody);
 
 // 🔹 ElevenLabs-Adapter & Voice-Resolver
@@ -108,42 +109,6 @@ function stripTtsDirectives(input: string): string {
   out = out.trim();
   return out.length > 0 ? out : input.trim();
 }
-
-function splitToChunks(text: string, maxLen: number): string[] {
-  const clean = (text ?? "").trim();
-  if (!clean) return [];
-
-  const parts: string[] = [];
-  let remaining = clean;
-
-  while (remaining.length > maxLen) {
-    // bevorzugt Absatzschnitt
-    let cut = remaining.lastIndexOf("\n\n", maxLen);
-
-    // sonst Satzgrenze
-    if (cut < 0) {
-      cut = Math.max(
-        remaining.lastIndexOf(". ", maxLen),
-        remaining.lastIndexOf("! ", maxLen),
-        remaining.lastIndexOf("? ", maxLen)
-      );
-    }
-
-    // fallback hard cut (aber nicht zu früh)
-    if (cut < 0 || cut < Math.floor(maxLen * 0.6)) cut = maxLen;
-
-    const chunk = remaining.slice(0, cut).trim();
-    if (chunk) parts.push(chunk);
-
-    remaining = remaining.slice(cut).trim();
-  }
-
-  if (remaining) parts.push(remaining);
-  return parts;
-}
-
-// Damit Sleep-Story Parts NICHT das gleiche S3-Key überschreiben:
-
 
 // Für local speichern analog:
 function localAbsForJobPart(baseDirAbs: string, jobId: string, partIndex: number) {
@@ -307,7 +272,13 @@ console.log("[SLEEP-STORY RULES]", { safePreset, isSleepStory, voiceStyle, voice
     voiceGender: job.voiceGender,
   });
 
-  // Script bauen (OpenAI)
+const SMOKE_BYPASS_SCRIPT_BUILDER = process.env.SMOKE_BYPASS_SCRIPT_BUILDER === "1";
+
+let finalText = "";
+
+if (SMOKE_BYPASS_SCRIPT_BUILDER) {
+  finalText = ((job.prompt ?? "") as string).trim();
+} else {
   const out = await buildScriptOpenAI({
     preset: safePreset,
     userPrompt: (job.prompt ?? "").trim(),
@@ -315,9 +286,8 @@ console.log("[SLEEP-STORY RULES]", { safePreset, isSleepStory, voiceStyle, voice
     language,
   });
 
-  // ✅ Hier entscheidest du: Nutzt du out.text oder einen Test-String?
-  // Für echten Betrieb:
- let finalText = (out?.finalText ?? "").trim();
+  finalText = (out?.finalText ?? "").trim();
+}
 
 console.log("[SLEEP CHECK] preset=", safePreset, "hasYou=", /\byou\b/i.test(finalText));
 console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
@@ -370,97 +340,103 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
     // =========================================================
     // ✅ SLEEP-STORY: MULTI-CHUNK -> mehrere Tracks (Album/Chapters)
     // =========================================================
-    if (safePreset === "sleep-story") {
-      const MAX_CHARS = 2800; // unter 3000 bleiben (Puffer für Prosody/Whitespace)
-      const chunks = splitToChunks(baseText, MAX_CHARS);
+    if (isSleepStory || isKidsStory) {
+      const chunks = splitToChunksSafe(baseText, getMaxCharsPerRequest());
 
-     const story = await prisma.story.create({
-  data: {
-    userId: session.user.id as string,
-    title: (job.title?.trim() || "Sleep Story"),
-    preset: "sleep-story",
-    language: job.language ?? null,
-  },
-  select: { id: true },
-});
-const storyId = story.id;
+      // Story idempotency: reuse storyId if a previous run already created tracks for this job
+      const existingTrack = await prisma.track.findFirst({
+        where: { jobId: id, storyId: { not: null } },
+        select: { storyId: true },
+      });
+      let storyId: string;
+      if (existingTrack?.storyId) {
+        storyId = existingTrack.storyId;
+      } else {
+        const story = await prisma.story.create({
+          data: {
+            userId: session.user.id as string,
+            title: job.title?.trim() || (isSleepStory ? "Sleep Story" : "Kids Story"),
+            preset: safePreset,
+            language: job.language ?? null,
+          },
+          select: { id: true },
+        });
+        storyId = story.id;
+      }
 
-      console.log("[sleep-story] chunks =", chunks.length);
-
-      // optional: alte Kapiteltracks zu diesem job löschen (falls du re-runs machst)
-      // await prisma.track.deleteMany({ where: { jobId: id, storyId } });
+      console.log("[multi-chunk] preset =", safePreset, "chunks =", chunks.length);
 
       for (let partIndex = 0; partIndex < chunks.length; partIndex++) {
         const partBase = chunks[partIndex];
+        const partKey = s3KeyForJobPart(id, partIndex);
+        const partsAbsRoot = path.dirname(localAbs);
+        const partAbs = localAbsForJobPart(partsAbsRoot, id, partIndex);
 
-        const ttsTextPart = isV3
-          ? applyV3Prosody({
-              preset: safePreset,
-              text: partBase,
-              seed: `${job.id}:${partIndex}`,
-            })
-          : partBase;
+        // Idempotency: skip TTS+upload if audio already stored
+        const audioAlreadyStored = hasS3Env()
+          ? await s3ObjectExists(partKey)
+          : await fs.access(partAbs).then(() => true).catch(() => false);
 
-        const { audio } = await elevenlabs.speak({
-          text: ttsTextPart,
-          voiceId,
-          modelId: process.env.ELEVENLABS_MODEL_ID ?? "eleven_v3",
-          stability: 0.1,
-          similarityBoost: 0.62,
-          style: 0.25,
-          useSpeakerBoost: true,
-          preset: safePreset,
-        });
+        if (!audioAlreadyStored) {
+          const ttsTextPart = isV3
+            ? applyV3Prosody({
+                preset: safePreset,
+                text: partBase,
+                seed: `${job.id}:${partIndex}`,
+              })
+            : partBase;
 
-        const buf = Buffer.from(audio);
-
-        // Dauer bestimmen (optional pro Part; erstmal skip/ignore)
-        // -> du kannst das später pro Part machen, ist aber nicht kritisch.
-
-        // MP3 speichern (S3 oder lokal) pro Part mit eigenem Key
-        try {
-          if (hasS3Env()) {
-            await uploadMP3ToS3(s3KeyForJobPart(id, partIndex), buf);
-          } else {
-            // ⚠️ hier brauchst du deinen base folder / local abs root
-            // Beispiel: const partsAbs = path.join(process.cwd(), "data", "jobs");
-            const partsAbsRoot = path.dirname(localAbs); // <- wenn localAbs z.B. .../<id>.mp3 ist
-            const partAbs = localAbsForJobPart(partsAbsRoot, id, partIndex);
-            await fs.mkdir(path.dirname(partAbs), { recursive: true });
-            await fs.writeFile(partAbs, buf);
-          }
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : "Store audio failed";
-          await prisma.job.update({
-            where: { id },
-            data: { status: $Enums.JobStatus.FAILED, error: msg },
+          const { audio } = await elevenlabs.speak({
+            text: ttsTextPart,
+            voiceId,
+            modelId: process.env.ELEVENLABS_MODEL_ID ?? "eleven_v3",
+            stability: 0.1,
+            similarityBoost: 0.62,
+            style: 0.25,
+            useSpeakerBoost: true,
+            preset: safePreset,
           });
-          return jsonError(msg, 500);
+
+          const buf = Buffer.from(audio);
+
+          try {
+            if (hasS3Env()) {
+              await uploadMP3ToS3(partKey, buf);
+            } else {
+              await fs.mkdir(path.dirname(partAbs), { recursive: true });
+              await fs.writeFile(partAbs, buf);
+            }
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : "Store audio failed";
+            await prisma.job.update({
+              where: { id },
+              data: { status: $Enums.JobStatus.FAILED, error: msg },
+            });
+            return jsonError(msg, 500);
+          }
         }
 
-        // URL fürs Kapitel
-        const partUrl = hasS3Env()
-          ? `/api/jobs/${id}/audio?part=${partIndex + 1}`
-          : `/api/jobs/${id}/audio?part=${partIndex + 1}`;
-const baseTitle =
-  (job.title && job.title.trim() !== "" ? job.title.trim() : "Sleep Story");
+        const partUrl = `/api/jobs/${id}/audio?part=${partIndex + 1}`;
+        const baseTitle = job.title?.trim() || (isSleepStory ? "Sleep Story" : "Kids Story");
+        const partTitle = `Chapter ${partIndex + 1}/${chunks.length}`;
 
-          const partTitle = `Chapter ${partIndex + 1}/${chunks.length}`;
+        console.log("[STORY TRACK]", {
+          jobId: job.id,
+          storyId,
+          partIndex,
+          partTitle,
+          textLength: partBase.length,
+          url: partUrl,
+        });
 
-          console.log("[STORY TRACK]", {
-  jobId: job.id,
-  storyId,
-  partIndex,
-  partTitle,
-  textLength: partBase.length,
-  url: partUrl,
-});
-        // Kapitel-Track anlegen
-        await prisma.track.create({
-          data: {
+        // Upsert track (idempotent on storyId + partIndex)
+        await prisma.track.upsert({
+          where: { storyId_partIndex: { storyId, partIndex } },
+          update: { url: partUrl, title: `${baseTitle} — ${partTitle}` },
+          create: {
             userId: session.user.id as string,
             jobId: id,
-            title: `${baseTitle} — ${partTitle}`,   // ✅ eindeutig
+            title: `${baseTitle} — ${partTitle}`,
             url: partUrl,
             durationSeconds: null,
             storyId,
@@ -470,19 +446,26 @@ const baseTitle =
         });
       }
 
-      console.log("[tts] sleep-story total speak ms =", Date.now() - t0);
-      
-      // Job DONE – resultUrl kannst du leer lassen oder auf Part 1 setzen.
-      nextResultUrl = `/api/jobs/${id}/audio?part=1`;
-console.log("[sleep-story] done, firstUrl =", nextResultUrl);
-      // detectedDuration optional: Summe später
-      detectedDuration = undefined as unknown as number;
+      console.log("[tts] multi-chunk total speak ms =", Date.now() - t0);
 
-      // Sleep-story ist damit fertig -> skip single-file path
+      nextResultUrl = `/api/jobs/${id}/audio?part=1`;
+      console.log("[multi-chunk] done, firstUrl =", nextResultUrl);
+      detectedDuration = undefined as unknown as number;
     } else {
       // =========================================================
       // ✅ Single MP3 path (classic-asmr, meditation)
       // =========================================================
+      // Mode 1b: fail if script exceeds per-request character limit (no stitcher available)
+      const maxChars = getMaxCharsPerRequest();
+      if (baseText.length > maxChars) {
+        const msg = `Der generierte Text ist zu lang für eine einzelne Audio-Datei (${baseText.length} Zeichen, Maximum ${maxChars}). Bitte kürze deinen Prompt oder wähle einen kürzeren Inhalt.`;
+        await prisma.job.update({
+          where: { id },
+          data: { status: $Enums.JobStatus.FAILED, error: msg },
+        });
+        return jsonError(msg, 422);
+      }
+
      const ttsText = isV3
   ? applyV3Prosody({
       preset: safePreset,
