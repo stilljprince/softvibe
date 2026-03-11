@@ -475,14 +475,30 @@ function repairKidsText(text: string): string {
  * Returns { safe: true, text } on success (text may be the repaired version).
  * Returns { safe: false, text } if repair fails — caller must reject the job.
  */
+// Formatting characters disallowed by the prompt style rules, plus curly
+// quotes/apostrophes that AI models consistently output. Normalizing these
+// counts as a mutation for kidsSafetyApplied purposes and is TTS-neutral.
+function normalizeKidsFormatting(text: string): string {
+  return text
+    .replace(/\u2026|\.\.\./g, " ")   // unicode ellipsis or ASCII ... → space
+    .replace(/\u2014|\u2013/g, ", ")  // em dash / en dash → comma-space
+    .replace(/[\u2018\u2019]/g, "'")  // curly apostrophes → straight ' (always in contractions)
+    .replace(/[\u201c\u201d]/g, '"'); // curly double quotes → straight "
+}
+
 export function enforceKidsSafety(
   text: string
 ): { safe: boolean; text: string } {
   const hasForbidden = KIDS_FORBIDDEN.some((p) => p.test(text));
-  if (!hasForbidden) return { safe: true, text };
+
+  if (!hasForbidden) {
+    // No safety violations — still normalize disallowed formatting characters.
+    const normalized = normalizeKidsFormatting(text);
+    return { safe: true, text: normalized };
+  }
 
   // First pass: attempt automatic repair
-  const repaired = repairKidsText(text);
+  const repaired = normalizeKidsFormatting(repairKidsText(text));
   const stillUnsafe = KIDS_FORBIDDEN.some((p) => p.test(repaired));
   if (!stillUnsafe) return { safe: true, text: repaired };
 

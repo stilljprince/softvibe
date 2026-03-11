@@ -192,6 +192,12 @@ export async function POST(
   }
 console.log("COMPLETE language:", job?.id, job?.language);
 
+  // Idempotency: if already DONE, return existing data without re-running generation.
+  // FAILED or QUEUED jobs continue through the handler normally.
+  if (job.status === $Enums.JobStatus.DONE && job.resultUrl) {
+    return jsonOk(job, 200);
+  }
+
   let body: CompleteBody = {};
   try {
     body = (await req.json()) as CompleteBody;
@@ -232,6 +238,8 @@ console.log("COMPLETE language:", job?.id, job?.language);
 
   let nextResultUrl = body.resultUrl ?? null;
   let detectedDuration: number | undefined;
+  let kidsSafetyApplied = false;
+  let isMultiChunk = false;
 
   const localRel = `/generated/${id}.mp3`;
   const localAbs = path.join(
@@ -312,6 +320,7 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
       });
       return jsonError("CONTENT_SAFETY", 422, { message: safetyMsg });
     }
+    kidsSafetyApplied = safeResult.text !== finalText;
     finalText = safeResult.text;
   }
 
@@ -338,10 +347,16 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
 
   try {
     // =========================================================
-    // ✅ SLEEP-STORY: MULTI-CHUNK -> mehrere Tracks (Album/Chapters)
+    // ✅ SLEEP-STORY / KIDS-STORY: MULTI-CHUNK path only when >1 chunk
     // =========================================================
-    if (isSleepStory || isKidsStory) {
-      const chunks = splitToChunksSafe(baseText, getMaxCharsPerRequest());
+    const allChunks = (isSleepStory || isKidsStory)
+      ? splitToChunksSafe(baseText, getMaxCharsPerRequest())
+      : null;
+
+    isMultiChunk = !!(allChunks && allChunks.length > 1);
+
+    if (isMultiChunk) {
+      const chunks = allChunks!;
 
       // Story idempotency: reuse storyId if a previous run already created tracks for this job
       const existingTrack = await prisma.track.findFirst({
@@ -377,6 +392,8 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
           ? await s3ObjectExists(partKey)
           : await fs.access(partAbs).then(() => true).catch(() => false);
 
+        let partDuration: number | null = null;
+
         if (!audioAlreadyStored) {
           const ttsTextPart = isV3
             ? applyV3Prosody({
@@ -398,6 +415,17 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
           });
 
           const buf = Buffer.from(audio);
+
+          // Extract duration for this chapter
+          try {
+            const { parseBuffer } = await import("music-metadata");
+            const meta = await parseBuffer(buf, "audio/mpeg");
+            if (meta.format.duration && Number.isFinite(meta.format.duration)) {
+              partDuration = Math.round(meta.format.duration);
+            }
+          } catch {
+            /* ignore */
+          }
 
           try {
             if (hasS3Env()) {
@@ -432,13 +460,17 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
         // Upsert track (idempotent on storyId + partIndex)
         await prisma.track.upsert({
           where: { storyId_partIndex: { storyId, partIndex } },
-          update: { url: partUrl, title: `${baseTitle} — ${partTitle}` },
+          update: {
+            url: partUrl,
+            title: `${baseTitle} — ${partTitle}`,
+            ...(partDuration !== null ? { durationSeconds: partDuration } : {}),
+          },
           create: {
             userId: session.user.id as string,
             jobId: id,
             title: `${baseTitle} — ${partTitle}`,
             url: partUrl,
-            durationSeconds: null,
+            durationSeconds: partDuration,
             storyId,
             partIndex,
             partTitle,
@@ -453,7 +485,7 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
       detectedDuration = undefined as unknown as number;
     } else {
       // =========================================================
-      // ✅ Single MP3 path (classic-asmr, meditation)
+      // ✅ Single MP3 path (classic-asmr, meditation, or short sleep/kids story)
       // =========================================================
       // Mode 1b: fail if script exceeds per-request character limit (no stitcher available)
       const maxChars = getMaxCharsPerRequest();
@@ -559,15 +591,18 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
     },
   });
 
-  if (typeof nextDuration === "number") {
+  // Only update track durations in bulk for single-chunk jobs.
+  // Multi-chunk jobs store per-chapter durations during TTS; overwriting with job.durationSec would corrupt them.
+  if (!isMultiChunk && typeof nextDuration === "number") {
     await prisma.track.updateMany({
       where: { jobId: id },
       data: { durationSeconds: nextDuration },
     });
   }
 
-  /* 👇 falls noch kein Track zu diesem Audio existiert, einen anlegen */
-  try {
+  /* 👇 Single-chunk only: create/update the track record if missing.
+     Multi-chunk jobs: tracks are fully managed by the upsert loop above. */
+  if (!isMultiChunk) { try {
     const url = updated.resultUrl ?? null;
     if (url) {
       const existing = await prisma.track.findFirst({
@@ -604,7 +639,7 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
     }
   } catch {
     // Track-Erstellung darf den Job-Abschluss nicht scheitern lassen
-  }
+  } }
 console.log("[SLEEP-STORY CHECK]", {
   jobId: job.id,
   preset: job.preset,
@@ -627,5 +662,5 @@ console.log("[SLEEP-STORY CHECK]", {
     reqId,
   });
 
-  return jsonOk(updated, 200);
+  return jsonOk({ ...updated, kidsSafetyApplied }, 200);
 }

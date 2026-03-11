@@ -51,13 +51,19 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
 }
 
+function formatSec(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return s > 0 ? `${m}m ${s}s` : `${m}m`;
+}
+
 export default function GenerateClient() {
   const [preset, setPreset] = useState<string>(PRESETS[0].id);
   const [title, setTitle] = useState("");
   const [rawPrompt, setRawPrompt] = useState("");
   const [improvedPrompt, setImprovedPrompt] = useState<string | null>(null);
   const [isImproving, setIsImproving] = useState(false);
-  const [durationSec, setDurationSec] = useState<number | "">("");
+  const [durationMin, setDurationMin] = useState<number | "">("");
   const [job, setJob] = useState<Job | null>(null);
   const [polling, setPolling] = useState(false);
   const [jobList, setJobList] = useState<Job[]>([]);
@@ -303,8 +309,8 @@ export default function GenerateClient() {
   voiceGender,
 };
 
-    if (typeof durationSec === "number" && !Number.isNaN(durationSec)) {
-      body.durationSec = durationSec;
+    if (typeof durationMin === "number" && !Number.isNaN(durationMin)) {
+      body.durationSec = durationMin * 60;
     }
 
     const res = await fetch("/api/jobs", {
@@ -401,6 +407,11 @@ if (!accountSummary?.isAdmin) {
 
     if (completed) {
       setJob(completed);
+      setPolling(false);
+      void loadJobs(0);
+      if ((completed as Record<string, unknown>).kidsSafetyApplied) {
+        showToast("Dein Inhalt wurde für Kids Story angepasst.", "info", 5000);
+      }
 
       // 🔹 WICHTIG: Track-Titel nachziehen / updaten
       const trimmedTitle = title.trim();
@@ -870,24 +881,24 @@ onChange={(e) => setVoiceStyle(e.target.value as "soft" | "whisper")}
             {/* Dauer */}
             <div>
               <label className="sv-label">
-                Dauer (Sekunden){" "}
+                Dauer (Minuten){" "}
                 <span style={{ opacity: 0.5 }}>(optional)</span>
               </label>
               <input
                 type="number"
-                min={30}
-                max={1800}
+                min={1}
+                max={30}
                 className="sv-input"
-                value={durationSec}
+                value={durationMin}
                 onChange={(e) => {
                   const v = e.target.value;
                   if (v === "") {
-                    setDurationSec("");
+                    setDurationMin("");
                   } else {
-                    setDurationSec(Number(v));
+                    setDurationMin(Number(v));
                   }
                 }}
-                placeholder="z. B. 120"
+                placeholder="z. B. 10"
               />
               <p
                 style={{
@@ -896,7 +907,7 @@ onChange={(e) => setVoiceStyle(e.target.value as "soft" | "whisper")}
                   marginTop: 4,
                 }}
               >
-                30–1800 Sekunden.
+                1–30 Minuten.
               </p>
             </div>
 
@@ -1065,7 +1076,7 @@ onChange={(e) => setVoiceStyle(e.target.value as "soft" | "whisper")}
                     >
                       {j.preset || "—"}
                       {j.language ? ` · ${j.language.toUpperCase()}` : ""}
-                      {j.durationSec ? ` · ${j.durationSec}s` : ""}
+                      {j.durationSec ? ` · ${formatSec(j.durationSec)}` : ""}
                       {j.createdAt
                         ? ` · ${new Date(j.createdAt).toLocaleString(
                             "de-DE"
@@ -1214,7 +1225,7 @@ function StatusCard({
             opacity: 0.75,
           }}
         >
-          Dauer: {job.durationSec}s
+          Dauer: {formatSec(job.durationSec)}
         </p>
       ) : null}
       {job.status === "DONE" && job.resultUrl && (

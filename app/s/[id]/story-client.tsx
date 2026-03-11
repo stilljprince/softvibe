@@ -164,7 +164,7 @@ export default function StoryClient({ storyId }: { storyId: string }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const wasPlayingRef = useRef(false);
   const [progress, setProgress] = useState(0);
-  const rafRef = useRef<number | null>(null);
+  const scrubDraggingRef = useRef(false);
 
   // UI auto-hide
   const [controlsVisible, setControlsVisible] = useState(true);
@@ -267,6 +267,7 @@ useEffect(() => {
     const onPause = () => setIsPlaying(false);
     const onEnded = () => {
       setIsPlaying(false);
+      setProgress(0);
       if (activeIdx < chapters.length - 1) {
         wasPlayingRef.current = true;
         setActiveIdx((i) => Math.min(i + 1, chapters.length - 1));
@@ -313,31 +314,19 @@ useEffect(() => {
 
 
 
-  // Progress loop
+  // Progress tracking via timeupdate — driven by the audio element directly,
+  // not by isPlaying state. Immune to chapter-switch state sync races.
   useEffect(() => {
-    const loop = () => {
-      const a = audioRef.current;
-      if (a && a.duration && !Number.isNaN(a.duration) && a.duration > 0) {
+    const a = audioRef.current;
+    if (!a) return;
+    const onTimeUpdate = () => {
+      if (a.duration && !Number.isNaN(a.duration) && a.duration > 0) {
         setProgress(Math.max(0, Math.min(a.currentTime / a.duration, 1)));
-      } else {
-        setProgress(0);
       }
-      if (isPlaying) rafRef.current = window.requestAnimationFrame(loop);
     };
-
-    if (isPlaying) {
-      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-      rafRef.current = window.requestAnimationFrame(loop);
-    } else {
-      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-    }
-
-    return () => {
-      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-    };
-  }, [isPlaying]);
+    a.addEventListener("timeupdate", onTimeUpdate);
+    return () => a.removeEventListener("timeupdate", onTimeUpdate);
+  }, []);
 
   const togglePlayPause = () => {
     const a = audioRef.current;
@@ -744,6 +733,68 @@ overscrollBehavior: "contain",
               <div style={{ color: themeCfg.uiSoftText, padding: "10px 6px" }}>Keine Kapitel gefunden.</div>
             )}
           </div>
+        </div>
+      </div>
+
+      {/* Thin scrub bar — 12px hit target, 3px visual, auto-hides with controls */}
+      <div
+        style={{
+          position: "fixed",
+          bottom: 4,
+          left: 0,
+          right: 0,
+          height: 12,
+          cursor: "pointer",
+          zIndex: 19,
+          opacity: controlsVisible ? 1 : 0,
+          pointerEvents: controlsVisible ? "auto" : "none",
+          transition: "opacity 300ms ease-out",
+        }}
+        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          scrubDraggingRef.current = true;
+          const rect = e.currentTarget.getBoundingClientRect();
+          const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+          if (audioRef.current && Number.isFinite(audioRef.current.duration)) {
+            audioRef.current.currentTime = ratio * audioRef.current.duration;
+          }
+          const onMouseMove = (me: MouseEvent) => {
+            if (!scrubDraggingRef.current) return;
+            const r2 = Math.max(0, Math.min(1, (me.clientX - rect.left) / rect.width));
+            if (audioRef.current && Number.isFinite(audioRef.current.duration)) {
+              audioRef.current.currentTime = r2 * audioRef.current.duration;
+            }
+          };
+          const onMouseUp = () => {
+            scrubDraggingRef.current = false;
+            window.removeEventListener("mousemove", onMouseMove);
+            window.removeEventListener("mouseup", onMouseUp);
+          };
+          window.addEventListener("mousemove", onMouseMove);
+          window.addEventListener("mouseup", onMouseUp);
+        }}
+      >
+        {/* Track: absolute so left:0/right:0 guarantee full viewport width */}
+        <div
+          style={{
+            position: "absolute",
+            bottom: 0,
+            left: 0,
+            right: 0,
+            height: 3,
+            background: "rgba(255,255,255,0.07)",
+          }}
+        >
+          <div
+            style={{
+              height: "100%",
+              width: `${progress * 100}%`,
+              background: themeCfg.progressColor,
+              transition: scrubDraggingRef.current ? "none" : "width 80ms linear",
+            }}
+          />
         </div>
       </div>
 

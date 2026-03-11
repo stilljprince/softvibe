@@ -86,6 +86,7 @@ export default function TrackPage({
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0); // 0..1
   const rafRef = useRef<number | null>(null);
+  const scrubDraggingRef = useRef(false);
 
   // UI auto-hide
   const [controlsVisible, setControlsVisible] = useState(true);
@@ -512,6 +513,68 @@ export default function TrackPage({
               </button>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* Thin scrub bar — 12px hit target, 3px visual, auto-hides with controls */}
+      <div
+        style={{
+          position: "fixed",
+          bottom: 4,
+          left: 0,
+          right: 0,
+          height: 12,
+          cursor: "pointer",
+          zIndex: 25,
+          opacity: controlsVisible ? 1 : 0,
+          pointerEvents: controlsVisible ? "auto" : "none",
+          transition: "opacity 300ms ease-out",
+        }}
+        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          scrubDraggingRef.current = true;
+          const rect = e.currentTarget.getBoundingClientRect();
+          const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+          if (audioRef.current && Number.isFinite(audioRef.current.duration)) {
+            audioRef.current.currentTime = ratio * audioRef.current.duration;
+          }
+          const onMouseMove = (me: MouseEvent) => {
+            if (!scrubDraggingRef.current) return;
+            const r2 = Math.max(0, Math.min(1, (me.clientX - rect.left) / rect.width));
+            if (audioRef.current && Number.isFinite(audioRef.current.duration)) {
+              audioRef.current.currentTime = r2 * audioRef.current.duration;
+            }
+          };
+          const onMouseUp = () => {
+            scrubDraggingRef.current = false;
+            window.removeEventListener("mousemove", onMouseMove);
+            window.removeEventListener("mouseup", onMouseUp);
+          };
+          window.addEventListener("mousemove", onMouseMove);
+          window.addEventListener("mouseup", onMouseUp);
+        }}
+      >
+        {/* Track: absolute so left:0/right:0 guarantee full viewport width */}
+        <div
+          style={{
+            position: "absolute",
+            bottom: 0,
+            left: 0,
+            right: 0,
+            height: 3,
+            background: "rgba(255,255,255,0.07)",
+          }}
+        >
+          <div
+            style={{
+              height: "100%",
+              width: `${progress * 100}%`,
+              background: themeCfg.progressColor,
+              transition: scrubDraggingRef.current ? "none" : "width 80ms linear",
+            }}
+          />
         </div>
       </div>
 

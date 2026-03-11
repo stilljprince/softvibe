@@ -12,25 +12,15 @@ function clampTarget(target?: number): number {
 }
 
 function wordTargetFor(preset: ScriptPreset, durationSec: number): number {
-  // Sleep story eher 130–160 wpm → 2.2–2.7 wps
-  // aber wir nehmen einen festen Sicherheitsaufschlag, damit es nicht zu kurz wird.
+  // Calibrated to observed ElevenLabs output rate (~1.85 wps measured from smoke tests).
+  // Slightly above measured rate to account for natural variation.
   const wps =
-    preset === "sleep-story" ? 2.6
-    : preset === "classic-asmr" ? 2.1
+    preset === "sleep-story" ? 1.9
+    : preset === "classic-asmr" ? 2.2
     : preset === "kids-story" ? 2.0
-    : 2.0;
+    : 1.8; // meditation
 
-  const base = Math.round(durationSec * wps);
-
-  // Safety: sleep-story nie unter Mindestwortzahl
-  if (preset === "sleep-story") {
-    return Math.max(base, 1400); // für 10 Min: ~1560, Minimum 1400
-  }
-  // kids-story: gentler minimum (shorter stories are fine)
-  if (preset === "kids-story") {
-    return Math.max(base, 300);
-  }
-  return base;
+  return Math.round(durationSec * wps);
 }
 
 export async function buildScriptOpenAI(input: ScriptInput & { language: "de" | "en" }): Promise<{ finalText: string }> {
@@ -80,6 +70,7 @@ CRITICAL RULES:
 - Allow pauses by using line breaks, not punctuation spam.
 - No filler loops. No coaching phrases.
 - Do NOT include bracket tags like [whispers], [softly], etc.
+- Do NOT use named copyrighted characters, franchises, or IP (e.g. Disney, Marvel, Pokémon, Paw Patrol). Create original characters and settings.
 
 OUTPUT FORMAT:
 Return ONLY valid JSON: {"finalText": "..."}.
@@ -185,11 +176,11 @@ ${userPrompt}
 
 Length requirements (VERY IMPORTANT):
 - Target length: ${wordTarget} words (±5%).
-- If you are unsure, write LONGER rather than shorter.
-- Do NOT end early.
+- Match the word target as precisely as possible. Do not write more or fewer words than specified.
+- If the story structure requires a few extra words to close naturally, that is acceptable.
+- Do NOT end early. You MUST write the full ${wordTarget} words before finishing.
 - The story MUST contain a clear beginning, middle, and a gentle ending.
 - Keep continuity: names, places, objects must remain consistent.
-- Minimum length: ${Math.round(wordTarget * 5)} characters (approx).
 
 Formatting rules:
 - Do NOT use ellipses (...) or the single-character ellipsis (…).
@@ -200,8 +191,13 @@ Write a complete, spoken script.
 Return ONLY JSON.
 `.trim();
 
+  // Allow ~2 tokens per word + 256 overhead for JSON wrapper.
+  // This prevents the model from truncating long scripts mid-generation.
+  const maxOutputTokens = Math.min(16000, wordTarget * 2 + 256);
+
   const resp = await openai.responses.create({
   model: process.env.OPENAI_SCRIPT_MODEL ?? "gpt-4o-mini",
+  max_output_tokens: maxOutputTokens,
   input: [
     { role: "system", content: system },
     { role: "user", content: user },
