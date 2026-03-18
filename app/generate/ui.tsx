@@ -6,13 +6,15 @@ import Link from "next/link";
 import Image from "next/image";
 import type React from "react";
 
-import CustomPlayer from "@/app/components/CustomPlayer";
+import { useSVTheme, SVCard, type ThemeConfig } from "@/app/components/sv-kit";
+import SVScene from "@/app/components/sv-scene";
+import { usePlayer } from "@/app/components/player-context";
 
 const PRESETS = [
-  { id: "classic-asmr", label: "Classic ASMR",  desc: "Whisper · Tapping" },
-  { id: "sleep-story",  label: "Sleep Story",   desc: "Calm · Slow" },
-  { id: "meditation",   label: "Meditation",    desc: "Breath · Soft Tone" },
-  { id: "kids-story",   label: "Kids Story",    desc: "Gentle · Safe" },
+  { id: "sleep-story",  label: "Sleep Story",  desc: "Calm · Slow" },
+  { id: "kids-story",   label: "Kids Story",   desc: "Gentle · Safe" },
+  { id: "classic-asmr", label: "Classic ASMR", desc: "Whisper · Tapping" },
+  { id: "meditation",   label: "Meditation",   desc: "Breath · Soft Tone" },
 ];
 
 type JobStatus = "QUEUED" | "PROCESSING" | "DONE" | "FAILED";
@@ -26,8 +28,8 @@ type Job = {
   preset?: string | null;
   durationSec?: number | null;
   createdAt?: string;
-  title?: string | null; // 👈 dazu
-  language?: "de" | "en" | null; // ✅ neu
+  title?: string | null;
+  language?: "de" | "en" | null;
   storyId?: string | null;
   chapterCount?: number | null;
 };
@@ -38,11 +40,8 @@ type AccountSummary = {
   hasSubscription: boolean;
 };
 
-type Theme = "light" | "dark" | "pastel";
-
 const PAGE_SIZE = 10;
 
-// API-Shape für /api/account/credits
 type CreditsResponse =
   | { credits: number }
   | { ok: true; data: { credits: number } };
@@ -73,11 +72,23 @@ export default function GenerateClient() {
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [voiceStyle, setVoiceStyle] = useState<"soft" | "whisper">("soft");
   const [voiceGender, setVoiceGender] = useState<"female" | "male">("female");
-
-  // Credits aus eigener API; verwenden wir bevorzugt im Header
   const [credits, setCredits] = useState<number | null>(null);
-
   const [language, setLanguage] = useState<"de" | "en">("de");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<"list" | "grid">("list");
+  const [openJobMenu, setOpenJobMenu] = useState<string | null>(null);
+
+  // Global player
+  const { loadTrack } = usePlayer();
+
+  // Theme — shared with player pages
+  const { themeKey, themeCfg, cycleTheme, logoSrc } = useSVTheme();
+
+  // Keep CSS variable classes in sync so sv-btn / sv-input / sv-label CSS classes still work
+  useEffect(() => {
+    document.documentElement.className = themeKey;
+  }, [themeKey]);
+
   // ---------- Toast ----------
   const [toast, setToast] = useState<{ msg: string; kind?: "ok" | "err" | "info" } | null>(null);
   const [retryLeft, setRetryLeft] = useState<number | null>(null);
@@ -169,14 +180,8 @@ export default function GenerateClient() {
     const titleOk = title.trim().length >= 3;
     const promptOk = rawPrompt.trim().length >= 3;
     if (!titleOk || !promptOk) return false;
-
-    // Wenn wir noch keine Summary haben (lädt), Button nicht blocken
     if (!accountSummary) return true;
-
-    // Admin darf immer
     if (accountSummary.isAdmin) return true;
-
-    // Normale User brauchen Credits > 0
     return accountSummary.credits > 0;
   }, [title, rawPrompt, accountSummary]);
 
@@ -196,12 +201,9 @@ export default function GenerateClient() {
 
       let value: number | null = null;
 
-      // Variante 1: { credits: number }
       if (isRecord(raw) && typeof raw.credits === "number") {
         value = raw.credits;
-      }
-      // Variante 2: { ok:true, data:{ credits:number } }
-      else if (
+      } else if (
         isRecord(raw) &&
         "data" in raw &&
         isRecord((raw as { data?: unknown }).data) &&
@@ -214,7 +216,7 @@ export default function GenerateClient() {
         setCredits(value);
       }
     } catch {
-      // Fehler still ignorieren, UI bleibt wie vorher
+      // ignore
     }
   }
 
@@ -225,9 +227,7 @@ export default function GenerateClient() {
         const res = await fetch("/api/account/summary");
         if (!res.ok) throw new Error(String(res.status));
         const data = await res.json();
-        // Backend gibt { ok:true, data:{ credits, isAdmin, hasSubscription } }
         const payload = (data && data.data) || data;
-
         setAccountSummary({
           credits: typeof payload.credits === "number" ? payload.credits : 0,
           isAdmin: !!payload.isAdmin,
@@ -242,7 +242,6 @@ export default function GenerateClient() {
     void loadSummary();
   }, []);
 
-  // Hilfs-Normalizer für Responses (unterstützt Array oder {data:[...]})
   function extractList<T>(json: unknown): T[] {
     if (Array.isArray(json)) return json as T[];
     if (json && typeof json === "object") {
@@ -272,14 +271,12 @@ export default function GenerateClient() {
         credentials: "include",
       });
       if (!res.ok) {
-        // z. B. 401 → leer rendern
         setJobList(skip === 0 ? [] : (prev) => prev);
         setHasMore(false);
         return;
       }
       const json = await res.json().catch(() => null);
       const list = extractList<Job>(json);
-
       if (skip === 0) {
         setJobList(list);
       } else {
@@ -291,23 +288,23 @@ export default function GenerateClient() {
     }
   }
 
-      async function createJob() {
-   const body: {
-  title: string;
-  preset: string;
-  prompt: string;
-  language: "de" | "en";
-  durationSec?: number;
-  voiceStyle: "soft" | "whisper";
-  voiceGender: "female" | "male";
-} = {
-  title: title.trim().length > 0 ? title.trim() : "",
-  preset,
-  prompt: rawPrompt,
-  language,
-  voiceStyle,
-  voiceGender,
-};
+  async function createJob() {
+    const body: {
+      title: string;
+      preset: string;
+      prompt: string;
+      language: "de" | "en";
+      durationSec?: number;
+      voiceStyle: "soft" | "whisper";
+      voiceGender: "female" | "male";
+    } = {
+      title: title.trim().length > 0 ? title.trim() : "",
+      preset,
+      prompt: rawPrompt,
+      language,
+      voiceStyle,
+      voiceGender,
+    };
 
     if (typeof durationMin === "number" && !Number.isNaN(durationMin)) {
       body.durationSec = durationMin * 60;
@@ -321,7 +318,6 @@ export default function GenerateClient() {
     });
 
     if (res.status === 429) {
-      // Retry-After lesen (Sekunden)
       const ra = res.headers.get("Retry-After");
       const secsFromHeader = ra ? Number(ra) : NaN;
       let fallbackSeconds = 30;
@@ -337,17 +333,14 @@ export default function GenerateClient() {
       } catch {
         /* ignore */
       }
-
       const seconds =
         Number.isFinite(secsFromHeader) && secsFromHeader > 0
           ? Math.floor(secsFromHeader)
           : fallbackSeconds;
-
       startRetryCountdown(seconds);
       return;
     }
 
-    // 🔹 Speziell: keine Credits
     if (res.status === 402) {
       let msg = "Du hast keine Credits mehr. Bitte lade Credits nach.";
       try {
@@ -357,8 +350,6 @@ export default function GenerateClient() {
         /* ignore */
       }
       showToast(msg, "err");
-
-      // Credits im Frontend sicher auf 0 setzen
       setAccountSummary((prev) =>
         prev && !prev.isAdmin ? { ...prev, credits: 0 } : prev
       );
@@ -375,9 +366,8 @@ export default function GenerateClient() {
     setJob(data);
     setPolling(true);
     void loadJobs(0);
-    void refreshCredits(); // 👈 Credits nach Abbuchung neu holen
+    void refreshCredits();
 
-    // 🔹 Credits lokal runterzählen (1 Credit pro Job)
     setAccountSummary((prev) => {
       if (!prev || prev.isAdmin) return prev;
       const nextCredits = Math.max(0, prev.credits - 1);
@@ -386,107 +376,97 @@ export default function GenerateClient() {
 
     showToast("Job erstellt.", "ok");
 
-        // 🔹 NEU: Für Nicht-Admins Job direkt „abschließen“ (Worker simulieren)
-if (!accountSummary?.isAdmin) {
-  try {
-    const completeRes = await fetch(`/api/jobs/${data.id}/complete`, {
-      method: "POST",
-      credentials: "include",
-    });
-
-    if (!completeRes.ok) {
-      console.error(
-        "Auto-Complete für Job fehlgeschlagen:",
-        completeRes.status
-      );
-      return;
-    }
-
-    const rawComplete: unknown = await completeRes.json().catch(() => null);
-    const completed = extractItem<Job>(rawComplete);
-
-    if (completed) {
-      setJob(completed);
-      setPolling(false);
-      void loadJobs(0);
-      if ((completed as Record<string, unknown>).kidsSafetyApplied) {
-        showToast("Dein Inhalt wurde für Kids Story angepasst.", "info", 5000);
-      }
-
-      // 🔹 WICHTIG: Track-Titel nachziehen / updaten
-      const trimmedTitle = title.trim();
-
+    if (!accountSummary?.isAdmin) {
       try {
-        await fetch("/api/tracks", {
+        const completeRes = await fetch(`/api/jobs/${data.id}/complete`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
           credentials: "include",
-          body: JSON.stringify({
-            jobId: completed.id,
-            // nur senden, wenn wirklich etwas eingetragen wurde
-            title: trimmedTitle.length > 0 ? trimmedTitle : undefined,
-          }),
         });
-        // Fehler hier sind nicht kritisch – Track existiert trotzdem,
-        // nur der Titel bleibt dann halt wie vorher.
-      } catch (e) {
-        console.error("Track-Titel konnte nicht gesetzt werden:", e);
+
+        if (!completeRes.ok) {
+          console.error("Auto-Complete für Job fehlgeschlagen:", completeRes.status);
+          return;
+        }
+
+        const rawComplete: unknown = await completeRes.json().catch(() => null);
+        const completed = extractItem<Job>(rawComplete);
+
+        if (completed) {
+          setJob(completed);
+          setPolling(false);
+          void loadJobs(0);
+          if ((completed as Record<string, unknown>).kidsSafetyApplied) {
+            showToast("Dein Inhalt wurde für Kids Story angepasst.", "info", 5000);
+          }
+
+          const trimmedTitle = title.trim();
+
+          // Load the finished audio into the global bottom player
+          if (completed.resultUrl) {
+            loadTrack(
+              completed.resultUrl,
+              trimmedTitle.length > 0 ? trimmedTitle : displayJobTitle(completed),
+              completed.id,
+            );
+          }
+
+          try {
+            await fetch("/api/tracks", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              credentials: "include",
+              body: JSON.stringify({
+                jobId: completed.id,
+                title: trimmedTitle.length > 0 ? trimmedTitle : undefined,
+              }),
+            });
+          } catch (e) {
+            console.error("Track-Titel konnte nicht gesetzt werden:", e);
+          }
+        }
+      } catch (err) {
+        console.error("Fehler beim Auto-Complete:", err);
       }
     }
-  } catch (err) {
-    console.error("Fehler beim Auto-Complete:", err);
-  }
-}
   }
 
- // Polling
-useEffect(() => {
-  if (!job || !polling) return;
+  useEffect(() => {
+    if (!job || !polling) return;
 
-  const intervalId = window.setInterval(async () => {
-    const res = await fetch(`/api/jobs/${job.id}`, {
-      credentials: "include",
-    });
-    if (!res.ok) return;
+    const intervalId = window.setInterval(async () => {
+      const res = await fetch(`/api/jobs/${job.id}`, { credentials: "include" });
+      if (!res.ok) return;
 
-    const fresh = await res.json().catch(() => null);
-    const next = extractItem<Job>(fresh);
-    if (!next) return;
+      const fresh = await res.json().catch(() => null);
+      const next = extractItem<Job>(fresh);
+      if (!next) return;
 
-    setJob(next);
+      setJob(next);
 
-    // 🔹 Sobald der Job fertig ist, Track-Titel nachziehen
-    if (next.status === "DONE") {
-      const trimmedTitle = title.trim();
-
-      if (trimmedTitle.length > 0) {
-        try {
-          await fetch("/api/tracks", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            credentials: "include",
-            body: JSON.stringify({
-              jobId: next.id,
-              title: trimmedTitle,
-            }),
-          });
-          // /api/tracks:
-          // - legt neuen Track an ODER
-          // - updated bestehenden Track-Titel auf trimmedTitle
-        } catch (e) {
-          console.error("Konnte Track-Titel nach Abschluss nicht setzen:", e);
+      if (next.status === "DONE") {
+        const trimmedTitle = title.trim();
+        if (trimmedTitle.length > 0) {
+          try {
+            await fetch("/api/tracks", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              credentials: "include",
+              body: JSON.stringify({ jobId: next.id, title: trimmedTitle }),
+            });
+          } catch (e) {
+            console.error("Konnte Track-Titel nach Abschluss nicht setzen:", e);
+          }
         }
       }
-    }
 
-    if (next.status === "DONE" || next.status === "FAILED") {
-      setPolling(false);
-      void loadJobs(0);
-    }
-  }, 2000);
+      if (next.status === "DONE" || next.status === "FAILED") {
+        setPolling(false);
+        void loadJobs(0);
+      }
+    }, 2000);
 
-  return () => window.clearInterval(intervalId);
-}, [job, polling, title]);
+    return () => window.clearInterval(intervalId);
+  }, [job, polling, title]);
 
   async function deleteJob(id: string) {
     const res = await fetch(`/api/jobs/${id}`, {
@@ -502,7 +482,21 @@ useEffect(() => {
     }
   }
 
-  // Credits-Anzeige im Header (aktuell ungenutzt, aber lassen wir für später drin)
+  useEffect(() => {
+    let current: HTMLAudioElement | null = null;
+    const handlePlay = (event: Event) => {
+      const target = event.target as HTMLAudioElement | null;
+      if (!target || target.tagName !== "AUDIO") return;
+      if (current && current !== target && !current.paused) current.pause();
+      current = target;
+    };
+    document.addEventListener("play", handlePlay, true);
+    return () => {
+      document.removeEventListener("play", handlePlay, true);
+      current = null;
+    };
+  }, []);
+
   const effectiveCredits =
     accountSummary?.isAdmin
       ? null
@@ -521,661 +515,856 @@ useEffect(() => {
       ? "…"
       : "–";
 
-  // ===== Theme + Header wie Landing =====
-  const [theme, setTheme] = useState<Theme>("light");
-  useEffect(() => {
-    const saved = (localStorage.getItem("theme") as Theme | null) ?? "light";
-    document.documentElement.className = saved;
-    setTheme(saved);
-  }, []);
-  useEffect(() => {
-    document.documentElement.className = theme;
-    localStorage.setItem("theme", theme);
-  }, [theme]);
-  const nextTheme: Record<Theme, Theme> = {
-    light: "dark",
-    dark: "pastel",
-    pastel: "light",
+  const isAdmin = accountSummary?.isAdmin === true;
+
+  const displayJobTitle = (j: Job): string => {
+    const anyJob = j as unknown as { title?: string | null };
+    const raw = (anyJob.title ?? j.prompt ?? "").trim();
+    if (raw.length === 0) return "(ohne Titel)";
+    return raw.length > 120 ? raw.slice(0, 117) + "…" : raw;
   };
-  const getThemeIcon = () =>
-    theme === "light" ? "🌞" : theme === "dark" ? "🌙" : "🎨";
-  const handleToggleTheme = () => setTheme(nextTheme[theme]);
-  const getLogo = () =>
-    theme === "light"
-      ? "/softvibe-logo-light.svg"
-      : theme === "dark"
-      ? "/softvibe-logo-dark.svg"
-      : "/softvibe-logo-pastel.svg";
 
-  // 🔹 Globaler Audio-Guard: nur ein <audio> gleichzeitig auf der Seite
-  useEffect(() => {
-    let current: HTMLAudioElement | null = null;
+  const isSubmitDisabled = !canSubmit || (typeof retryLeft === "number" && retryLeft > 0);
 
-    const handlePlay = (event: Event) => {
-      const target = event.target as HTMLAudioElement | null;
-      if (!target || target.tagName !== "AUDIO") return;
-
-      if (current && current !== target && !current.paused) {
-        current.pause();
-      }
-      current = target;
+  // glassPanel — matches Home page exactly (no borderRadius — add it at use site)
+  const glassPanel = useMemo((): React.CSSProperties => {
+    const isDark = themeKey === "dark";
+    return {
+      background: isDark ? "rgba(15,23,42,0.52)" : "rgba(248,250,252,0.62)",
+      border: isDark ? "1px solid rgba(148,163,184,0.22)" : "1px solid rgba(148,163,184,0.28)",
+      color: themeCfg.uiText,
+      backdropFilter: "blur(18px)",
+      WebkitBackdropFilter: "blur(18px)",
+      boxShadow: isDark ? "0 26px 80px rgba(0,0,0,0.55)" : "0 22px 60px rgba(15,23,42,0.25)",
     };
+  }, [themeKey, themeCfg.uiText]);
 
-    document.addEventListener("play", handlePlay, true); // capture-Phase
-
-    return () => {
-      document.removeEventListener("play", handlePlay, true);
-      current = null;
-    };
-  }, []);
-
-                                                            const isAdmin = accountSummary?.isAdmin === true;
-                                                              const displayJobTitle = (j: Job): string => {
-                                                            // Falls der Job vom Backend schon ein title-Feld hat, dieses nehmen,
-                                                            // sonst Prompt, sonst Fallback
-                                                            const anyJob = j as unknown as { title?: string | null };
-                                                            const raw = (anyJob.title ?? j.prompt ?? "").trim();
-                                                            if (raw.length === 0) return "(ohne Titel)";
-                                                            // Optional leicht begrenzen, damit der Header nicht explodiert:
-                                                            return raw.length > 120 ? raw.slice(0, 117) + "…" : raw;
-                                                          };
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        background: "var(--color-bg)",
-        paddingTop: 64,
-        width: "100%",
-      }}
-    >
-      {/* ===== Header wie Account/Landing ===== */}
-      <header
-        style={{
-          position: "fixed",
-          top: 0,
-          left: 0,
-          right: 0,
-          zIndex: 100,
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          padding: "0.6rem 1.5rem",
-          background: "color-mix(in oklab, var(--color-bg) 90%, transparent)",
-          backdropFilter: "blur(10px)",
-        }}
-      >
-        <div style={{ flex: "0 0 auto" }}>
-          <Image
-            src={getLogo()}
-            alt="SoftVibe Logo"
-            width={160}
-            height={50}
-            priority
-          />
-        </div>
-
-        <nav
-          className="desktop-nav"
+    <SVScene theme={themeKey}>
+      <style>{`.sv-no-spinner::-webkit-outer-spin-button,.sv-no-spinner::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}.sv-no-spinner{-moz-appearance:textfield}`}</style>
+      <main style={{ color: themeCfg.uiText, minHeight: "100vh", overflowX: "hidden" }}>
+        {/* ===== Header — floating inset, matches Home exactly ===== */}
+        <header
           style={{
-            position: "absolute",
-            left: "50%",
-            top: "50%",
-            transform: "translate(-50%, -50%)",
+            position: "fixed",
+            top: 18,
+            left: 18,
+            right: 18,
+            zIndex: 30,
             display: "flex",
-            gap: "1rem",
+            justifyContent: "space-between",
+            alignItems: "center",
+            pointerEvents: "auto",
           }}
         >
-          <Link href="/#features" style={navLinkStyle}>
-            Features
-          </Link>
-          <Link href="/#about" style={navLinkStyle}>
-            Über uns
-          </Link>
-          <Link href="/#contact" style={navLinkStyle}>
-            Kontakt
-          </Link>
-          <Link href="/" style={navLinkStyle}>
-            Startseite
-          </Link>
-        </nav>
-
-        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                {/* Credits im Header – direkt aus State, immer synchron mit unten */}
-                <div
-                  style={{
-                    minWidth: 60,
-                    textAlign: "center",
-                    padding: "0.3rem 0.7rem",
-                    borderRadius: 999,
-                    border: "1px solid var(--color-nav-bg)",
-                    background: "var(--color-card)",
-                    fontSize: "0.8rem",
-                    fontWeight: 600,
-                    fontVariantNumeric: "tabular-nums",
-                  }}
-                  title="Verfügbare Credits"
-                >
-                  {accountSummary?.isAdmin ? "∞ Credits" : `${creditsLabel} Credits`}
-                </div>
-
+          {/* Logo — clicking cycles the theme */}
           <button
-            onClick={handleToggleTheme}
-            style={{
-              width: 40,
-              height: 40,
-              borderRadius: "50%",
-              background: "var(--color-button-bg)",
-              color: "var(--color-button-text)",
-              border: "none",
-              display: "grid",
-              placeItems: "center",
-              cursor: "pointer",
-              fontSize: "1.25rem",
-            }}
+            type="button"
+            onClick={cycleTheme}
+            style={{ border: "none", background: "transparent", padding: 0, cursor: "pointer" }}
             aria-label="Theme wechseln"
             title="Theme wechseln"
           >
-            {getThemeIcon()}
+            <Image src={logoSrc} alt="SoftVibe Logo" width={160} height={50} priority />
           </button>
 
-          <form action="/api/auth/signout" method="post">
-            <button
-              type="submit"
-              style={{
-                background: "var(--color-accent)",
-                color: "#fff",
-                border: "none",
-                borderRadius: 999,
-                padding: "0.4rem 0.9rem",
-                fontWeight: 600,
-                cursor: "pointer",
-              }}
-            >
-              Logout
-            </button>
-          </form>
-        </div>
-
-        <style jsx>{`
-          @media (max-width: 880px) {
-            .desktop-nav {
-              display: none !important;
-            }
-          }
-        `}</style>
-      </header>
-
-      {/* Inhalt */}
-      <div
-        style={{
-          width: "100%",
-          maxWidth: "min(840px, 100vw - 32px)",
-          margin: "40px auto",
-          padding: "0 16px",
-        }}
-      >
-        <h1
-          style={{
-            fontSize: "1.8rem",
-            fontWeight: 800,
-            marginBottom: 12,
-          }}
-        >
-          Generieren
-        </h1>
-
-        {/* Formular */}
-        <section
-          style={{
-            background: "var(--color-card)",
-            border: "1px solid var(--color-nav-bg)",
-            borderRadius: 16,
-            boxShadow: "0 10px 24px rgba(0,0,0,.06)",
-            padding: 16,
-          }}
-        >
-          <div style={{ display: "grid", gap: 12 }}>
-            <div>
-              <label className="sv-label">Preset</label>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                {PRESETS.map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    className={`sv-btn${preset === p.id ? " sv-btn--primary" : ""}`}
-                    onClick={() => setPreset(p.id)}
-                    style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", padding: "6px 14px" }}
-                  >
-                    <span style={{ fontWeight: 700, fontSize: "0.9rem" }}>{p.label}</span>
-                    <span style={{ fontSize: "0.72rem", opacity: 0.65, marginTop: 1 }}>{p.desc}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-
-<div>
-  <label className="sv-label">Voice Style</label>
-  <select
-    value={voiceStyle}
-onChange={(e) => setVoiceStyle(e.target.value as "soft" | "whisper")}
-    className="sv-input"
-  >
-    <option value="soft">Soft spoken (weniger Whisper)</option>
-    <option value="whisper">Full whisper (nah am Mikro)</option>
-  </select>
-</div>
-<div>
-  <label className="sv-label">Voice Gender</label>
-  <select
-    value={voiceGender}
-    onChange={(e) => setVoiceGender(e.target.value as "female" | "male")}
-    className="sv-input"
-  >
-    <option value="female">Female</option>
-    <option value="male">Male</option>
-  </select>
-</div>
-
- <div>
-    <label className="sv-label">Sprache</label>
-    <div style={{ display: "flex", gap: 8 }}>
-      <button
-        type="button"
-        className={`sv-btn ${language === "de" ? "sv-btn--primary" : ""}`}
-        onClick={() => setLanguage("de")}
-      >
-        Deutsch
-      </button>
-      <button
-        type="button"
-        className={`sv-btn ${language === "en" ? "sv-btn--primary" : ""}`}
-        onClick={() => setLanguage("en")}
-      >
-        English
-      </button>
-    </div>
-    <p style={{ fontSize: "0.75rem", opacity: 0.6, marginTop: 4 }}>
-      Test: gleiche Voice, aber anderes Script in DE/EN.
-    </p>
-  </div>
-
-            {/* 🔹 NEU: Titel */}
-            <div>
-              <label className="sv-label">
-                Titel{" "}
-                <span style={{ opacity: 0.5 }}>
-                  (wird in Bibliothek & Account angezeigt)
-                </span>
-              </label>
-              <input
-                className="sv-input"
-                type="text"
-                maxLength={140}
-                placeholder='z. B. "Soft whisper tapping – 10 min"'
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-              />
-            </div>
-
-            <div>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                <label className="sv-label" style={{ margin: 0 }}>Prompt</label>
-                <button
-                  type="button"
-                  className="sv-btn"
-                  style={{ fontSize: "0.78rem", padding: "3px 10px" }}
-                  onClick={() => void improvePrompt()}
-                  disabled={rawPrompt.trim().length < 3 || isImproving}
-                >
-                  {isImproving ? "…" : "Verbessern"}
-                </button>
-              </div>
-              <textarea
-                className="sv-input"
-                rows={4}
-                placeholder='Beschreibe, was du hören möchtest (z. B. "sanftes Flüstern…")'
-                value={rawPrompt}
-                onChange={(e) => setRawPrompt(e.target.value)}
-              />
-              {improvedPrompt !== null && (
-                <div
-                  style={{
-                    marginTop: 8,
-                    padding: "10px 12px",
-                    borderRadius: 10,
-                    border: "1px solid var(--color-nav-bg)",
-                    background: "color-mix(in oklab, var(--color-card) 92%, var(--color-accent))",
-                  }}
-                >
-                  <label className="sv-label" style={{ display: "block", marginBottom: 6 }}>
-                    Verbesserter Prompt{" "}
-                    <span style={{ fontWeight: 400, opacity: 0.55 }}>(bearbeitbar)</span>
-                  </label>
-                  <textarea
-                    className="sv-input"
-                    rows={3}
-                    value={improvedPrompt}
-                    onChange={(e) => setImprovedPrompt(e.target.value)}
-                  />
-                  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                    <button
-                      type="button"
-                      className="sv-btn sv-btn--primary"
-                      onClick={() => { setRawPrompt(improvedPrompt); setImprovedPrompt(null); }}
-                    >
-                      Übernehmen
-                    </button>
-                    <button
-                      type="button"
-                      className="sv-btn"
-                      onClick={() => setImprovedPrompt(null)}
-                    >
-                      Verwerfen
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Dauer */}
-            <div>
-              <label className="sv-label">
-                Dauer (Minuten){" "}
-                <span style={{ opacity: 0.5 }}>(optional)</span>
-              </label>
-              <input
-                type="number"
-                min={1}
-                max={30}
-                className="sv-input"
-                value={durationMin}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  if (v === "") {
-                    setDurationMin("");
-                  } else {
-                    setDurationMin(Number(v));
-                  }
-                }}
-                placeholder="z. B. 10"
-              />
-              <p
-                style={{
-                  fontSize: "0.75rem",
-                  opacity: 0.6,
-                  marginTop: 4,
-                }}
-              >
-                1–30 Minuten.
-              </p>
-            </div>
-
-            {accountSummary && !accountSummary.isAdmin && (
-              <p
-                style={{
-                  fontSize: "0.8rem",
-                  opacity: 0.75,
-                  marginTop: 4,
-                }}
-              >
-                Credits: <strong>{accountSummary.credits}</strong>
-                {accountSummary.credits <= 0 && (
-                  <>
-                    {" "}
-                    – keine Credits verfügbar.{" "}
-                    <Link
-                      href="/billing"
-                      style={{
-                        textDecoration: "underline",
-                        fontWeight: 600,
-                      }}
-                    >
-                      Credits aufladen
-                    </Link>
-                  </>
-                )}
-              </p>
-            )}
-
-                                    <div style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
-              {/* 🔹 Admins sehen weiterhin den Simulations-Button */}
-              {accountSummary?.isAdmin && (
-                <button
-                  className="sv-btn"
-                  type="button"
-                  onClick={async () => {
-                    if (!job) return;
-                    await fetch(`/api/jobs/${job.id}/complete`, {
-                      method: "POST",
-                      credentials: "include",
-                    });
-                    setPolling(true);
-                  }}
-                  disabled={!job || job.status === "DONE"}
-                >
-                  Simulation abschließen
-                </button>
-              )}
-
-              {/* 🔹 Haupt-CTA: Generieren (für alle) */}
-              <button
-                className="sv-btn sv-btn--primary"
-                type="button"
-                onClick={createJob}
-                disabled={!canSubmit || (typeof retryLeft === "number" && retryLeft > 0)}
-                title={
-                  typeof retryLeft === "number" && retryLeft > 0
-                    ? `Warte ${retryLeft}s…`
-                    : undefined
-                }
-              >
-                {typeof retryLeft === "number" && retryLeft > 0
-                  ? `Warte ${retryLeft}s…`
-                  : "Generieren"}
-              </button>
-            </div>
-          </div>
-        </section>
-
-        {/* Aktueller Job */}
-        {job && (
-                <section style={{ marginTop: 16 }}>
-                  <StatusCard
-                    job={job}
-                    isAdmin={!!accountSummary?.isAdmin}
-                    title={(() => {
-                      // 1) Bevorzugt immer das, was du im Titel-Input eingegeben hast
-                      const uiTitle = title.trim();
-                      if (uiTitle) return uiTitle;
-
-                      // 2) Falls aus irgendeinem Grund kein Input-Titel (z.B. alter Job):
-                      //    versuch aus dem Job-Objekt den Titel zu ziehen
-                      const anyJob = job as unknown as { title?: string | null };
-                      const jobTitle = anyJob.title?.trim();
-                      if (jobTitle) return jobTitle;
-
-                      // 3) Fallback: unsere kompakte Darstellung (Prompt o.Ä.)
-                      return displayJobTitle(job);
-                    })()}
-                  />
-                </section>
-              )}
-
-        {/* Liste */}
-        <section style={{ marginTop: 24 }}>
-          <div
+          {/* Home — absolutely centered in header */}
+          <Link
+            href="/"
+            title="Startseite"
             style={{
-              display: "flex",
+              position: "absolute",
+              left: "50%",
+              transform: "translateX(-50%)",
+              width: 40,
+              height: 40,
+              borderRadius: 999,
+              border: `1px solid ${themeCfg.secondaryButtonBorder}`,
+              background: themeCfg.secondaryButtonBg,
+              color: themeCfg.secondaryButtonText,
+              display: "inline-flex",
               alignItems: "center",
-              justifyContent: "space-between",
-              gap: 12,
-              marginBottom: 8,
+              justifyContent: "center",
+              textDecoration: "none",
+              boxShadow: "0 8px 20px rgba(0,0,0,0.2)",
+              flexShrink: 0,
             }}
           >
-            <h2 style={{ fontSize: "1.1rem", fontWeight: 700, margin: 0 }}>
-              Deine letzten Jobs
-            </h2>
-            <Link
-              href="/library"
+            <svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor">
+              <path d="M10 2.5L2 9h2.5v8.5h5V13h1v4.5h5V9H18L10 2.5z" />
+            </svg>
+          </Link>
+
+          {/* Menu — hover-based shared wrapper */}
+          <div
+            style={{ position: "relative" }}
+            onMouseEnter={() => setMenuOpen(true)}
+            onMouseLeave={() => setMenuOpen(false)}
+          >
+            <button
+              type="button"
               style={{
-                fontSize: "0.85rem",
-                fontWeight: 600,
-                textDecoration: "none",
-                padding: "0.4rem 0.85rem",
+                width: 40,
+                height: 40,
                 borderRadius: 999,
-                border: "1px solid var(--color-nav-bg)",
-                background: "var(--color-card)",
+                border: `1px solid ${themeCfg.secondaryButtonBorder}`,
+                background: themeCfg.secondaryButtonBg,
+                color: themeCfg.secondaryButtonText,
+                cursor: "pointer",
+                display: "grid",
+                placeItems: "center",
+                boxShadow: "0 10px 25px rgba(0,0,0,0.25)",
+                fontWeight: 900,
               }}
+              aria-label="Menü"
+              title="Menü"
             >
-              Zur Bibliothek →
-            </Link>
+              ☰
+            </button>
+
+            {menuOpen && (
+              <div
+                style={{
+                  position: "absolute",
+                  right: 0,
+                  top: "calc(100% + 8px)",
+                  zIndex: 90,
+                  width: "min(360px, calc(100vw - 28px))",
+                  padding: 2,
+                  borderRadius: 26,
+                  background:
+                    themeKey === "dark"
+                      ? "radial-gradient(circle at top, rgba(56,189,248,0.22), transparent 68%)"
+                      : "radial-gradient(circle at top, rgba(244,114,182,0.32), transparent 70%)",
+                  boxShadow: "0 26px 80px rgba(0,0,0,0.7)",
+                }}
+              >
+                <div style={{ ...glassPanel, padding: 16, borderRadius: 24 }}>
+                  {/* Header row */}
+                  <div style={{ fontSize: "0.8rem", letterSpacing: "0.14em", textTransform: "uppercase", fontWeight: 800, color: themeCfg.uiSoftText, marginBottom: 10 }}>
+                    Menü
+                  </div>
+
+                  {/* Credits */}
+                  <div style={{ fontSize: "0.78rem", color: themeCfg.uiSoftText, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
+                    {accountSummary?.isAdmin ? "∞ Credits" : `${creditsLabel} Credits`}
+                  </div>
+
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 14 }}>
+                    {[
+                      { label: "Features", href: "/#features" },
+                      { label: "Über SoftVibe", href: "/#about" },
+                      { label: "Kontakt", href: "/#contact" },
+                    ].map((x) => (
+                      <Link
+                        key={x.href}
+                        href={x.href}
+                        onClick={() => setMenuOpen(false)}
+                        style={{ ...pillStyle(themeCfg, "secondary"), width: "100%", textAlign: "left" as const, display: "block" }}
+                      >
+                        {x.label}
+                      </Link>
+                    ))}
+
+                    <div style={{ height: 1, background: "rgba(148,163,184,0.25)", margin: "4px 0" }} />
+
+                    <Link
+                      href="/library"
+                      onClick={() => setMenuOpen(false)}
+                      style={{ ...pillStyle(themeCfg, "secondary"), width: "100%", textAlign: "left" as const, display: "block" }}
+                    >
+                      Library
+                    </Link>
+
+                    <div style={{ height: 1, background: "rgba(148,163,184,0.25)", margin: "4px 0" }} />
+
+                    <form action="/api/auth/signout" method="post">
+                      <button
+                        type="submit"
+                        style={{ ...pillStyle(themeCfg, "secondary"), width: "100%", textAlign: "left" as const }}
+                      >
+                        Logout
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
-          {!Array.isArray(jobList) || jobList.length === 0 ? (
-            <p style={{ opacity: 0.7 }}>Noch keine Jobs gefunden.</p>
-          ) : (
-            <ul
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: 10,
-              }}
-            >
-              {jobList.map((j) => (
-                <li
-                  key={j.id}
-                  style={{
-                    background: "var(--color-card)",
-                    border: "1px solid var(--color-nav-bg)",
-                    borderRadius: 10,
-                    padding: "10px 12px",
-                    display: "flex",
-                    gap: 14,
-                    alignItems: "center",
-                  }}
-                >
-                  <div style={{ flex: "1 1 auto", minWidth: 0 }}>
-                    <div
-                      style={{
-                        fontWeight: 600,
-                        overflowWrap: "anywhere",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        display: "-webkit-box",
-                        WebkitLineClamp: 2,
-                        WebkitBoxOrient: "vertical",
-                      }}
-                    >
-                      {displayJobTitle(j)}
-                    </div>
-                    <div
-                      style={{
-                        fontSize: "0.75rem",
-                        opacity: 0.7,
-                      }}
-                    >
-                      {j.preset || "—"}
-                      {j.language ? ` · ${j.language.toUpperCase()}` : ""}
-                      {j.durationSec ? ` · ${formatSec(j.durationSec)}` : ""}
-                      {j.createdAt
-                        ? ` · ${new Date(j.createdAt).toLocaleString(
-                            "de-DE"
-                          )}`
-                        : ""}
-                      {typeof j.chapterCount === "number" && j.chapterCount > 1
-  ? ` · ${j.chapterCount} Kapitel`
-  : ""}  
-                        
+        </header>
+
+        {/* ===== Page Content — matches SVScene content structure ===== */}
+        <div style={{ position: "relative", zIndex: 10 }}>
+        <div
+          style={{
+            maxWidth: "min(980px, 100vw - 36px)",
+            margin: "0 auto",
+            padding: "88px 18px 100px",
+          }}
+        >
+          {/* ===== Generation Card ===== */}
+          <div style={{ padding: "0 4px" }}>
+            {/* Card hero — left-aligned title + subtitle */}
+            <div style={{ textAlign: "left", marginBottom: 32 }}>
+              <h1
+                style={{
+                  fontSize: "1.9rem",
+                  fontWeight: 850,
+                  margin: "0 0 8px",
+                  letterSpacing: "-0.02em",
+                  color: themeCfg.uiText,
+                }}
+              >
+                Generieren
+              </h1>
+              <p style={{ fontSize: "0.92rem", color: themeCfg.uiSoftText, margin: 0, lineHeight: 1.5 }}>
+                Erstelle deinen persönlichen Entspannungs-Sound in wenigen Minuten.
+              </p>
+            </div>
+
+            <div style={{ display: "grid", gap: 22 }}>
+
+              {/* Preset — flex wrap, only active expands */}
+              <div>
+                <label className="sv-label" style={{ display: "block", marginBottom: 8 }}>
+                  Welches Preset?
+                </label>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                  {PRESETS.map((p) => {
+                    const isActive = preset === p.id;
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => setPreset(p.id)}
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          padding: isActive ? "0.6rem 1.2rem" : "0.38rem 0.9rem",
+                          borderRadius: 999,
+                          border: `1.5px solid ${isActive ? themeCfg.primaryButtonBg : themeCfg.cardBorder}`,
+                          background: isActive ? themeCfg.primaryButtonBg : "transparent",
+                          color: isActive ? themeCfg.primaryButtonText : themeCfg.uiText,
+                          cursor: "pointer",
+                          transition: "border-color 150ms ease, background 150ms ease, padding 150ms ease, color 150ms ease, box-shadow 150ms ease",
+                          textAlign: "center",
+                          flexShrink: 0,
+                          boxShadow: isActive ? "0 8px 24px rgba(0,0,0,0.3)" : "none",
+                        }}
+                      >
+                        <span style={{ fontWeight: isActive ? 700 : 600, fontSize: "0.85rem" }}>{p.label}</span>
+                        {isActive && (
+                          <span style={{ fontSize: "0.72rem", color: themeCfg.primaryButtonText, opacity: 0.72, marginTop: 3 }}>{p.desc}</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Language + Voice controls — pill rows */}
+              <div style={{ display: "flex", gap: 20, flexWrap: "wrap", alignItems: "flex-start" }}>
+                <div>
+                  <label className="sv-label" style={{ display: "block", marginBottom: 8 }}>In welcher Sprache?</label>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    {(["de", "en"] as const).map((lang) => {
+                      const active = language === lang;
+                      return (
+                        <button key={lang} type="button" onClick={() => setLanguage(lang)}
+                          style={{
+                            padding: "0.38rem 0.85rem", borderRadius: 999,
+                            border: active ? "none" : `1px solid ${themeCfg.secondaryButtonBorder}`,
+                            background: active ? themeCfg.primaryButtonBg : themeCfg.secondaryButtonBg,
+                            color: active ? themeCfg.primaryButtonText : themeCfg.secondaryButtonText,
+                            fontSize: "0.85rem", fontWeight: 700, cursor: "pointer",
+                            boxShadow: active ? "0 14px 35px rgba(0,0,0,0.35)" : "0 8px 20px rgba(0,0,0,0.18)",
+                            transition: "background 150ms ease",
+                          }}
+                        >
+                          {lang === "de" ? "Deutsch" : "English"}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="sv-label" style={{ display: "block", marginBottom: 8 }}>Stimme</label>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    {(["female", "male"] as const).map((g) => {
+                      const active = voiceGender === g;
+                      return (
+                        <button key={g} type="button" onClick={() => setVoiceGender(g)}
+                          style={{
+                            padding: "0.38rem 0.85rem", borderRadius: 999,
+                            border: active ? "none" : `1px solid ${themeCfg.secondaryButtonBorder}`,
+                            background: active ? themeCfg.primaryButtonBg : themeCfg.secondaryButtonBg,
+                            color: active ? themeCfg.primaryButtonText : themeCfg.secondaryButtonText,
+                            fontSize: "0.85rem", fontWeight: 700, cursor: "pointer",
+                            boxShadow: active ? "0 14px 35px rgba(0,0,0,0.35)" : "0 8px 20px rgba(0,0,0,0.18)",
+                            transition: "background 150ms ease",
+                          }}
+                        >
+                          {g === "female" ? "Weiblich" : "Männlich"}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {preset === "classic-asmr" && (
+                  <div>
+                    <label className="sv-label" style={{ display: "block", marginBottom: 8 }}>Klangstil</label>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      {(["soft", "whisper"] as const).map((s) => {
+                        const active = voiceStyle === s;
+                        return (
+                          <button key={s} type="button" onClick={() => setVoiceStyle(s)}
+                            style={{
+                              padding: "0.38rem 0.85rem", borderRadius: 999,
+                              border: active ? "none" : `1px solid ${themeCfg.secondaryButtonBorder}`,
+                              background: active ? themeCfg.primaryButtonBg : themeCfg.secondaryButtonBg,
+                              color: active ? themeCfg.primaryButtonText : themeCfg.secondaryButtonText,
+                              fontSize: "0.85rem", fontWeight: 700, cursor: "pointer",
+                              boxShadow: active ? "0 14px 35px rgba(0,0,0,0.35)" : "0 8px 20px rgba(0,0,0,0.18)",
+                              transition: "background 150ms ease",
+                            }}
+                          >
+                            {s === "soft" ? "Soft" : "Whisper"}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
-                  <div
+                )}
+              </div>
+
+              {/* Title */}
+              <div>
+                <label className="sv-label" style={{ display: "block", marginBottom: 8 }}>
+                  Wie soll die Audio heißen?{" "}
+                  <span style={{ color: themeCfg.uiSoftText, fontWeight: 400 }}>— erscheint in der Bibliothek</span>
+                </label>
+                <input
+                  type="text"
+                  maxLength={140}
+                  placeholder='z. B. "Sanfter Regen – 10 min"'
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  style={svInputStyle(themeKey)}
+                />
+              </div>
+
+              {/* Prompt */}
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <label className="sv-label" style={{ margin: 0, fontSize: "0.95rem" }}>
+                    Was möchtest du hören?
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => void improvePrompt()}
+                    disabled={rawPrompt.trim().length < 3 || isImproving}
                     style={{
-                      display: "flex",
-                      gap: 8,
-                      alignItems: "center",
-                      flexShrink: 0,
+                      padding: "0.3rem 0.8rem", borderRadius: 999,
+                      border: `1px solid ${themeCfg.secondaryButtonBorder}`,
+                      background: themeCfg.secondaryButtonBg,
+                      color: themeCfg.secondaryButtonText,
+                      fontSize: "0.78rem", fontWeight: 650,
+                      cursor: rawPrompt.trim().length < 3 || isImproving ? "not-allowed" : "pointer",
+                      opacity: rawPrompt.trim().length < 3 || isImproving ? 0.45 : 1,
+                      transition: "opacity 150ms ease",
                     }}
                   >
-                    <StatusPill status={j.status} />
-                    {j.status === "DONE" && j.resultUrl ? (
-  typeof j.chapterCount === "number" && j.chapterCount > 1 ? (
-    // Story: kein Mini-Player, stattdessen Album-CTA
-    j.storyId ? (
-      <a
-        href={`/s/${j.storyId}`}
-        className="sv-btn"
-        style={{ padding: "4px 10px", textDecoration: "none", display: "inline-flex", alignItems: "center" }}
-      >
-        ▶ Album abspielen
-      </a>
-    ) : null
-  ) : (
-    // Normal: Mini-Player
-    <CustomPlayer
-      src={j.resultUrl}
-      preload="metadata"
-      showTitle={false}
-      maxWidth={190}
-    />
-  )
-) : null}
-                    {typeof j.chapterCount === "number" && j.chapterCount > 1 && j.storyId ? (
-  <a
-    href={`/s/${j.storyId}`}
-    className="sv-btn"
-    style={{ padding: "4px 10px", textDecoration: "none", display: "inline-flex", alignItems: "center" }}
-  >
-    Album öffnen
-  </a>
-) : null}
-                    <button
-                      type="button"
-                      onClick={() => void deleteJob(j.id)}
-                      className="sv-btn"
-                      style={{ padding: "4px 10px" }}
-                    >
-                      Löschen
-                    </button>
+                    {isImproving ? "…" : "Verbessern"}
+                  </button>
+                </div>
+                <textarea
+                  rows={5}
+                  placeholder="Beschreibe, was du hören möchtest …"
+                  value={rawPrompt}
+                  onChange={(e) => setRawPrompt(e.target.value)}
+                  style={svInputStyle(themeKey, true)}
+                />
+                {improvedPrompt !== null && (
+                  <div
+                    style={{
+                      marginTop: 10,
+                      padding: "14px 16px",
+                      borderRadius: 14,
+                      ...glassPanel,
+                    }}
+                  >
+                    <label className="sv-label" style={{ display: "block", marginBottom: 8 }}>
+                      Verbesserter Prompt{" "}
+                      <span style={{ fontWeight: 400, color: themeCfg.uiSoftText }}>(bearbeitbar)</span>
+                    </label>
+                    <textarea
+                      rows={3}
+                      value={improvedPrompt}
+                      onChange={(e) => setImprovedPrompt(e.target.value)}
+                      style={svInputStyle(themeKey, true)}
+                    />
+                    <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRawPrompt(improvedPrompt);
+                          setImprovedPrompt(null);
+                        }}
+                        style={{
+                          padding: "0.42rem 0.95rem",
+                          borderRadius: 999,
+                          border: "none",
+                          background: themeCfg.primaryButtonBg,
+                          color: themeCfg.primaryButtonText,
+                          fontSize: "0.85rem",
+                          fontWeight: 700,
+                          cursor: "pointer",
+                        }}
+                      >
+                        Übernehmen
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setImprovedPrompt(null)}
+                        style={{
+                          padding: "0.42rem 0.95rem",
+                          borderRadius: 999,
+                          border: `1px solid ${themeCfg.secondaryButtonBorder}`,
+                          background: themeCfg.secondaryButtonBg,
+                          color: themeCfg.secondaryButtonText,
+                          fontSize: "0.85rem",
+                          fontWeight: 650,
+                          cursor: "pointer",
+                        }}
+                      >
+                        Verwerfen
+                      </button>
+                    </div>
                   </div>
-                </li>
-              ))}
-            </ul>
-          )}
-          {Array.isArray(jobList) && hasMore && (
-            <div style={{ marginTop: 12 }}>
-              <button
-                type="button"
-                onClick={() => void loadJobs(jobList.length)}
-                className="sv-btn"
-                disabled={loadingList}
-              >
-                {loadingList ? "Lade…" : "Mehr laden"}
-              </button>
-            </div>
-          )}
-        </section>
+                )}
+              </div>
 
-        {/* Toast-UI */}
+              {/* Duration */}
+              <div>
+                <label className="sv-label" style={{ display: "block", marginBottom: 8 }}>Wie lang?</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={30}
+                  className="sv-no-spinner"
+                  style={{ ...svInputStyle(themeKey), maxWidth: 140 }}
+                  value={durationMin}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === "") {
+                      setDurationMin("");
+                    } else {
+                      setDurationMin(Number(v));
+                    }
+                  }}
+                  placeholder="z. B. 10 Min."
+                />
+                <p style={{ fontSize: "0.78rem", color: themeCfg.uiSoftText, marginTop: 6 }}>
+                  Typischer Bereich: 1–30 Minuten
+                </p>
+              </div>
+
+              {/* Credits warning — only when depleted */}
+              {accountSummary && !accountSummary.isAdmin && accountSummary.credits <= 0 && (
+                <p style={{ fontSize: "0.85rem", color: themeCfg.uiSoftText, margin: 0 }}>
+                  Keine Credits verfügbar.{" "}
+                  <Link
+                    href="/billing"
+                    style={{ color: themeCfg.uiText, textDecoration: "underline", fontWeight: 600 }}
+                  >
+                    Credits aufladen
+                  </Link>
+                </p>
+              )}
+
+              {/* Actions */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 10, paddingTop: 4 }}>
+                <button
+                  type="button"
+                  onClick={createJob}
+                  disabled={isSubmitDisabled}
+                  title={
+                    typeof retryLeft === "number" && retryLeft > 0
+                      ? `Warte ${retryLeft}s…`
+                      : undefined
+                  }
+                  style={{
+                    width: "100%",
+                    padding: "0.75rem 1.5rem",
+                    fontSize: "1rem",
+                    fontWeight: 700,
+                    background: themeCfg.primaryButtonBg,
+                    color: themeCfg.primaryButtonText,
+                    border: "none",
+                    borderRadius: 999,
+                    cursor: isSubmitDisabled ? "not-allowed" : "pointer",
+                    opacity: isSubmitDisabled ? 0.55 : 1,
+                    transition: "opacity 150ms ease",
+                    boxShadow: "0 14px 35px rgba(0,0,0,0.35)",
+                  }}
+                >
+                  {typeof retryLeft === "number" && retryLeft > 0
+                    ? `Warte ${retryLeft}s…`
+                    : "Generieren"}
+                </button>
+
+                {isAdmin && (
+                  <button
+                    className="sv-btn"
+                    type="button"
+                    onClick={async () => {
+                      if (!job) return;
+                      await fetch(`/api/jobs/${job.id}/complete`, {
+                        method: "POST",
+                        credentials: "include",
+                      });
+                      setPolling(true);
+                    }}
+                    disabled={!job || job.status === "DONE"}
+                    style={{ width: "100%" }}
+                  >
+                    Simulation abschließen
+                  </button>
+                )}
+              </div>
+
+            </div>
+          </div>
+
+          {/* ===== Current Job ===== */}
+          {job && (
+            <section style={{ marginTop: 56 }}>
+              <h2
+                style={{
+                  fontSize: "0.72rem",
+                  fontWeight: 700,
+                  margin: "0 0 12px",
+                  color: themeCfg.uiSoftText,
+                  letterSpacing: "0.12em",
+                  textTransform: "uppercase",
+                }}
+              >
+                Aktuelle Generierung
+              </h2>
+              <StatusCard
+                job={job}
+                isAdmin={!!accountSummary?.isAdmin}
+                themeCfg={themeCfg}
+                title={(() => {
+                  const uiTitle = title.trim();
+                  if (uiTitle) return uiTitle;
+                  const anyJob = job as unknown as { title?: string | null };
+                  const jobTitle = anyJob.title?.trim();
+                  if (jobTitle) return jobTitle;
+                  return displayJobTitle(job);
+                })()}
+                onPlay={
+                  job.status === "DONE" && job.resultUrl
+                    ? () => {
+                        const playerTitle = title.trim().length > 0 ? title.trim() : displayJobTitle(job);
+                        loadTrack(job.resultUrl!, playerTitle, job.id);
+                      }
+                    : undefined
+                }
+              />
+            </section>
+          )}
+
+          {/* ===== Recent Jobs ===== */}
+          <section style={{ marginTop: 56 }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+                marginBottom: 16,
+              }}
+            >
+              <h2
+                style={{
+                  fontSize: "0.72rem",
+                  fontWeight: 700,
+                  margin: 0,
+                  color: themeCfg.uiSoftText,
+                  letterSpacing: "0.12em",
+                  textTransform: "uppercase",
+                }}
+              >
+                Deine letzten Jobs
+              </h2>
+
+              {/* Right side: view toggle + library link */}
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                {/* List / Grid toggle */}
+                <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: `1px solid ${themeCfg.cardBorder}` }}>
+                  {(["list", "grid"] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setViewMode(mode)}
+                      title={mode === "list" ? "Listenansicht" : "Kachelansicht"}
+                      style={{
+                        width: 32, height: 28,
+                        border: "none",
+                        background: viewMode === mode ? themeCfg.secondaryButtonBg : "transparent",
+                        color: viewMode === mode ? themeCfg.uiText : themeCfg.uiSoftText,
+                        cursor: "pointer",
+                        display: "inline-flex", alignItems: "center", justifyContent: "center",
+                        transition: "background 120ms ease",
+                      }}
+                    >
+                      {mode === "list" ? (
+                        <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                          <rect x="0" y="2" width="16" height="2.5" rx="1.25" />
+                          <rect x="0" y="6.75" width="16" height="2.5" rx="1.25" />
+                          <rect x="0" y="11.5" width="16" height="2.5" rx="1.25" />
+                        </svg>
+                      ) : (
+                        <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                          <rect x="0" y="0" width="6.5" height="6.5" rx="1.5" />
+                          <rect x="9.5" y="0" width="6.5" height="6.5" rx="1.5" />
+                          <rect x="0" y="9.5" width="6.5" height="6.5" rx="1.5" />
+                          <rect x="9.5" y="9.5" width="6.5" height="6.5" rx="1.5" />
+                        </svg>
+                      )}
+                    </button>
+                  ))}
+                </div>
+
+                <Link
+                  href="/library"
+                  style={{
+                    fontSize: "0.85rem",
+                    fontWeight: 600,
+                    textDecoration: "none",
+                    padding: "0.4rem 0.85rem",
+                    borderRadius: 999,
+                    border: `1px solid ${themeCfg.cardBorder}`,
+                    background: themeCfg.cardBg,
+                    color: themeCfg.uiText,
+                    backdropFilter: "blur(10px)",
+                    WebkitBackdropFilter: "blur(10px)",
+                  }}
+                >
+                  Bibliothek →
+                </Link>
+              </div>
+            </div>
+
+            {!Array.isArray(jobList) || jobList.length === 0 ? (
+              <p style={{ color: themeCfg.uiSoftText, fontSize: "0.9rem" }}>
+                {loadingList ? "Lade…" : "Noch keine Jobs gefunden."}
+              </p>
+            ) : viewMode === "list" ? (
+              /* ── List view ── */
+              <ul style={{ display: "flex", flexDirection: "column", gap: 8, listStyle: "none", margin: 0, padding: 0 }}>
+                {jobList.map((j) => {
+                  const isStory = typeof j.chapterCount === "number" && j.chapterCount > 1 && !!j.storyId;
+                  const meta = [
+                    j.preset,
+                    j.durationSec ? formatSec(j.durationSec) : null,
+                    typeof j.chapterCount === "number" && j.chapterCount > 1 ? `${j.chapterCount} Kap.` : null,
+                    isAdmin && j.language ? j.language.toUpperCase() : null,
+                    isAdmin && j.createdAt ? new Date(j.createdAt).toLocaleString("de-DE") : null,
+                  ].filter(Boolean).join(" · ");
+
+                  return (
+                    <li key={j.id} style={{ listStyle: "none" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", borderRadius: 14, ...glassPanel }}>
+                        {/* Play button — left, 44px fixed slot */}
+                        <div style={{ flexShrink: 0, width: 44, height: 44, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+                          {j.status === "DONE" && (
+                            isStory ? (
+                              <a href={`/s/${j.storyId}`} title="Story öffnen"
+                                style={{ width: 44, height: 44, borderRadius: "50%", background: themeCfg.primaryButtonBg, color: themeCfg.primaryButtonText, display: "inline-flex", alignItems: "center", justifyContent: "center", textDecoration: "none", boxShadow: "0 8px 20px rgba(0,0,0,0.25)" }}>
+                                <svg width="16" height="16" viewBox="0 0 11 11" fill="currentColor"><path d="M2.5 1.8l7 3.7-7 3.7z" /></svg>
+                              </a>
+                            ) : j.resultUrl ? (
+                              <button type="button" onClick={() => loadTrack(j.resultUrl!, displayJobTitle(j), j.id)} title="Abspielen"
+                                style={{ width: 44, height: 44, borderRadius: "50%", background: themeCfg.primaryButtonBg, color: themeCfg.primaryButtonText, border: "none", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", boxShadow: "0 8px 20px rgba(0,0,0,0.25)" }}>
+                                <svg width="16" height="16" viewBox="0 0 11 11" fill="currentColor"><path d="M2.5 1.8l7 3.7-7 3.7z" /></svg>
+                              </button>
+                            ) : null
+                          )}
+                        </div>
+                        {/* Title + meta/badge — center */}
+                        <div style={{ flex: "1 1 0", minWidth: 0, overflow: "hidden" }}>
+                          <div style={{ fontWeight: 600, fontSize: "0.88rem", color: themeCfg.uiText, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {displayJobTitle(j)}
+                          </div>
+                          {j.status !== "DONE" ? (
+                            <div style={{ marginTop: 4 }}>
+                              <StatusPill status={j.status} themeCfg={themeCfg} />
+                            </div>
+                          ) : meta ? (
+                            <div style={{ fontSize: "0.72rem", color: themeCfg.uiSoftText, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {meta}
+                            </div>
+                          ) : null}
+                        </div>
+                        {/* Three-dot menu — right */}
+                        <div style={{ position: "relative", flexShrink: 0 }}>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); setOpenJobMenu(openJobMenu === j.id ? null : j.id); }}
+                            title="Optionen"
+                            style={{ width: 32, height: 32, borderRadius: "50%", border: `1px solid ${themeCfg.cardBorder}`, background: "transparent", color: themeCfg.uiSoftText, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: "1.1rem", letterSpacing: "0.05em" }}
+                          >
+                            ⋯
+                          </button>
+                          {openJobMenu === j.id && (
+                            <>
+                              <div
+                                onClick={() => setOpenJobMenu(null)}
+                                style={{ position: "fixed", inset: 0, zIndex: 40 }}
+                              />
+                              <div style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", zIndex: 50, minWidth: 140, borderRadius: 12, ...glassPanel, padding: "6px 0", overflow: "hidden" }}>
+                                <button
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); void deleteJob(j.id); setOpenJobMenu(null); }}
+                                  style={{ width: "100%", padding: "9px 16px", background: "transparent", border: "none", color: "#e11d48", fontSize: "0.85rem", fontWeight: 600, cursor: "pointer", textAlign: "left" as const }}
+                                >
+                                  Löschen
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              /* ── Grid view ── */
+              <ul style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 10, listStyle: "none", margin: 0, padding: 0 }}>
+                {jobList.map((j) => {
+                  const isStory = typeof j.chapterCount === "number" && j.chapterCount > 1 && !!j.storyId;
+                  const meta = [
+                    j.preset,
+                    j.durationSec ? formatSec(j.durationSec) : null,
+                    typeof j.chapterCount === "number" && j.chapterCount > 1 ? `${j.chapterCount} Kap.` : null,
+                  ].filter(Boolean).join(" · ");
+
+                  return (
+                    <li key={j.id} style={{ listStyle: "none" }}>
+                      <div style={{ padding: "14px 14px 12px", borderRadius: 14, ...glassPanel, display: "flex", flexDirection: "column", gap: 10, minHeight: 110 }}>
+                        {/* Title */}
+                        <div style={{ flex: "1 1 auto", minWidth: 0 }}>
+                          <div style={{ fontWeight: 600, fontSize: "0.84rem", color: themeCfg.uiText, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as const }}>
+                            {displayJobTitle(j)}
+                          </div>
+                          {meta && (
+                            <div style={{ fontSize: "0.7rem", color: themeCfg.uiSoftText, marginTop: 4 }}>
+                              {meta}
+                            </div>
+                          )}
+                        </div>
+                        {/* Actions row */}
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          {j.status === "DONE" ? (
+                            isStory ? (
+                              <a href={`/s/${j.storyId}`} title="Story öffnen"
+                                style={{ width: 40, height: 40, borderRadius: "50%", background: themeCfg.primaryButtonBg, color: themeCfg.primaryButtonText, display: "inline-flex", alignItems: "center", justifyContent: "center", textDecoration: "none", boxShadow: "0 6px 16px rgba(0,0,0,0.2)" }}>
+                                <svg width="14" height="14" viewBox="0 0 11 11" fill="currentColor"><path d="M2.5 1.8l7 3.7-7 3.7z" /></svg>
+                              </a>
+                            ) : j.resultUrl ? (
+                              <button type="button" onClick={() => loadTrack(j.resultUrl!, displayJobTitle(j), j.id)} title="Abspielen"
+                                style={{ width: 40, height: 40, borderRadius: "50%", background: themeCfg.primaryButtonBg, color: themeCfg.primaryButtonText, border: "none", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", boxShadow: "0 6px 16px rgba(0,0,0,0.2)" }}>
+                                <svg width="14" height="14" viewBox="0 0 11 11" fill="currentColor"><path d="M2.5 1.8l7 3.7-7 3.7z" /></svg>
+                              </button>
+                            ) : <div style={{ width: 40 }} />
+                          ) : (
+                            <StatusPill status={j.status} themeCfg={themeCfg} />
+                          )}
+                          {/* Three-dot menu */}
+                          <div style={{ position: "relative", flexShrink: 0 }}>
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); setOpenJobMenu(openJobMenu === j.id ? null : j.id); }}
+                              title="Optionen"
+                              style={{ width: 32, height: 32, borderRadius: "50%", border: `1px solid ${themeCfg.cardBorder}`, background: "transparent", color: themeCfg.uiSoftText, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: "1.1rem" }}
+                            >
+                              ⋯
+                            </button>
+                            {openJobMenu === j.id && (
+                              <>
+                                <div
+                                  onClick={() => setOpenJobMenu(null)}
+                                  style={{ position: "fixed", inset: 0, zIndex: 40 }}
+                                />
+                                <div style={{ position: "absolute", right: 0, bottom: "calc(100% + 6px)", zIndex: 50, minWidth: 140, borderRadius: 12, ...glassPanel, padding: "6px 0", overflow: "hidden" }}>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => { e.stopPropagation(); void deleteJob(j.id); setOpenJobMenu(null); }}
+                                    style={{ width: "100%", padding: "9px 16px", background: "transparent", border: "none", color: "#e11d48", fontSize: "0.85rem", fontWeight: 600, cursor: "pointer", textAlign: "left" as const }}
+                                  >
+                                    Löschen
+                                  </button>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+
+            {Array.isArray(jobList) && hasMore && (
+              <div style={{ marginTop: 14 }}>
+                <button
+                  type="button"
+                  onClick={() => void loadJobs(jobList.length)}
+                  disabled={loadingList}
+                  style={{ ...pillStyle(themeCfg, "secondary") }}
+                >
+                  {loadingList ? "Lade…" : "Mehr laden"}
+                </button>
+              </div>
+            )}
+          </section>
+        </div>
+        </div>
+
+        {/* ===== Toast ===== */}
         {toast && (
           <div
             role="status"
             aria-live="polite"
             style={{
               position: "fixed",
-              right: 16,
-              bottom: 16,
+              right: 20,
+              bottom: 20,
               background:
-                toast.kind === "err"
-                  ? "color-mix(in oklab, #ef4444 30%, var(--color-card))"
-                  : toast.kind === "ok"
-                  ? "color-mix(in oklab, #16a34a 24%, var(--color-card))"
-                  : "color-mix(in oklab, var(--color-accent) 20%, var(--color-card))",
-              color: "var(--color-text)",
-              border: "1px solid var(--color-nav-bg)",
-              borderRadius: 12,
-              boxShadow: "0 10px 24px rgba(0,0,0,.14)",
-              padding: "10px 12px",
+                toast.kind === "err" ? "rgba(239,68,68,0.18)"
+                : toast.kind === "ok" ? "rgba(22,163,74,0.18)"
+                : glassPanel.background,
+              color: themeCfg.uiText,
+              border: `1px solid ${
+                toast.kind === "err" ? "rgba(239,68,68,0.45)"
+                : toast.kind === "ok" ? "rgba(22,163,74,0.45)"
+                : glassPanel.border
+              }`,
+              borderRadius: 14,
+              boxShadow: glassPanel.boxShadow,
+              backdropFilter: "blur(18px)",
+              WebkitBackdropFilter: "blur(18px)",
+              padding: "12px 16px",
               fontWeight: 600,
+              fontSize: "0.9rem",
               zIndex: 1000,
               maxWidth: 360,
             }}
@@ -1183,8 +1372,8 @@ onChange={(e) => setVoiceStyle(e.target.value as "soft" | "whisper")}
             {toast.msg}
           </div>
         )}
-      </div>
-    </main>
+      </main>
+    </SVScene>
   );
 }
 
@@ -1192,80 +1381,98 @@ function StatusCard({
   job,
   isAdmin,
   title,
+  themeCfg,
+  onPlay,
 }: {
   job: Job;
   isAdmin: boolean;
   title: string;
+  themeCfg: ThemeConfig;
+  onPlay?: () => void;
 }) {
-    const headerTitle = isAdmin ? `Job: ${job.id}` : title;
+  const headerTitle = isAdmin ? `Job: ${job.id}` : title;
   return (
-    <div
-      style={{
-        background: "var(--color-card)",
-        border: "1px solid var(--color-nav-bg)",
-        borderRadius: 12,
-        padding: 16,
-      }}
-    >
-            <div
+    <SVCard themeCfg={themeCfg}>
+      <div
         style={{
           display: "flex",
           justifyContent: "space-between",
-          alignItems: "center",
+          alignItems: "flex-start",
+          gap: 12,
         }}
       >
-        <strong>{headerTitle}</strong>
-        <StatusPill status={job.status} />
-      </div>
-      {job.durationSec ? (
-        <p
-          style={{
-            marginTop: 6,
-            fontSize: "0.8rem",
-            opacity: 0.75,
-          }}
-        >
-          Dauer: {formatSec(job.durationSec)}
-        </p>
-      ) : null}
-      {job.status === "DONE" && job.resultUrl && (
-        <div style={{ marginTop: 12 }}>
-          <CustomPlayer src={job.resultUrl} preload="auto" showTitle={false} />
+        <div style={{ flex: "1 1 auto", minWidth: 0 }}>
+          <p style={{ fontWeight: 700, fontSize: "1rem", margin: "0 0 4px", color: themeCfg.uiText }}>
+            {headerTitle}
+          </p>
+          <div style={{ fontSize: "0.8rem", color: themeCfg.uiSoftText }}>
+            {job.preset && <span>{job.preset}</span>}
+            {job.durationSec ? <span> · {formatSec(job.durationSec)}</span> : null}
+          </div>
         </div>
+        {job.status === "DONE" && job.resultUrl && onPlay ? (
+          <button
+            type="button"
+            onClick={onPlay}
+            aria-label="Abspielen"
+            style={{
+              width: 44,
+              height: 44,
+              borderRadius: "50%",
+              background: themeCfg.primaryButtonBg,
+              color: themeCfg.primaryButtonText,
+              border: "none",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: "pointer",
+              flexShrink: 0,
+              boxShadow: "0 8px 20px rgba(0,0,0,0.25)",
+            }}
+          >
+            <svg width="16" height="16" viewBox="0 0 11 11" fill="currentColor">
+              <path d="M2.5 1.8l7 3.7-7 3.7z" />
+            </svg>
+          </button>
+        ) : (
+          <StatusPill status={job.status} themeCfg={themeCfg} />
+        )}
+      </div>
+
+      {(job.status === "QUEUED" || job.status === "PROCESSING") && (
+        <p style={{ fontSize: "0.85rem", color: themeCfg.uiSoftText, margin: "14px 0 0" }}>
+          Generierung läuft…
+        </p>
       )}
+
       {job.status === "FAILED" && (
         <p
           style={{
             color: "#e11d48",
             fontWeight: 600,
-            marginTop: 8,
+            margin: "14px 0 0",
+            fontSize: "0.9rem",
           }}
         >
           {job.error ?? "Fehlgeschlagen"}
         </p>
       )}
-    </div>
+    </SVCard>
   );
 }
 
-function StatusPill({ status }: { status: JobStatus }) {
+function StatusPill({ status, themeCfg }: { status: JobStatus; themeCfg: ThemeConfig }) {
+  if (status === "DONE") return null;
+
   const label =
     status === "QUEUED"
       ? "Warteschlange"
       : status === "PROCESSING"
       ? "In Bearbeitung"
-      : status === "DONE"
-      ? "Fertig"
       : "Fehlgeschlagen";
 
-  const bg =
-    status === "DONE"
-      ? "color-mix(in oklab, var(--color-accent) 35%, transparent)"
-      : status === "FAILED"
-      ? "#fee2e2"
-      : "color-mix(in oklab, var(--color-card) 85%, #000 15%)";
-
-  const color = status === "FAILED" ? "#7f1d1d" : "inherit";
+  const bg = status === "FAILED" ? "rgba(254,202,202,0.9)" : themeCfg.cardBg;
+  const color = status === "FAILED" ? "#7f1d1d" : themeCfg.uiSoftText;
 
   return (
     <span
@@ -1277,6 +1484,8 @@ function StatusPill({ status }: { status: JobStatus }) {
         fontWeight: 600,
         background: bg,
         color,
+        whiteSpace: "nowrap",
+        border: `1px solid ${themeCfg.cardBorder}`,
       }}
     >
       {label}
@@ -1284,12 +1493,51 @@ function StatusPill({ status }: { status: JobStatus }) {
   );
 }
 
-const navLinkStyle: React.CSSProperties = {
-  padding: "0.4rem 0.85rem",
-  borderRadius: 6,
-  background: "var(--color-nav-bg)",
-  color: "var(--color-nav-text)",
-  textDecoration: "none",
-  fontWeight: 600,
-  fontSize: "0.9rem",
-};
+// pillStyle — matches Home page exactly
+function pillStyle(cfg: ThemeConfig, variant: "primary" | "secondary"): React.CSSProperties {
+  if (variant === "primary") {
+    return {
+      textDecoration: "none",
+      padding: "0.55rem 1.15rem",
+      borderRadius: 999,
+      background: cfg.primaryButtonBg,
+      color: cfg.primaryButtonText,
+      fontSize: "0.88rem",
+      fontWeight: 700,
+      boxShadow: "0 14px 35px rgba(0,0,0,0.35)",
+      border: "none",
+      cursor: "pointer",
+      whiteSpace: "nowrap" as const,
+    };
+  }
+  return {
+    textDecoration: "none",
+    padding: "0.55rem 1.05rem",
+    borderRadius: 999,
+    border: `1px solid ${cfg.secondaryButtonBorder}`,
+    background: cfg.secondaryButtonBg,
+    color: cfg.secondaryButtonText,
+    fontSize: "0.85rem",
+    fontWeight: 650,
+    boxShadow: "0 10px 25px rgba(0,0,0,0.25)",
+    cursor: "pointer",
+    whiteSpace: "nowrap" as const,
+  };
+}
+
+// svInputStyle — matches Home page inputStyle()
+function svInputStyle(theme: string, isTextarea = false): React.CSSProperties {
+  return {
+    width: "100%",
+    padding: isTextarea ? "0.85rem 0.95rem" : "0.8rem 0.95rem",
+    borderRadius: 14,
+    border: theme === "dark" ? "1px solid rgba(148,163,184,0.22)" : "1px solid rgba(148,163,184,0.3)",
+    background: theme === "dark" ? "rgba(15,23,42,0.22)" : "rgba(255,255,255,0.22)",
+    color: theme === "dark" ? "#e5e7eb" : "#0f172a",
+    outline: "none",
+    fontSize: "0.95rem",
+    lineHeight: 1.5,
+    boxSizing: "border-box" as const,
+    resize: isTextarea ? ("vertical" as const) : undefined,
+  };
+}
