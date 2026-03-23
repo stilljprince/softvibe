@@ -93,26 +93,11 @@ const storyId = (searchParams.get("storyId") ?? "").trim();
     where: whereWithCursor,
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     include: {
-  job: { select: { title: true, prompt: true } },
-  story: { select: { id: true, title: true } },
+  job: { select: { title: true, prompt: true, preset: true } },
+  story: { select: { id: true, title: true, preset: true, scriptText: true } },
 },
     take,
   });
-// ✅ Quick-fix: Kapitel innerhalb einer Story sauber sortieren
-rows.sort((a, b) => {
-  const as = a.storyId ?? "";
-  const bs = b.storyId ?? "";
-
-  // gleiche Story -> nach partIndex aufsteigend
-  if (as && bs && as === bs) {
-    const ai = typeof a.partIndex === "number" ? a.partIndex : 0;
-    const bi = typeof b.partIndex === "number" ? b.partIndex : 0;
-    return ai - bi;
-  }
-
-  // sonst wie vorher: neueste zuerst
-  return b.createdAt.getTime() - a.createdAt.getTime();
-});
 
   const last = rows[rows.length - 1];
   const nextCursor = last
@@ -146,7 +131,9 @@ const withChapter =
     storyId: t.storyId ?? null,
     storyTitle: (t.story?.title ?? "").trim() || null,
     partIndex: typeof t.partIndex === "number" ? t.partIndex : null,
-    partTitle: (t.partTitle ?? "").trim() || chapterLabel || null, // optional fallback
+    partTitle: (t.partTitle ?? "").trim() || chapterLabel || null,
+    preset: t.story?.preset ?? t.job?.preset ?? null,
+    scriptText: t.story?.scriptText ?? t.scriptText ?? null,
   };
 });
 

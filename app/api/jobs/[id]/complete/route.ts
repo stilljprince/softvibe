@@ -240,6 +240,9 @@ console.log("COMPLETE language:", job?.id, job?.language);
   let detectedDuration: number | undefined;
   let kidsSafetyApplied = false;
   let isMultiChunk = false;
+  let completedStoryId: string | null = null;
+  let completedChapterCount = 0;
+  let capturedScript = "";
 
   const localRel = `/generated/${id}.mp3`;
   const localAbs = path.join(
@@ -324,6 +327,8 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
     finalText = safeResult.text;
   }
 
+  capturedScript = finalText;
+
   // ✅ TTS-Basistext
   const baseText = stripTtsDirectives(finalText);
 
@@ -373,11 +378,15 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
             title: job.title?.trim() || (isSleepStory ? "Sleep Story" : "Kids Story"),
             preset: safePreset,
             language: job.language ?? null,
+            scriptText: finalText || null,
           },
           select: { id: true },
         });
         storyId = story.id;
       }
+
+      completedStoryId = storyId;
+      completedChapterCount = chunks.length;
 
       console.log("[multi-chunk] preset =", safePreset, "chunks =", chunks.length);
 
@@ -628,6 +637,7 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
                 : typeof nextDuration === "number"
                 ? nextDuration
                 : null,
+            scriptText: capturedScript || null,
           },
         });
       } else if (typeof nextDuration === "number") {
@@ -662,5 +672,5 @@ console.log("[SLEEP-STORY CHECK]", {
     reqId,
   });
 
-  return jsonOk({ ...updated, kidsSafetyApplied }, 200);
+  return jsonOk({ ...updated, storyId: completedStoryId, chapterCount: completedChapterCount, kidsSafetyApplied }, 200);
 }

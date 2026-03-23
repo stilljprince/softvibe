@@ -37,8 +37,8 @@ export async function GET(
   const t = await prisma.track.findUnique({
     where: { id },
     include: {
-      job: { select: { title: true, prompt: true } },
-      story: { select: { id: true, title: true } },
+      job:   { select: { title: true, prompt: true, preset: true, durationSec: true } },
+      story: { select: { id: true, title: true, preset: true, scriptText: true } },
     },
   });
 
@@ -56,7 +56,7 @@ export async function GET(
     id: t.id,
     title: t.title,
     url: t.url,
-    durationSeconds: t.durationSeconds,
+    durationSeconds: t.durationSeconds ?? t.job?.durationSec ?? null,
     createdAt: t.createdAt.toISOString(),
     isPublic: t.isPublic,
     shareSlug: t.shareSlug,
@@ -68,6 +68,8 @@ export async function GET(
 
     jobTitle: (t.job?.title ?? "").trim() || null,
     prompt: (t.job?.prompt ?? "").trim() || null,
+    preset: t.story?.preset ?? t.job?.preset ?? null,
+    scriptText: t.story?.scriptText ?? t.scriptText ?? null,
   };
 
   log.info(h, "tracks:get:ok", { id });

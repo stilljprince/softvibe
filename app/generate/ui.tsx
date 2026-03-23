@@ -8,7 +8,7 @@ import type React from "react";
 
 import { useSVTheme, SVCard, type ThemeConfig } from "@/app/components/sv-kit";
 import SVScene from "@/app/components/sv-scene";
-import { usePlayer } from "@/app/components/player-context";
+import { usePlayer, type Chapter } from "@/app/components/player-context";
 
 const PRESETS = [
   { id: "sleep-story",  label: "Sleep Story",  desc: "Calm · Slow" },
@@ -56,13 +56,80 @@ function formatSec(sec: number): string {
   return s > 0 ? `${m}m ${s}s` : `${m}m`;
 }
 
-export default function GenerateClient() {
-  const [preset, setPreset] = useState<string>(PRESETS[0].id);
+// Fetches and maps chapter list for a story job.
+// Returns [] on any failure — caller decides how to surface errors.
+async function fetchStoryChapters(storyId: string): Promise<Chapter[]> {
+  try {
+    const res = await fetch(
+      `/api/tracks?storyId=${encodeURIComponent(storyId)}&take=200`,
+      { credentials: "include" },
+    );
+    if (!res.ok) {
+      console.error(`fetchStoryChapters: HTTP ${res.status} for story ${storyId}`);
+      return [];
+    }
+    const raw: unknown = await res.json().catch(() => null);
+    const payload =
+      raw && typeof raw === "object" && "data" in (raw as object)
+        ? (raw as { data: unknown }).data
+        : raw;
+    const list: unknown[] = Array.isArray((payload as { items?: unknown })?.items)
+      ? (payload as { items: unknown[] }).items
+      : Array.isArray(payload)
+      ? (payload as unknown[])
+      : [];
+
+    return list
+      .map((item) => {
+        const it = item as Record<string, unknown>;
+        const partIndex = typeof it.partIndex === "number" ? it.partIndex : 0;
+        return {
+          id: String(it.id ?? ""),
+          url: String(it.url ?? ""),
+          // Use per-chapter label; the story title is shown separately in the player UI
+          title: `Kapitel ${partIndex + 1}`,
+          partIndex,
+          durationSeconds:
+            typeof it.durationSeconds === "number" ? it.durationSeconds : undefined,
+        };
+      })
+      .filter((ch) => ch.id && ch.url)
+      .sort((a, b) => a.partIndex - b.partIndex);
+  } catch (err) {
+    console.error("fetchStoryChapters: unexpected error", err);
+    return [];
+  }
+}
+
+type GenerateClientProps = {
+  initialPrompt?: string;
+  initialPreset?: string;
+  initialRef?: string;
+  initialRefType?: string;
+  initialSourceTitle?: string;
+  initialDurationMin?: number;
+};
+
+export default function GenerateClient({
+  initialPrompt,
+  initialPreset,
+  initialRef,
+  initialRefType,
+  initialSourceTitle,
+  initialDurationMin,
+}: GenerateClientProps) {
+  const validPreset = PRESETS.find((p) => p.id === initialPreset)?.id ?? PRESETS[0].id;
+  const [preset, setPreset] = useState<string>(validPreset);
   const [title, setTitle] = useState("");
-  const [rawPrompt, setRawPrompt] = useState("");
+  const [rawPrompt, setRawPrompt] = useState(initialPrompt ?? "");
   const [improvedPrompt, setImprovedPrompt] = useState<string | null>(null);
   const [isImproving, setIsImproving] = useState(false);
-  const [durationMin, setDurationMin] = useState<number | "">("");
+  const [durationMin, setDurationMin] = useState<number | "">(initialDurationMin ?? "");
+
+  // Variation context
+  const [variationSourceTitle, setVariationSourceTitle] = useState<string | null>(initialSourceTitle ?? null);
+  const [variationScript, setVariationScript] = useState<string | null>(null);
+  const [scriptPanelOpen, setScriptPanelOpen] = useState(false);
   const [job, setJob] = useState<Job | null>(null);
   const [polling, setPolling] = useState(false);
   const [jobList, setJobList] = useState<Job[]>([]);
@@ -79,7 +146,7 @@ export default function GenerateClient() {
   const [openJobMenu, setOpenJobMenu] = useState<string | null>(null);
 
   // Global player
-  const { loadTrack } = usePlayer();
+  const { loadTrack, loadStory } = usePlayer();
 
   // Theme — shared with player pages
   const { themeKey, themeCfg, cycleTheme, logoSrc } = useSVTheme();
@@ -88,6 +155,8 @@ export default function GenerateClient() {
   useEffect(() => {
     document.documentElement.className = themeKey;
   }, [themeKey]);
+
+  const isDark = themeKey === "dark";
 
   // ---------- Toast ----------
   const [toast, setToast] = useState<{ msg: string; kind?: "ok" | "err" | "info" } | null>(null);
@@ -191,6 +260,31 @@ export default function GenerateClient() {
 
   useEffect(() => {
     void refreshCredits();
+  }, []);
+
+  // Load reference data for variation flow
+  useEffect(() => {
+    if (!initialRef || !initialRefType) return;
+    const url =
+      initialRefType === "story"
+        ? `/api/stories/${encodeURIComponent(initialRef)}`
+        : `/api/tracks/${encodeURIComponent(initialRef)}`;
+    void fetch(url, { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((raw: unknown) => {
+        if (!raw || typeof raw !== "object") return;
+        const payload =
+          (raw as { ok?: boolean; data?: unknown }).ok === true
+            ? (raw as { data: unknown }).data
+            : raw;
+        if (!payload || typeof payload !== "object") return;
+        const d = payload as Record<string, unknown>;
+        if (typeof d.scriptText === "string" && d.scriptText.trim()) {
+          setVariationScript(d.scriptText.trim());
+        }
+      })
+      .catch(() => null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function refreshCredits() {
@@ -400,14 +494,25 @@ export default function GenerateClient() {
           }
 
           const trimmedTitle = title.trim();
+          const playerTitle = trimmedTitle.length > 0 ? trimmedTitle : displayJobTitle(completed);
 
-          // Load the finished audio into the global bottom player
-          if (completed.resultUrl) {
-            loadTrack(
-              completed.resultUrl,
-              trimmedTitle.length > 0 ? trimmedTitle : displayJobTitle(completed),
-              completed.id,
-            );
+          // Load the finished audio into the global bottom player.
+          // Multi-chapter stories use loadStory(); single tracks use loadTrack().
+          const isCompletedStory =
+            !!completed.storyId && (completed.chapterCount ?? 0) > 1;
+          if (isCompletedStory) {
+            const chapters = await fetchStoryChapters(completed.storyId!);
+            if (chapters.length > 0) {
+              loadStory(completed.storyId!, chapters);
+            } else {
+              // Auto-complete is silent from the user's perspective; log so it's traceable.
+              console.error(
+                "fetchStoryChapters returned empty list for job",
+                completed.id,
+              );
+            }
+          } else if (completed.resultUrl) {
+            loadTrack(completed.resultUrl, playerTitle, completed.id);
           }
 
           try {
@@ -528,7 +633,6 @@ export default function GenerateClient() {
 
   // glassPanel — matches Home page exactly (no borderRadius — add it at use site)
   const glassPanel = useMemo((): React.CSSProperties => {
-    const isDark = themeKey === "dark";
     return {
       background: isDark ? "rgba(15,23,42,0.52)" : "rgba(248,250,252,0.62)",
       border: isDark ? "1px solid rgba(148,163,184,0.22)" : "1px solid rgba(148,163,184,0.28)",
@@ -723,6 +827,66 @@ export default function GenerateClient() {
             </div>
 
             <div style={{ display: "grid", gap: 22 }}>
+
+              {/* Variation banner */}
+              {variationSourceTitle && (
+                <div style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                  gap: 12, padding: "10px 16px", borderRadius: 12,
+                  background: isDark ? "rgba(139,92,246,0.12)" : "rgba(139,92,246,0.08)",
+                  border: `1px solid ${isDark ? "rgba(139,92,246,0.28)" : "rgba(139,92,246,0.22)"}`,
+                }}>
+                  <span style={{ fontSize: "0.82rem", color: themeCfg.uiText, fontWeight: 600 }}>
+                    <span style={{ color: themeCfg.uiSoftText, fontWeight: 400 }}>Variation von </span>
+                    {variationSourceTitle}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setVariationSourceTitle(null)}
+                    style={{ flexShrink: 0, background: "transparent", border: "none", color: themeCfg.uiSoftText, cursor: "pointer", fontSize: "0.9rem", lineHeight: 1, padding: 2 }}
+                    title="Schließen"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+
+              {/* Original script reference */}
+              {variationScript && (
+                <div style={{
+                  borderRadius: 12,
+                  border: `1px solid ${themeCfg.cardBorder}`,
+                  overflow: "hidden",
+                }}>
+                  <button
+                    type="button"
+                    onClick={() => setScriptPanelOpen((v) => !v)}
+                    style={{
+                      width: "100%", display: "flex", justifyContent: "space-between",
+                      alignItems: "center", gap: 8,
+                      padding: "10px 14px",
+                      background: isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.04)",
+                      border: "none", cursor: "pointer",
+                      color: themeCfg.uiSoftText, fontSize: "0.78rem", fontWeight: 700,
+                      letterSpacing: "0.08em", textTransform: "uppercase" as const,
+                    }}
+                  >
+                    <span>Originales Skript</span>
+                    <span style={{ fontSize: "0.72rem" }}>{scriptPanelOpen ? "▲" : "▼"}</span>
+                  </button>
+                  {scriptPanelOpen && (
+                    <div style={{
+                      maxHeight: 240, overflowY: "auto",
+                      padding: "12px 14px",
+                      background: isDark ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.03)",
+                      fontSize: "0.84rem", color: themeCfg.uiText,
+                      whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.7,
+                    }}>
+                      {variationScript}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Preset — flex wrap, only active expands */}
               <div>
@@ -1068,10 +1232,22 @@ export default function GenerateClient() {
                   return displayJobTitle(job);
                 })()}
                 onPlay={
-                  job.status === "DONE" && job.resultUrl
+                  job.status === "DONE" &&
+                  (job.resultUrl || (!!job.storyId && (job.chapterCount ?? 0) > 1))
                     ? () => {
-                        const playerTitle = title.trim().length > 0 ? title.trim() : displayJobTitle(job);
-                        loadTrack(job.resultUrl!, playerTitle, job.id);
+                        const playerTitle =
+                          title.trim().length > 0 ? title.trim() : displayJobTitle(job);
+                        if (job.storyId && (job.chapterCount ?? 0) > 1) {
+                          void fetchStoryChapters(job.storyId).then((chapters) => {
+                            if (chapters.length > 0) {
+                              loadStory(job.storyId!, chapters);
+                            } else {
+                              showToast("Kapitel konnten nicht geladen werden.", "err");
+                            }
+                          });
+                        } else if (job.resultUrl) {
+                          loadTrack(job.resultUrl, playerTitle, job.id);
+                        }
                       }
                     : undefined
                 }
@@ -1179,7 +1355,7 @@ export default function GenerateClient() {
                   ].filter(Boolean).join(" · ");
 
                   return (
-                    <li key={j.id} style={{ listStyle: "none" }}>
+                    <li key={j.id} style={{ listStyle: "none", position: "relative", zIndex: openJobMenu === j.id ? 100 : undefined }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", borderRadius: 14, ...glassPanel }}>
                         {/* Play button — left, 44px fixed slot */}
                         <div style={{ flexShrink: 0, width: 44, height: 44, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
@@ -1228,7 +1404,7 @@ export default function GenerateClient() {
                                 onClick={() => setOpenJobMenu(null)}
                                 style={{ position: "fixed", inset: 0, zIndex: 40 }}
                               />
-                              <div style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", zIndex: 50, minWidth: 140, borderRadius: 12, ...glassPanel, padding: "6px 0", overflow: "hidden" }}>
+                              <div style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", zIndex: 200, minWidth: 140, borderRadius: 12, ...glassPanel, padding: "6px 0", overflow: "hidden" }}>
                                 <button
                                   type="button"
                                   onClick={(e) => { e.stopPropagation(); void deleteJob(j.id); setOpenJobMenu(null); }}
@@ -1257,7 +1433,7 @@ export default function GenerateClient() {
                   ].filter(Boolean).join(" · ");
 
                   return (
-                    <li key={j.id} style={{ listStyle: "none" }}>
+                    <li key={j.id} style={{ listStyle: "none", position: "relative", zIndex: openJobMenu === j.id ? 100 : undefined }}>
                       <div style={{ padding: "14px 14px 12px", borderRadius: 14, ...glassPanel, display: "flex", flexDirection: "column", gap: 10, minHeight: 110 }}>
                         {/* Title */}
                         <div style={{ flex: "1 1 auto", minWidth: 0 }}>
@@ -1303,7 +1479,7 @@ export default function GenerateClient() {
                                   onClick={() => setOpenJobMenu(null)}
                                   style={{ position: "fixed", inset: 0, zIndex: 40 }}
                                 />
-                                <div style={{ position: "absolute", right: 0, bottom: "calc(100% + 6px)", zIndex: 50, minWidth: 140, borderRadius: 12, ...glassPanel, padding: "6px 0", overflow: "hidden" }}>
+                                <div style={{ position: "absolute", right: 0, bottom: "calc(100% + 6px)", zIndex: 200, minWidth: 140, borderRadius: 12, ...glassPanel, padding: "6px 0", overflow: "hidden" }}>
                                   <button
                                     type="button"
                                     onClick={(e) => { e.stopPropagation(); void deleteJob(j.id); setOpenJobMenu(null); }}
