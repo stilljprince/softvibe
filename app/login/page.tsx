@@ -6,10 +6,15 @@ export default function LoginPage() {
   return (
     <Suspense
       fallback={
-        <main className="sv-auth">
-          <div className="sv-auth__card">
-            <p style={{ opacity: 0.6 }}>Login wird geladen…</p>
-          </div>
+        <main
+          style={{
+            minHeight: "100vh",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <p style={{ opacity: 0.5, fontSize: "0.9rem" }}>Wird geladen…</p>
         </main>
       }
     >

@@ -141,7 +141,7 @@ export async function POST(
   const key = session.user.id
     ? `u:${session.user.id}:complete`
     : `ip:${clientIpFromRequest(req)}:complete`;
-  const rl = rateLimit(key, 10, 60_000);
+  const rl = await rateLimit(key, 10, 60_000);
   if (!rl.ok) {
     addDebugLog({
       ts: new Date().toISOString(),
@@ -176,6 +176,7 @@ export async function POST(
       language: true,
       voiceStyle: true,
       voiceGender: true,
+      scriptOverride: true,
     },
   });
   if (!job) {
@@ -236,6 +237,39 @@ console.log("COMPLETE language:", job?.id, job?.language);
     return jsonOk(failed, 200);
   }
 
+  // Atomic lock: transition QUEUED → PROCESSING before any external API call.
+  // Only one request per job can succeed this update. Any concurrent request
+  // that sees count === 0 exits immediately — preventing duplicate OpenAI /
+  // ElevenLabs calls and race conditions on DB writes.
+  {
+    const lock = await prisma.job.updateMany({
+      where: { id, userId: session.user.id as string, status: $Enums.JobStatus.QUEUED },
+      data: { status: $Enums.JobStatus.PROCESSING },
+    });
+
+    if (lock.count === 0) {
+      // Job is already PROCESSING (concurrent request holds the lock),
+      // DONE, or FAILED. Return current state; client polls for final result.
+      const current = await prisma.job.findFirst({
+        where: { id, userId: session.user.id as string },
+        select: {
+          id: true, status: true, resultUrl: true, title: true,
+          prompt: true, preset: true, durationSec: true, createdAt: true,
+        },
+      });
+      addDebugLog({
+        ts: new Date().toISOString(),
+        level: "info",
+        route: "/api/jobs/[id]/complete POST",
+        userId: session.user.id as string,
+        message: "Lock not acquired — already processing or in terminal state",
+        data: { id, currentStatus: current?.status },
+        reqId,
+      });
+      return jsonOk(current ?? job, 200);
+    }
+  }
+
   let nextResultUrl = body.resultUrl ?? null;
   let detectedDuration: number | undefined;
   let kidsSafetyApplied = false;
@@ -287,7 +321,11 @@ const SMOKE_BYPASS_SCRIPT_BUILDER = process.env.SMOKE_BYPASS_SCRIPT_BUILDER === 
 
 let finalText = "";
 
-if (SMOKE_BYPASS_SCRIPT_BUILDER) {
+if (job.scriptOverride && job.scriptOverride.trim() !== "") {
+  // Script-override path: use user-provided script directly, skip AI generation.
+  // Kids safety and stripTtsDirectives still run below.
+  finalText = job.scriptOverride.trim();
+} else if (SMOKE_BYPASS_SCRIPT_BUILDER) {
   finalText = ((job.prompt ?? "") as string).trim();
 } else {
   const out = await buildScriptOpenAI({
@@ -312,11 +350,16 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
     return jsonError(msg, 500);
   }
 
-  // Non-overridable kids safety post-check (repair-first, fail-second)
+  // Non-overridable kids safety post-check
+  // Strict mode (block-first, no repair) when the user supplied their own script.
+  // Standard mode (repair-first) for AI-generated scripts.
   if (isKidsStory) {
-    const safeResult = enforceKidsSafety(finalText);
+    const isUserEditedScript = !!(job.scriptOverride?.trim());
+    const safeResult = enforceKidsSafety(finalText, { strict: isUserEditedScript });
     if (!safeResult.safe) {
-      const safetyMsg = "Story content did not pass safety check after repair attempt.";
+      const safetyMsg = isUserEditedScript
+        ? "Dein Script enthält Inhalte, die für Kindergeschichten nicht erlaubt sind. Bitte überarbeite den Text."
+        : "Story content did not pass safety check after repair attempt.";
       await prisma.job.update({
         where: { id },
         data: { status: $Enums.JobStatus.FAILED, error: safetyMsg },

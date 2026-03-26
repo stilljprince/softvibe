@@ -58,8 +58,25 @@ export async function GET(
     return jsonError("FORBIDDEN", 403, { message: "Forbidden" });
   }
 
+  // Stale-PROCESSING recovery: if a job has been stuck in PROCESSING beyond the
+  // configurable threshold, it means the serverless function was killed before
+  // the catch block could write FAILED. Detect this lazily on the next poll
+  // and transition to FAILED so the client can surface a clean error.
+  if (job.status === "PROCESSING") {
+    const staleMs = parseInt(process.env.PROCESSING_STALE_MS ?? String(15 * 60 * 1000), 10);
+    const staleCutoff = new Date(Date.now() - staleMs);
+    if (job.updatedAt < staleCutoff) {
+      const staleError = "Generation timed out. Please try again.";
+      await prisma.job.update({
+        where: { id: jobId },
+        data: { status: "FAILED", error: staleError },
+      });
+      const { userId, ...safe } = job;
+      return jsonOk({ ...safe, status: "FAILED", error: staleError }, 200);
+    }
+  }
+
   const { userId, ...safe } = job;
-  // Dein Frontend kann sowohl plain Objekt als auch {data: …} lesen
   return jsonOk(safe, 200);
 }
 

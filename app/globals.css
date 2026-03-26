@@ -423,32 +423,45 @@ html, body {
   border: 1px solid var(--color-button-border, rgba(0,0,0,0.06));
   color: var(--color-text);
 }
-/* === SoftVibe: Auth Pages === */
-.sv-auth{
-  min-height: calc(100vh - 120px);
-  display:flex; align-items:center; justify-content:center;
-  padding: 24px;
-}
-
-.sv-auth__card{
-  width: 100%;
-  max-width: 520px;
-  border-radius: 16px;
-  background: var(--color-card);
-  color: var(--color-text);
-  border: 1px solid var(--color-nav-bg);
-  box-shadow: 0 10px 26px rgba(0,0,0,.08);
-  padding: 24px;
-}
-
-.sv-auth__title{
-  font-size: clamp(1.25rem, 2.2vw, 1.6rem);
-  font-weight: 800;
-  margin: 4px 0 16px;
-}
 
 .sv-form{ display:flex; flex-direction:column; gap: 14px; }
 .sv-form-row{ display:flex; flex-direction:column; gap: 6px; }
+
+/* === SoftVibe: Auth Form Inputs ===
+   Base structural styles live here so they are available from the first paint.
+   Theme-specific colors (background, color, border-color) are applied via
+   inline style on each <input> element, driven by useSVTheme(). Focus-ring
+   colours are supplied through CSS custom properties set on the parent form. */
+.sv-auth-input {
+  width: 100%;
+  appearance: none;
+  outline: none;
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 14px;
+  font-family: inherit;
+  transition: border-color .15s ease, box-shadow .15s ease;
+  /* Neutral glass fallback — overridden immediately by inline style */
+  background: rgba(255,255,255,0.08);
+  color: inherit;
+  border: 1px solid rgba(148,163,184,0.28);
+}
+.sv-auth-input:focus {
+  border-color: var(--sv-auth-focus-border, rgba(100,100,100,0.6));
+  box-shadow: 0 0 0 3px var(--sv-auth-focus-ring, rgba(100,100,100,0.2));
+}
+.sv-auth-input::placeholder {
+  opacity: 0.4;
+}
+/* Suppress browser autofill yellow/white flash */
+.sv-auth-input:-webkit-autofill,
+.sv-auth-input:-webkit-autofill:hover,
+.sv-auth-input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 100px var(--sv-auth-input-bg, rgba(30,40,60,0.7)) inset;
+  -webkit-text-fill-color: var(--sv-auth-input-color, #e5e7eb);
+  caret-color: var(--sv-auth-input-color, #e5e7eb);
+  transition: background-color 5000s ease-in-out 0s;
+}
 
 .sv-label{ font-weight: 600; }
 

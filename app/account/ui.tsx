@@ -1,23 +1,27 @@
+// app/account/ui.tsx
 "use client";
 
-import { useEffect, useState } from "react";
-import Image from "next/image";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import type React from "react";
+
 import EmptyState from "../components/EmptyState";
-import HeaderCredits from "@/app/components/HeaderCredits";
-import CustomPlayer from "@/app/components/CustomPlayer";
+import SVScene from "@/app/components/sv-scene";
+import { useSVTheme, type ThemeConfig } from "@/app/components/sv-kit";
+import { usePlayer } from "@/app/components/player-context";
+
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 type AccountUser = {
   id: string;
   name: string;
   email: string;
   image: string | null;
-
   credits: number;
   isAdmin: boolean;
   hasSubscription: boolean;
-  createdAt: string; // ISO-String
+  createdAt: string;
   planLabel: string | null;
   planStatus: string | null;
 };
@@ -32,27 +36,22 @@ type Track = {
   resultUrl?: string | null;
   createdAt?: string;
   durationSec?: number | null;
-  // optional falls /api/tracks liefert:
   title?: string | null;
   url?: string | null;
   durationSeconds?: number | null;
+  playCount?: number | null;
 };
 
-type Theme = "light" | "dark" | "pastel";
-
-// ---- Hilfen für Tracks-Response (wie in Library) ----
 type ItemsResp = { items: Track[]; nextCursor?: string | null };
 type OkDataResp = { ok: true; data: { items: Track[]; nextCursor?: string | null } };
+
+// ── Type guards ───────────────────────────────────────────────────────────────
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
 }
 function isTrack(v: unknown): v is Track {
-  return (
-    isRecord(v) &&
-    typeof (v as { id?: unknown }).id === "string" &&
-    typeof (v as { url?: unknown }).url === "string"
-  );
+  return isRecord(v) && typeof (v as { id?: unknown }).id === "string" && typeof (v as { url?: unknown }).url === "string";
 }
 function isTrackArray(v: unknown): v is Track[] {
   return Array.isArray(v) && v.every(isTrack);
@@ -61,73 +60,121 @@ function isItemsResp(v: unknown): v is ItemsResp {
   return isRecord(v) && "items" in v && isTrackArray((v as ItemsResp).items);
 }
 function isOkDataResp(v: unknown): v is OkDataResp {
-  return (
-    isRecord(v) &&
-    (v as { ok?: unknown }).ok === true &&
-    isRecord((v as { data?: unknown }).data) &&
-    isTrackArray((v as OkDataResp).data.items)
-  );
+  return isRecord(v) && (v as { ok?: unknown }).ok === true && isRecord((v as { data?: unknown }).data) && isTrackArray((v as OkDataResp).data.items);
 }
 
-// Datum immer DD.MM.YYYY
-function formatDate(dateIso?: string): string {
-  if (!dateIso) return "—";
-  const d = new Date(dateIso);
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function formatDate(iso?: string): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const yyyy = d.getFullYear();
-  return `${dd}.${mm}.${yyyy}`;
+  return `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}.${d.getFullYear()}`;
 }
+
+const MAX_TITLE = 60;
+
+function displayTitle(t: Track): string {
+  const raw = (t.title ?? t.prompt ?? "").trim();
+  if (!raw) return "(ohne Titel)";
+  return raw.length <= MAX_TITLE ? raw : raw.slice(0, MAX_TITLE - 1) + "…";
+}
+
+function displayUrl(t: Track): string {
+  return t.url ?? t.resultUrl ?? "";
+}
+
+// ── pillStyle — matches /generate exactly ─────────────────────────────────────
+
+function pillStyle(cfg: ThemeConfig, variant: "primary" | "secondary"): React.CSSProperties {
+  if (variant === "primary") {
+    return {
+      textDecoration: "none",
+      padding: "0.55rem 1.15rem",
+      borderRadius: 999,
+      background: cfg.primaryButtonBg,
+      color: cfg.primaryButtonText,
+      fontSize: "0.88rem",
+      fontWeight: 700,
+      boxShadow: "0 14px 35px rgba(0,0,0,0.35)",
+      border: "none",
+      cursor: "pointer",
+      whiteSpace: "nowrap" as const,
+    };
+  }
+  return {
+    textDecoration: "none",
+    padding: "0.55rem 1.05rem",
+    borderRadius: 999,
+    border: `1px solid ${cfg.secondaryButtonBorder}`,
+    background: cfg.secondaryButtonBg,
+    color: cfg.secondaryButtonText,
+    fontSize: "0.85rem",
+    fontWeight: 650,
+    boxShadow: "0 10px 25px rgba(0,0,0,0.25)",
+    cursor: "pointer",
+    whiteSpace: "nowrap" as const,
+  };
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
 
 export default function AccountClient({ user }: { user: AccountUser }) {
+  const { themeKey, themeCfg, cycleTheme, logoSrc } = useSVTheme();
+  const { loadTrack, play, pause, state } = usePlayer();
+
   const [tracks, setTracks] = useState<Track[]>([]);
   const [loadingTracks, setLoadingTracks] = useState(false);
+  const [viewMode, setViewMode] = useState<"list" | "grid">("list");
+  const [tab, setTab] = useState<"recent" | "popular">("recent");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ===== Theme wie Landing =====
-  const [theme, setTheme] = useState<Theme>("light");
-  useEffect(() => {
-    const saved = (localStorage.getItem("theme") as Theme | null) ?? "light";
-    document.documentElement.className = saved;
-    setTheme(saved);
-  }, []);
-  useEffect(() => {
-    document.documentElement.className = theme;
-    localStorage.setItem("theme", theme);
-  }, [theme]);
-  const nextTheme: Record<Theme, Theme> = { light: "dark", dark: "pastel", pastel: "light" };
-  const getThemeIcon = () => (theme === "light" ? "🌞" : theme === "dark" ? "🌙" : "🎨");
-  const handleToggleTheme = () => setTheme(nextTheme[theme]);
-  const getLogo = () =>
-    theme === "light"
-      ? "/softvibe-logo-light.svg"
-      : theme === "dark"
-      ? "/softvibe-logo-dark.svg"
-      : "/softvibe-logo-pastel.svg";
+  const isDark = themeKey === "dark";
 
-  // ===== letzte 5 Einträge robust laden (Tracks-API wie in Library) =====
+  // Glass surface values
+  const glassCardBg = isDark
+    ? "rgba(15,23,42,0.32)"
+    : themeKey === "pastel"
+    ? "rgba(255,245,250,0.50)"
+    : "rgba(255,255,255,0.55)";
+  const glassCardBorder = isDark
+    ? "rgba(255,255,255,0.08)"
+    : "rgba(0,0,0,0.08)";
+  const divider = `1px solid ${glassCardBorder}`;
+
+  // glassPanel — matches /generate exactly
+  const glassPanel = useMemo((): React.CSSProperties => ({
+    background: isDark ? "rgba(15,23,42,0.52)" : "rgba(248,250,252,0.62)",
+    border: isDark ? "1px solid rgba(148,163,184,0.22)" : "1px solid rgba(148,163,184,0.28)",
+    color: themeCfg.uiText,
+    backdropFilter: "blur(18px)",
+    WebkitBackdropFilter: "blur(18px)",
+    boxShadow: isDark ? "0 26px 80px rgba(0,0,0,0.55)" : "0 22px 60px rgba(15,23,42,0.25)",
+  }), [isDark, themeCfg.uiText]);
+
+  // "Meist gehört" is disabled until playCount data is available
+  const hasPlayCount = tracks.some(
+    (t) => typeof t.playCount === "number" && t.playCount > 0,
+  );
+  const tabTracks =
+    tab === "popular" && hasPlayCount
+      ? [...tracks].sort((a, b) => (b.playCount ?? 0) - (a.playCount ?? 0))
+      : tracks;
+
+  // Load recent tracks
   useEffect(() => {
     const load = async () => {
       setLoadingTracks(true);
       try {
         let res = await fetch("/api/tracks?take=5");
-        if (!res.ok) {
-          // Fallback auf /api/jobs, falls Tracks-API mal Fehler wirft
-          res = await fetch("/api/jobs?take=5");
-        }
+        if (!res.ok) res = await fetch("/api/jobs?take=5");
         if (!res.ok) throw new Error(String(res.status));
-
         const data: unknown = await res.json();
         let list: Track[] = [];
-
-        if (isTrackArray(data)) {
-          list = data;
-        } else if (isItemsResp(data)) {
-          list = data.items;
-        } else if (isOkDataResp(data)) {
-          list = data.data.items;
-        }
-
+        if (isTrackArray(data)) list = data;
+        else if (isItemsResp(data)) list = data.items;
+        else if (isOkDataResp(data)) list = data.data.items;
         setTracks(list);
       } catch {
         setTracks([]);
@@ -138,532 +185,673 @@ export default function AccountClient({ user }: { user: AccountUser }) {
     void load();
   }, []);
 
-  // 🔹 Globaler Audio-Guard: nur ein <audio> gleichzeitig auf der Seite
-  useEffect(() => {
-    let current: HTMLAudioElement | null = null;
-
-    const handlePlay = (event: Event) => {
-      const target = event.target as HTMLAudioElement | null;
-      if (!target || target.tagName !== "AUDIO") return;
-
-      if (current && current !== target && !current.paused) {
-        current.pause();
-      }
-      current = target;
-    };
-
-    document.addEventListener("play", handlePlay, true); // capture-Phase
-
-    return () => {
-      document.removeEventListener("play", handlePlay, true);
-      current = null;
-    };
-  }, []);
-
-  const initials =
-    user.name
-      ?.split(" ")
-      .map((p) => p[0])
-      .join("")
-      .toUpperCase() || "SV";
-
-  const MAX_TITLE_LENGTH = 60;
-
-  const displayTitle = (t: Track) => {
-  const raw = (t.title ?? t.prompt ?? "").trim();
-  if (!raw) return "(ohne Titel)";
-
-  if (raw.length <= MAX_TITLE_LENGTH) return raw;
-  return raw.slice(0, MAX_TITLE_LENGTH - 1) + "…";
-};
-  const displayUrl = (t: Track) => t.url ?? t.resultUrl ?? "";
+  // Stripe Customer Portal
   const handleOpenPortal = async () => {
     try {
-      const res = await fetch("/api/billing/portal", {
-        method: "POST",
-      });
-
-      if (!res.ok) {
-        console.error("Failed to create portal session");
-        return;
-      }
-
+      const res = await fetch("/api/billing/portal", { method: "POST" });
+      if (!res.ok) { console.error("Failed to create portal session"); return; }
       const data: unknown = await res.json();
-
-      if (
-        data &&
-        typeof data === "object" &&
-        "url" in data &&
-        typeof (data as { url: unknown }).url === "string"
-      ) {
+      if (data && typeof data === "object" && "url" in data && typeof (data as { url: unknown }).url === "string") {
         window.location.href = (data as { url: string }).url;
       }
     } catch (error) {
       console.error(error);
     }
   };
-  
-  // Abo-Status-Text (wird jetzt nur noch im Hinweisblock verwendet)
-  const subscriptionLabel = user.hasSubscription
-    ? user.planLabel
-      ? user.planStatus
-        ? `${user.planLabel} (${user.planStatus})`
-        : user.planLabel
-      : "Aktives Abonnement"
-    : "Kein aktives Abonnement";
+
+  // Global player
+  const handlePlay = useCallback((t: Track) => {
+    const url = displayUrl(t);
+    if (!url) return;
+    const active = state.trackId === t.id;
+    if (active) {
+      state.isPlaying ? pause() : play();
+      return;
+    }
+    loadTrack(url, displayTitle(t), t.id);
+  }, [state.trackId, state.isPlaying, loadTrack, play, pause]);
+
+  const initials = user.name?.split(" ").map((p) => p[0]).join("").toUpperCase() || "SV";
 
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        background: "var(--color-bg)",
-        paddingTop: "64px",
-      }}
-    >
-      {/* ===== Header wie Landing ===== */}
+    <SVScene theme={themeKey}>
+      {/* Responsive grid — desktop: 320px left + 1fr right */}
+      <style>{`
+        @media (min-width: 900px) {
+          .sv-account-grid {
+            display: grid !important;
+            grid-template-columns: 320px 1fr;
+            gap: 32px;
+            align-items: start;
+          }
+        }
+      `}</style>
+
+      {/* ── Header — matches /generate exactly ───────────────────────── */}
       <header
         style={{
           position: "fixed",
-          top: 0,
-          left: 0,
-          right: 0,
-          zIndex: 100,
+          top: 18,
+          left: 18,
+          right: 18,
+          zIndex: 30,
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
-          padding: "0.6rem 1.5rem",
-          background: "color-mix(in oklab, var(--color-bg) 90%, transparent)",
-          backdropFilter: "blur(10px)",
+          pointerEvents: "auto",
         }}
       >
-        <div style={{ flex: "0 0 auto" }}>
-          <Image src={getLogo()} alt="SoftVibe Logo" width={160} height={50} priority />
-        </div>
+        {/* Logo — click cycles theme */}
+        <button
+          type="button"
+          onClick={cycleTheme}
+          style={{ border: "none", background: "transparent", padding: 0, cursor: "pointer" }}
+          aria-label="Theme wechseln"
+          title="Theme wechseln"
+        >
+          <Image src={logoSrc} alt="SoftVibe Logo" width={160} height={50} priority />
+        </button>
 
-        <nav
-          className="desktop-nav"
+        {/* Home — absolutely centered */}
+        <Link
+          href="/"
+          title="Startseite"
           style={{
             position: "absolute",
             left: "50%",
-            top: "50%",
-            transform: "translate(-50%, -50%)",
-            display: "flex",
-            gap: "1rem",
+            transform: "translateX(-50%)",
+            width: 40,
+            height: 40,
+            borderRadius: 999,
+            border: `1px solid ${themeCfg.secondaryButtonBorder}`,
+            background: themeCfg.secondaryButtonBg,
+            color: themeCfg.secondaryButtonText,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            textDecoration: "none",
+            boxShadow: "0 8px 20px rgba(0,0,0,0.2)",
+            flexShrink: 0,
           }}
         >
-          <Link href="/#features" style={navLinkStyle}>
-            Features
-          </Link>
-          <Link href="/#about" style={navLinkStyle}>
-            Über uns
-          </Link>
-          <Link href="/#contact" style={navLinkStyle}>
-            Kontakt
-          </Link>
-          <Link href="/" style={navLinkStyle}>
-            Startseite
-          </Link>
-        </nav>
+          <svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor">
+            <path d="M10 2.5L2 9h2.5v8.5h5V13h1v4.5h5V9H18L10 2.5z" />
+          </svg>
+        </Link>
 
-        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-          <HeaderCredits />
-
+        {/* Menu — hover with close-delay so cursor can reach the dropdown */}
+        <div
+          style={{ position: "relative" }}
+          onMouseEnter={() => {
+            if (menuCloseTimer.current) { clearTimeout(menuCloseTimer.current); menuCloseTimer.current = null; }
+            setMenuOpen(true);
+          }}
+          onMouseLeave={() => {
+            menuCloseTimer.current = setTimeout(() => setMenuOpen(false), 150);
+          }}
+        >
           <button
-            onClick={handleToggleTheme}
+            type="button"
             style={{
               width: 40,
               height: 40,
-              borderRadius: "50%",
-              background: "var(--color-button-bg)",
-              color: "var(--color-button-text)",
-              border: "none",
+              borderRadius: 999,
+              border: `1px solid ${themeCfg.secondaryButtonBorder}`,
+              background: themeCfg.secondaryButtonBg,
+              color: themeCfg.secondaryButtonText,
+              cursor: "pointer",
               display: "grid",
               placeItems: "center",
-              cursor: "pointer",
-              fontSize: "1.25rem",
+              boxShadow: "0 10px 25px rgba(0,0,0,0.25)",
+              fontWeight: 900,
             }}
-            aria-label="Theme wechseln"
-            title="Theme wechseln"
+            aria-label="Menü"
+            title="Menü"
           >
-            {getThemeIcon()}
+            ☰
           </button>
 
-          <form action="/api/auth/signout" method="post">
-            <button
-              type="submit"
+          {menuOpen && (
+            <div
               style={{
-                background: "var(--color-accent)",
-                color: "#fff",
-                border: "none",
-                borderRadius: 999,
-                padding: "0.4rem 0.9rem",
-                fontWeight: 600,
-                cursor: "pointer",
+                position: "absolute",
+                right: 0,
+                top: "calc(100% + 8px)",
+                zIndex: 90,
+                width: "min(280px, calc(100vw - 28px))",
+                padding: 2,
+                borderRadius: 26,
+                background: isDark
+                  ? "radial-gradient(circle at top, rgba(56,189,248,0.22), transparent 68%)"
+                  : "radial-gradient(circle at top, rgba(244,114,182,0.32), transparent 70%)",
+                boxShadow: "0 26px 80px rgba(0,0,0,0.7)",
               }}
             >
-              Logout
-            </button>
-          </form>
-        </div>
+              <div style={{ ...glassPanel, padding: 16, borderRadius: 24 }}>
+                <div style={{ fontSize: "0.8rem", letterSpacing: "0.14em", textTransform: "uppercase", fontWeight: 800, color: themeCfg.uiSoftText, marginBottom: 12 }}>
+                  Menü
+                </div>
 
-        <style jsx>{`
-          @media (max-width: 880px) {
-            .desktop-nav {
-              display: none !important;
-            }
-          }
-        `}</style>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {[
+                    { label: "Generieren", href: "/generate" },
+                    { label: "Bibliothek", href: "/library" },
+                    { label: "Konto", href: "/account" },
+                  ].map((x) => (
+                    <Link
+                      key={x.href}
+                      href={x.href}
+                      onClick={() => setMenuOpen(false)}
+                      style={{ ...pillStyle(themeCfg, "secondary"), width: "100%", textAlign: "left" as const, display: "block" }}
+                    >
+                      {x.label}
+                    </Link>
+                  ))}
+
+                  <div style={{ height: 1, background: "rgba(148,163,184,0.25)", margin: "4px 0" }} />
+
+                  <form action="/api/auth/signout" method="post">
+                    <button
+                      type="submit"
+                      style={{ ...pillStyle(themeCfg, "secondary"), width: "100%", textAlign: "left" as const }}
+                    >
+                      Logout
+                    </button>
+                  </form>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       </header>
 
-      {/* ===== Inhalt: breit ===== */}
-      <div
-        style={{
-          width: "100%",
-          maxWidth: "min(1650px, 100vw - 1.5rem)",
-          margin: "1.5rem auto 0",
-          paddingBottom: "3rem",
-        }}
-      >
-        <div
-          style={{
-            width: "100%",
-            background: "var(--color-card)",
-            border: "1px solid var(--color-nav-bg)",
-            borderRadius: 20,
-            boxShadow: "0 14px 30px rgba(0,0,0,0.035)",
-            overflow: "hidden",
-            display: "grid",
-            gridTemplateColumns: "0.35fr 0.65fr",
-            gap: 0,
-          }}
-        >
-          {/* ===== linke Spalte ===== */}
+      {/* ── Page content ──────────────────────────────────────────────── */}
+      <main style={{ minHeight: "100vh", padding: "96px 24px 80px" }}>
+        <div style={{ maxWidth: 1200, margin: "0 auto" }}>
+
+          {/* Responsive grid container */}
           <div
-            style={{
-              padding: "1.25rem 1.5rem 1.5rem",
-              background:
-                "linear-gradient(160deg, color-mix(in oklab, var(--color-accent) 16%, var(--color-card)) 0%, var(--color-card) 70%)",
-            }}
+            className="sv-account-grid"
+            style={{ display: "flex", flexDirection: "column", gap: 32 }}
           >
-            <div style={{ display: "flex", gap: "1rem", alignItems: "center", marginBottom: "1rem" }}>
+
+            {/* ── Left column: Identity + Credits + Quick Actions ── */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 28 }}>
+
+              {/* Identity */}
               <div>
-                {user.image ? (
-                  <img
-                    src={user.image}
-                    alt={user.name ?? "User"}
-                    style={{
-                      width: 70,
-                      height: 70,
-                      borderRadius: "999px",
-                      objectFit: "cover",
-                      border: "3px solid rgba(255,255,255,0.5)",
-                    }}
-                  />
-                ) : (
+                <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 14 }}>
+                  {/* Avatar */}
                   <div
                     style={{
-                      width: 70,
-                      height: 70,
-                      borderRadius: "999px",
-                      background: "rgba(0,0,0,0.12)",
-                      border: "3px solid rgba(255,255,255,0.5)",
+                      flexShrink: 0,
+                      width: 56,
+                      height: 56,
+                      borderRadius: "50%",
+                      background: `${themeCfg.primaryButtonBg}22`,
+                      border: `2px solid ${themeCfg.primaryButtonBg}44`,
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
-                      color: "#fff",
-                      fontWeight: 700,
-                      fontSize: "1.2rem",
+                      color: themeCfg.primaryButtonBg,
+                      fontWeight: 800,
+                      fontSize: "1.1rem",
                     }}
                   >
                     {initials}
                   </div>
-                )}
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <p style={{ fontSize: "0.7rem", opacity: 0.7, marginBottom: 3 }}>Dein SoftVibe-Konto</p>
-                <h1 style={{ fontSize: "1.25rem", fontWeight: 700, lineHeight: 1.05 }}>{user.name}</h1>
-                <p style={{ opacity: 0.9, overflowWrap: "anywhere" }}>{user.email}</p>
-              </div>
-            </div>
 
-            <section>
-              <h2
-                style={{
-                  fontSize: "0.9rem",
-                  fontWeight: 700,
-                  marginBottom: "0.5rem",
-                }}
-              >
-                Persönliche Daten
-              </h2>
-
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr",
-                  gap: "0.6rem",
-                }}
-              >
-                <Field label="Name" value={user.name || "—"} />
-                <Field label="E-Mail" value={user.email} mono />
-                <Field label="Mitglied seit" value={formatDate(user.createdAt)} />
-                <Field label="Credits" value={String(user.credits)} />
-              </div>
-
-              {user.hasSubscription && (
-                <>
-                  <div style={{ marginTop: "0.75rem" }}>
-                    <ManageSubscriptionButton onClick={handleOpenPortal} />
-                  </div>
-
-                  {user.planLabel && (
-                    <div
-                      style={{
-                        marginTop: "0.75rem",
-                        padding: "0.7rem 0.8rem",
-                        borderRadius: 14,
-                        border: "1px solid rgba(255,255,255,0.45)",
-                        background:
-                          "color-mix(in oklab, var(--color-card) 94%, rgba(0,0,0,0.10))",
-                        fontSize: "0.8rem",
-                      }}
-                    >
-                      <div
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 3 }}>
+                      <h1
                         style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                          gap: "0.5rem",
-                          marginBottom: 4,
+                          fontSize: "clamp(1.25rem, 2.5vw, 1.55rem)",
+                          fontWeight: 800,
+                          color: themeCfg.uiText,
+                          margin: 0,
+                          lineHeight: 1.15,
                         }}
                       >
-                        <div style={{ fontWeight: 700 }}>Dein aktuelles Abo</div>
+                        {user.name}
+                      </h1>
+                      {user.isAdmin && (
                         <div
                           style={{
-                            padding: "0.15rem 0.6rem",
+                            padding: "0.18rem 0.55rem",
                             borderRadius: 999,
-                            border: "1px solid rgba(255,255,255,0.7)",
-                            background:
-                              "color-mix(in oklab, var(--color-card) 90%, rgba(0,0,0,0.12))",
-                            fontSize: "0.75rem",
-                            fontWeight: 600,
-                            whiteSpace: "nowrap",
+                            background: `${themeCfg.primaryButtonBg}22`,
+                            border: `1px solid ${themeCfg.primaryButtonBg}55`,
+                            fontSize: "0.68rem",
+                            fontWeight: 700,
+                            color: themeCfg.primaryButtonBg,
+                            letterSpacing: "0.06em",
                           }}
                         >
-                          {user.planLabel}
-                          {user.planStatus ? ` · ${user.planStatus}` : ""}
+                          Admin
                         </div>
-                      </div>
-                      
-                      <div style={{ opacity: 0.8, marginTop: 4 }}>
-                        Credits werden dir automatisch monatlich gutgeschrieben. Details
-                        zu Rechnungen und Zahlungen kannst du im{" "}
-                        <button
-                          type="button"
-                          onClick={handleOpenPortal}
+                      )}
+                    </div>
+                    <div style={{ fontSize: "0.8rem", color: themeCfg.uiSoftText, overflowWrap: "anywhere" }}>
+                      {user.email}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ fontSize: "0.75rem", color: themeCfg.uiSoftText, paddingLeft: 72 }}>
+                  Mitglied seit {formatDate(user.createdAt)}
+                </div>
+              </div>
+
+              {/* Divider */}
+              <div style={{ borderTop: divider }} />
+
+              {/* Credits + plan */}
+              <div>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
+                  <span style={{ fontSize: "2.2rem", fontWeight: 850, color: themeCfg.uiText, lineHeight: 1 }}>
+                    {user.isAdmin ? "∞" : user.credits.toLocaleString("de-DE")}
+                  </span>
+                  <span style={{ fontSize: "0.8rem", color: themeCfg.uiSoftText, fontWeight: 500 }}>
+                    Credits
+                  </span>
+                </div>
+
+                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
+                  {user.hasSubscription && user.planLabel ? (
+                    <div
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 5,
+                        padding: "0.22rem 0.65rem",
+                        borderRadius: 999,
+                        background: `${themeCfg.primaryButtonBg}1a`,
+                        border: `1px solid ${themeCfg.primaryButtonBg}44`,
+                        fontSize: "0.78rem",
+                        fontWeight: 700,
+                        color: themeCfg.uiText,
+                      }}
+                    >
+                      {user.planLabel}
+                      {user.planStatus && (
+                        <span style={{ fontWeight: 400, color: themeCfg.uiSoftText }}>
+                          · {user.planStatus}
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    <span style={{ fontSize: "0.8rem", color: themeCfg.uiSoftText }}>Kein Abo</span>
+                  )}
+
+                  {user.hasSubscription ? (
+                    <ManageSubscriptionButton onClick={handleOpenPortal} themeCfg={themeCfg} />
+                  ) : (
+                    <Link
+                      href="/billing"
+                      style={{
+                        padding: "0.3rem 0.85rem",
+                        borderRadius: 999,
+                        background: themeCfg.primaryButtonBg,
+                        color: themeCfg.primaryButtonText,
+                        fontWeight: 700,
+                        fontSize: "0.8rem",
+                        textDecoration: "none",
+                      }}
+                    >
+                      Paket wählen
+                    </Link>
+                  )}
+                </div>
+              </div>
+
+              {/* Divider */}
+              <div style={{ borderTop: divider }} />
+
+              {/* Quick Actions */}
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <Link href="/generate" style={pillStyle(themeCfg, "primary")}>
+                  + Neu erstellen
+                </Link>
+                <Link href="/library" style={pillStyle(themeCfg, "secondary")}>
+                  Bibliothek öffnen
+                </Link>
+              </div>
+
+            </div>
+
+            {/* ── Right column: Tracks — open panel, no card wrapper ── */}
+            <section style={{ minWidth: 0 }}>
+
+              {/* Section header: tabs + view toggle — standalone row */}
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "flex-end",
+                  borderBottom: `1px solid ${glassCardBorder}`,
+                  marginBottom: 20,
+                }}
+              >
+                {/* Tabs — underline style */}
+                <div style={{ display: "flex" }}>
+                  {(["recent", "popular"] as const).map((t) => {
+                    const isActive = tab === t;
+                    const isDisabled = t === "popular" && !hasPlayCount;
+                    return (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={isDisabled ? undefined : () => setTab(t)}
+                        style={{
+                          appearance: "none",
+                          background: "transparent",
+                          border: "none",
+                          borderBottom: isActive
+                            ? `2px solid ${themeCfg.primaryButtonBg}`
+                            : "2px solid transparent",
+                          padding: "0 4px 12px",
+                          marginRight: 20,
+                          cursor: isDisabled ? "not-allowed" : "pointer",
+                          fontSize: "0.88rem",
+                          fontWeight: isActive ? 700 : 500,
+                          color: isActive ? themeCfg.uiText : themeCfg.uiSoftText,
+                          opacity: isDisabled ? 0.45 : 1,
+                          transition: "color 150ms ease, border-color 150ms ease",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {t === "recent" ? "Zuletzt erstellt" : "Meist gehört"}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* View toggle pill */}
+                {tracks.length > 0 && (
+                  <div
+                    style={{
+                      display: "flex",
+                      borderRadius: 999,
+                      border: `1px solid ${glassCardBorder}`,
+                      overflow: "hidden",
+                      background: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)",
+                      marginBottom: 12,
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setViewMode("list")}
+                      aria-label="Listenansicht"
+                      style={{
+                        padding: "5px 8px",
+                        border: "none",
+                        background: viewMode === "list" ? themeCfg.primaryButtonBg : "transparent",
+                        color: viewMode === "list" ? themeCfg.primaryButtonText : themeCfg.uiSoftText,
+                        cursor: "pointer",
+                        display: "grid",
+                        placeItems: "center",
+                        transition: "background 150ms ease, color 150ms ease",
+                      }}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                        <rect x="1" y="2" width="14" height="2.5" rx="1" />
+                        <rect x="1" y="6.75" width="14" height="2.5" rx="1" />
+                        <rect x="1" y="11.5" width="14" height="2.5" rx="1" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setViewMode("grid")}
+                      aria-label="Kachelansicht"
+                      style={{
+                        padding: "5px 8px",
+                        border: "none",
+                        background: viewMode === "grid" ? themeCfg.primaryButtonBg : "transparent",
+                        color: viewMode === "grid" ? themeCfg.primaryButtonText : themeCfg.uiSoftText,
+                        cursor: "pointer",
+                        display: "grid",
+                        placeItems: "center",
+                        transition: "background 150ms ease, color 150ms ease",
+                      }}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                        <rect x="1" y="1" width="6" height="6" rx="1.5" />
+                        <rect x="9" y="1" width="6" height="6" rx="1.5" />
+                        <rect x="1" y="9" width="6" height="6" rx="1.5" />
+                        <rect x="9" y="9" width="6" height="6" rx="1.5" />
+                      </svg>
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Content */}
+              {loadingTracks ? (
+                <p style={{ opacity: 0.5, fontSize: "0.85rem", color: themeCfg.uiSoftText }}>
+                  Lade…
+                </p>
+              ) : tabTracks.length === 0 ? (
+                <EmptyState
+                  title="Noch keine Generierungen"
+                  hint="Wenn du generierst, erscheinen sie hier."
+                  action={{ href: "/generate", label: "Jetzt erstellen" }}
+                />
+              ) : viewMode === "grid" ? (
+                <>
+                  {/* ── True grid — each tile is a real glass card ── */}
+                  <ul
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
+                      gap: 14,
+                      listStyle: "none",
+                    }}
+                  >
+                    {tabTracks.map((t) => {
+                      const active = state.trackId === t.id;
+                      const playing = active && state.isPlaying;
+                      const hasAudio = !!(t.status === "DONE" || t.url || t.resultUrl);
+                      return (
+                        <li
+                          key={t.id}
                           style={{
-                            padding: 0,
-                            margin: 0,
-                            border: "none",
-                            background: "transparent",
-                            font: "inherit",
-                            fontWeight: 600,
-                            cursor: "pointer",
-                            color: "inherit",
+                            background: glassCardBg,
+                            border: `1px solid ${active ? themeCfg.primaryButtonBg + "55" : glassCardBorder}`,
+                            borderRadius: 16,
+                            padding: "14px 16px",
+                            display: "flex",
+                            flexDirection: "column",
+                            justifyContent: "space-between",
+                            gap: 14,
+                            backdropFilter: "blur(12px)",
+                            WebkitBackdropFilter: "blur(12px)",
+                            boxShadow: active
+                              ? `0 4px 20px rgba(0,0,0,0.18)`
+                              : isDark
+                              ? "0 2px 8px rgba(0,0,0,0.2)"
+                              : "0 2px 8px rgba(15,23,42,0.08)",
+                            transition: "border-color 200ms ease, box-shadow 200ms ease",
+                            minHeight: 110,
                           }}
                         >
-                          Abo-Verwaltungsbereich
-                        </button>{" "}
-                        einsehen.
-                      </div>
-                    </div>
-                  )}
+                          {/* Title */}
+                          <div
+                            style={{
+                              fontWeight: 700,
+                              fontSize: "0.9rem",
+                              color: active ? themeCfg.primaryButtonBg : themeCfg.uiText,
+                              lineHeight: 1.4,
+                              display: "-webkit-box",
+                              WebkitLineClamp: 3,
+                              WebkitBoxOrient: "vertical",
+                              overflow: "hidden",
+                              transition: "color 150ms ease",
+                            }}
+                            title={(t.title ?? t.prompt ?? "").trim() || undefined}
+                          >
+                            {displayTitle(t)}
+                          </div>
+
+                          {/* Meta + play button row */}
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontSize: "0.72rem", color: themeCfg.uiSoftText, fontWeight: 600, marginBottom: 1 }}>
+                                {(t.preset ?? "—") || "—"}
+                              </div>
+                              <div style={{ fontSize: "0.68rem", color: themeCfg.uiSoftText, opacity: 0.7 }}>
+                                {(t.durationSec ?? t.durationSeconds) ? `${t.durationSec ?? t.durationSeconds}s` : ""}
+                                {t.createdAt ? ` · ${new Date(t.createdAt).toLocaleDateString("de-DE")}` : ""}
+                              </div>
+                            </div>
+                            {hasAudio && (
+                              <button
+                                type="button"
+                                onClick={() => handlePlay(t)}
+                                aria-label={playing ? "Pause" : "Abspielen"}
+                                style={{
+                                  flexShrink: 0,
+                                  width: 36,
+                                  height: 36,
+                                  borderRadius: "50%",
+                                  border: "none",
+                                  background: themeCfg.primaryButtonBg,
+                                  color: themeCfg.primaryButtonText,
+                                  display: "grid",
+                                  placeItems: "center",
+                                  cursor: "pointer",
+                                  boxShadow: active ? "0 4px 16px rgba(0,0,0,0.25)" : "0 2px 8px rgba(0,0,0,0.15)",
+                                  transition: "box-shadow 200ms ease",
+                                }}
+                              >
+                                {playing ? (
+                                  <svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor">
+                                    <rect x="1.5" y="1" width="3.5" height="10" rx="1" />
+                                    <rect x="7" y="1" width="3.5" height="10" rx="1" />
+                                  </svg>
+                                ) : (
+                                  <svg width="11" height="11" viewBox="0 0 11 11" fill="currentColor">
+                                    <path d="M2.5 1.8l7 3.7-7 3.7z" />
+                                  </svg>
+                                )}
+                              </button>
+                            )}
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+
+                  <div style={{ marginTop: 20, textAlign: "right" }}>
+                    <Link href="/library" style={pillStyle(themeCfg, "secondary")}>
+                      Alle ansehen →
+                    </Link>
+                  </div>
+                </>
+              ) : (
+                <>
+                  {/* ── List view — clean rows, no surfaces ── */}
+                  <ul style={{ listStyle: "none" }}>
+                    {tabTracks.map((t, i) => {
+                      const active = state.trackId === t.id;
+                      const playing = active && state.isPlaying;
+                      const hasAudio = !!(t.status === "DONE" || t.url || t.resultUrl);
+                      const isLast = i === tabTracks.length - 1;
+                      return (
+                        <li
+                          key={t.id}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 12,
+                            padding: "12px 0",
+                            borderBottom: isLast ? "none" : `1px solid ${glassCardBorder}`,
+                          }}
+                        >
+                          {hasAudio && (
+                            <button
+                              type="button"
+                              onClick={() => handlePlay(t)}
+                              aria-label={playing ? "Pause" : "Abspielen"}
+                              style={{
+                                flexShrink: 0,
+                                width: 36,
+                                height: 36,
+                                borderRadius: "50%",
+                                border: "none",
+                                background: themeCfg.primaryButtonBg,
+                                color: themeCfg.primaryButtonText,
+                                display: "grid",
+                                placeItems: "center",
+                                cursor: "pointer",
+                                boxShadow: active ? "0 4px 16px rgba(0,0,0,0.2)" : "none",
+                                transition: "box-shadow 200ms ease",
+                              }}
+                            >
+                              {playing ? (
+                                <svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor">
+                                  <rect x="1.5" y="1" width="3.5" height="10" rx="1" />
+                                  <rect x="7" y="1" width="3.5" height="10" rx="1" />
+                                </svg>
+                              ) : (
+                                <svg width="11" height="11" viewBox="0 0 11 11" fill="currentColor">
+                                  <path d="M2.5 1.8l7 3.7-7 3.7z" />
+                                </svg>
+                              )}
+                            </button>
+                          )}
+
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div
+                              style={{
+                                fontWeight: 600,
+                                fontSize: "0.9rem",
+                                color: active ? themeCfg.primaryButtonBg : themeCfg.uiText,
+                                lineHeight: 1.3,
+                                marginBottom: 3,
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                                transition: "color 150ms ease",
+                              }}
+                              title={(t.title ?? t.prompt ?? "").trim() || undefined}
+                            >
+                              {displayTitle(t)}
+                            </div>
+                            <div style={{ fontSize: "0.72rem", color: themeCfg.uiSoftText }}>
+                              {(t.preset ?? "—") || "—"}
+                              {(t.durationSec ?? t.durationSeconds) ? ` · ${t.durationSec ?? t.durationSeconds}s` : ""}
+                              {t.createdAt ? ` · ${new Date(t.createdAt).toLocaleDateString("de-DE")}` : ""}
+                            </div>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+
+                  <div style={{ marginTop: 20, textAlign: "right" }}>
+                    <Link href="/library" style={pillStyle(themeCfg, "secondary")}>
+                      Alle ansehen →
+                    </Link>
+                  </div>
                 </>
               )}
             </section>
-          </div>
 
-          {/* ===== rechte Spalte – letzte Generierungen ===== */}
-          <div
-            style={{
-              padding: "1.25rem 1.5rem 1.5rem",
-              background:
-                "linear-gradient(160deg, color-mix(in oklab, var(--color-accent) 10%, var(--color-card)) 0%, var(--color-card) 70%)",
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                gap: "1rem",
-                marginBottom: "0.75rem",
-              }}
-            >
-              <h2 style={{ fontSize: "1rem", fontWeight: 700 }}>Deine letzten Generierungen</h2>
-              <Link
-                href="/generate"
-                style={{
-                  fontSize: "0.8rem",
-                  fontWeight: 600,
-                  color: "var(--color-accent)",
-                  textDecoration: "none",
-                }}
-              >
-                neue Generierung →
-              </Link>
-            </div>
-
-            {loadingTracks ? (
-              <p style={{ opacity: 0.6, fontSize: "0.85rem" }}>Lade…</p>
-            ) : tracks.length === 0 ? (
-              <EmptyState
-                title="Noch keine Generierungen"
-                hint="Wenn du generierst, erscheinen sie hier."
-                action={{ href: "/generate", label: "Jetzt generieren" }}
-              />
-            ) : (
-              <>
-                <ul
-  style={{
-    display: "flex",
-    flexDirection: "column",
-    gap: "0.6rem",
-  }}
->
-  {(Array.isArray(tracks) ? tracks : []).map((t) => (
-    <li
-      key={t.id}
-      style={{
-        background: "color-mix(in oklab, var(--color-card) 95%, var(--color-bg))",
-        border: "1px solid rgba(0,0,0,0.018)",
-        borderRadius: 12,
-        padding: "0.7rem 0.75rem 0.6rem",
-        display: "flex",
-        gap: "0.75rem",
-        alignItems: "flex-start",
-        flexWrap: "wrap",          // 👈 bei wenig Platz darf umgebrochen werden
-      }}
-    >
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div
-  style={{
-    display: "block",
-    fontWeight: 600,
-    whiteSpace: "normal",
-    wordBreak: "normal",
-    overflowWrap: "normal",
-    lineHeight: 1.3,
-    letterSpacing: "normal",
-    writingMode: "horizontal-tb" as React.CSSProperties["writingMode"],
-  }}
-  title={(t.title ?? t.prompt ?? "").trim() || undefined} // 👈 voller Text im Tooltip
->
-  {displayTitle(t)}
-</div>
-        <div style={{ fontSize: "0.72rem", opacity: 0.6 }}>
-          {(t.preset ?? "—") || "—"}
-          {t.durationSec
-            ? ` · ${t.durationSec}s`
-            : t.durationSeconds
-            ? ` · ${t.durationSeconds}s`
-            : ""}
-          {t.createdAt ? ` · ${new Date(t.createdAt).toLocaleString("de-DE")}` : ""}
-        </div>
-      </div>
-
-      {(t.status === "DONE" || t.url || t.resultUrl) && (
-        <div
-          style={{
-            flexShrink: 0,           // 👈 Player wird nicht weiter gequetscht
-            maxWidth: 370,           // 👈 schmaler wie in der Library
-            width: "100%",
-            display: "flex",
-            justifyContent: "flex-end",
-          }}
-        >
-          <CustomPlayer
-            src={displayUrl(t)}
-            preload="metadata"
-            showTitle={false}
-            maxWidth={370}
-          />
-        </div>
-      )}
-    </li>
-  ))}
-</ul>
-
-                <div style={{ marginTop: "0.9rem", textAlign: "right" }}>
-                  <Link
-                    href="/library"
-                    style={{
-                      fontSize: "0.85rem",
-                      fontWeight: 600,
-                      textDecoration: "none",
-                      padding: "0.45rem 0.9rem",
-                      borderRadius: 999,
-                      border: "1px solid var(--color-nav-bg)",
-                      background: "var(--color-card)",
-                      color: "var(--color-text)",
-                    }}
-                  >
-                    Zur Bibliothek →
-                  </Link>
-                </div>
-              </>
-            )}
           </div>
         </div>
-      </div>
-    </main>
+      </main>
+    </SVScene>
   );
 }
 
-const navLinkStyle: React.CSSProperties = {
-  padding: "0.4rem 0.85rem",
-  borderRadius: 6,
-  background: "var(--color-nav-bg)",
-  color: "var(--color-nav-text)",
-  textDecoration: "none",
-  fontWeight: 600,
-  fontSize: "0.9rem",
-};
+// ── Sub-components ────────────────────────────────────────────────────────────
 
-function Field({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div
-      style={{
-        background: "color-mix(in oklab, var(--color-card) 96%, var(--color-bg))",
-        border: "1px solid rgba(0,0,0,0.01)",
-        borderRadius: 14,
-        padding: "0.5rem 0.6rem 0.55rem",
-        display: "flex",
-        flexDirection: "column",
-        gap: 2,
-        minHeight: 52,
-      }}
-    >
-      <span style={{ opacity: 0.55, fontSize: "0.7rem" }}>{label}</span>
-      <span
-        style={{
-          fontWeight: 600,
-          fontFamily: mono ? "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas" : undefined,
-          overflowWrap: "anywhere",
-          wordBreak: "break-word",
-        }}
-      >
-        {value || "—"}
-      </span>
-    </div>
-  );
-}
-
-// 🔹 Neuer Button für Stripe Customer Portal
 function ManageSubscriptionButton({
   onClick,
+  themeCfg,
 }: {
   onClick: () => Promise<void> | void;
+  themeCfg: ThemeConfig;
 }) {
   const [loading, setLoading] = useState(false);
 
@@ -685,19 +873,16 @@ function ManageSubscriptionButton({
       onClick={handleClick}
       disabled={loading}
       style={{
-        marginTop: "0.25rem",
-        padding: "0.35rem 0.9rem",
+        padding: "0.3rem 0.85rem",
         borderRadius: 999,
-        border: "1px solid rgba(255,255,255,0.7)",
-        background:
-          "color-mix(in oklab, var(--color-card) 92%, rgba(0,0,0,0.12))",
+        border: `1px solid ${themeCfg.secondaryButtonBorder}`,
+        background: themeCfg.secondaryButtonBg,
+        color: themeCfg.secondaryButtonText,
         cursor: loading ? "default" : "pointer",
         fontSize: "0.8rem",
         fontWeight: 600,
-        color: "var(--color-text)",
-        display: "inline-flex",
-        alignItems: "center",
-        gap: "0.3rem",
+        opacity: loading ? 0.65 : 1,
+        transition: "opacity .15s ease",
       }}
     >
       {loading ? "Weiterleiten…" : "Abo verwalten"}

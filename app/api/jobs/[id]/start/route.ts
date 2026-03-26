@@ -27,7 +27,7 @@ export async function POST(
   const key = session?.user?.id
     ? `u:${session.user.id}:start`
     : `ip:${clientIpFromRequest(req)}:start`;
-  const rl = rateLimit(key, 10, 60_000); // 10 Starts/Minute
+  const rl = await rateLimit(key, 10, 60_000); // 10 Starts/Minute
 
   if (!rl.ok) {
     log.warn(h, "jobs:start:rate_limited", { id });

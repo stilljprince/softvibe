@@ -94,7 +94,7 @@ const storyId = (searchParams.get("storyId") ?? "").trim();
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     include: {
   job: { select: { title: true, prompt: true, preset: true } },
-  story: { select: { id: true, title: true, preset: true, scriptText: true } },
+  story: { select: { id: true, title: true, preset: true } },
 },
     take,
   });
@@ -133,7 +133,6 @@ const withChapter =
     partIndex: typeof t.partIndex === "number" ? t.partIndex : null,
     partTitle: (t.partTitle ?? "").trim() || chapterLabel || null,
     preset: t.story?.preset ?? t.job?.preset ?? null,
-    scriptText: t.story?.scriptText ?? t.scriptText ?? null,
   };
 });
 

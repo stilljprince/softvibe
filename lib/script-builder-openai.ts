@@ -195,6 +195,8 @@ Return ONLY JSON.
   // This prevents the model from truncating long scripts mid-generation.
   const maxOutputTokens = Math.min(16000, wordTarget * 2 + 256);
 
+  const openaiTimeoutMs = parseInt(process.env.OPENAI_TIMEOUT_MS ?? "90000", 10);
+
   const resp = await openai.responses.create({
   model: process.env.OPENAI_SCRIPT_MODEL ?? "gpt-4o-mini",
   max_output_tokens: maxOutputTokens,
@@ -217,7 +219,7 @@ Return ONLY JSON.
       },
     },
   },
-});
+}, { timeout: openaiTimeoutMs });
 
   const parsed = JSON.parse(resp.output_text) as { finalText: string };
   const finalText = (parsed.finalText ?? "").trim();

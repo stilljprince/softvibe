@@ -4,100 +4,169 @@
 import { useState } from "react";
 import { signIn } from "next-auth/react";
 import { useSearchParams, useRouter } from "next/navigation";
+import SVScene from "@/app/components/sv-scene";
+import { useSVTheme, SVHeader } from "@/app/components/sv-kit";
+import type React from "react";
 
 export default function LoginForm() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const callbackUrl = searchParams.get("callbackUrl") || "/account";
 
+  const { themeKey, themeCfg, cycleTheme, logoSrc } = useSVTheme();
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // CSS custom properties supplied to the form so globals.css focus rules are theme-aware
+  const formVars = {
+    "--sv-auth-focus-border": themeCfg.primaryButtonBg,
+    "--sv-auth-focus-ring": `${themeCfg.primaryButtonBg}33`,
+    "--sv-auth-input-bg": themeCfg.secondaryButtonBg,
+    "--sv-auth-input-color": themeCfg.uiText,
+  } as React.CSSProperties;
+
+  // Inline color styles applied directly to each input — no injection lag
+  const inputColors: React.CSSProperties = {
+    background: themeCfg.secondaryButtonBg,
+    color: themeCfg.uiText,
+    borderColor: themeCfg.cardBorder,
+  };
+
   return (
-    <main className="sv-auth">
-      <div className="sv-auth__card">
-        <p style={{ opacity: 0.6, fontSize: "0.8rem" }}>Willkommen zurück 👋</p>
-        <h1 className="sv-auth__title">Bei SoftVibe anmelden</h1>
+    <SVScene theme={themeKey}>
+      {/* Logo click cycles the theme — consistent with generate page */}
+      <SVHeader
+        variant="auth"
+        logoSrc={logoSrc}
+        onLogoClick={cycleTheme}
+      />
 
-        <form
-          className="sv-form"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            setErr(null);
-            setLoading(true);
-
-            const res = await signIn("credentials", {
-              redirect: false,
-              email,
-              password,
-              callbackUrl,
-            });
-
-            setLoading(false);
-
-            if (res?.error) {
-              setErr(res.error);
-              return;
-            }
-
-            // success → weiterleiten
-            router.push(callbackUrl);
+      <main
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "80px 24px 32px",
+        }}
+      >
+        <div
+          style={{
+            width: "100%",
+            maxWidth: 440,
+            borderRadius: 24,
+            padding: "28px 28px 24px",
+            background: themeCfg.cardBg,
+            border: `1px solid ${themeCfg.cardBorder}`,
+            boxShadow: themeCfg.cardShadow,
+            backdropFilter: "blur(14px)",
+            WebkitBackdropFilter: "blur(14px)",
           }}
         >
-          <div className="sv-form-row">
-            <label className="sv-label" htmlFor="email">
-              E-Mail
-            </label>
-            <input
-              id="email"
-              className="sv-input"
-              type="email"
-              autoComplete="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="du@softvibe.app"
-            />
-          </div>
+          <p style={{ opacity: 0.55, fontSize: "0.8rem", color: themeCfg.uiSoftText, marginBottom: 4 }}>
+            Willkommen zurück
+          </p>
+          <h1
+            style={{
+              fontSize: "clamp(1.25rem, 2.2vw, 1.5rem)",
+              fontWeight: 800,
+              margin: "0 0 20px",
+              color: themeCfg.uiText,
+            }}
+          >
+            Bei SoftVibe anmelden
+          </h1>
 
-          <div className="sv-form-row">
-            <label className="sv-label" htmlFor="password">
-              Passwort
-            </label>
-            <input
-              id="password"
-              className="sv-input"
-              type="password"
-              autoComplete="current-password"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-            />
-          </div>
+          <form
+            className="sv-form"
+            style={formVars}
+            onSubmit={async (e) => {
+              e.preventDefault();
+              setErr(null);
+              setLoading(true);
+              const res = await signIn("credentials", {
+                redirect: false,
+                email,
+                password,
+                callbackUrl,
+              });
+              setLoading(false);
+              if (res?.error) { setErr(res.error); return; }
+              router.push(callbackUrl);
+            }}
+          >
+            <div className="sv-form-row">
+              <label className="sv-label" htmlFor="email" style={{ color: themeCfg.uiText }}>
+                E-Mail
+              </label>
+              <input
+                id="email"
+                className="sv-auth-input"
+                style={inputColors}
+                type="email"
+                autoComplete="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="du@softvibe.app"
+              />
+            </div>
 
-          {err ? <p className="sv-error">{err}</p> : null}
+            <div className="sv-form-row">
+              <label className="sv-label" htmlFor="password" style={{ color: themeCfg.uiText }}>
+                Passwort
+              </label>
+              <input
+                id="password"
+                className="sv-auth-input"
+                style={inputColors}
+                type="password"
+                autoComplete="current-password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+              />
+            </div>
 
-          <div className="sv-actions" style={{ justifyContent: "flex-end" }}>
-            <button
-              type="submit"
-              className="sv-btn sv-btn--primary"
-              disabled={loading}
+            {err && <p className="sv-error">{err}</p>}
+
+            <div className="sv-actions" style={{ justifyContent: "flex-end" }}>
+              <button
+                type="submit"
+                disabled={loading}
+                style={{
+                  background: themeCfg.primaryButtonBg,
+                  color: themeCfg.primaryButtonText,
+                  border: "none",
+                  borderRadius: 999,
+                  padding: "0.55rem 1.3rem",
+                  fontWeight: 700,
+                  fontSize: "0.88rem",
+                  cursor: loading ? "default" : "pointer",
+                  opacity: loading ? 0.65 : 1,
+                  transition: "opacity .15s ease",
+                }}
+              >
+                {loading ? "Anmelden…" : "Anmelden"}
+              </button>
+            </div>
+          </form>
+
+          <p className="sv-help" style={{ color: themeCfg.uiSoftText }}>
+            Noch keinen Account?{" "}
+            <a
+              href="/register"
+              style={{ color: themeCfg.primaryButtonBg, textDecoration: "none", fontWeight: 700 }}
             >
-              {loading ? "Anmelden…" : "Anmelden"}
-            </button>
-          </div>
-        </form>
-
-        <p className="sv-help">
-          Noch keinen Account?{" "}
-          <a className="sv-link" href="/register">
-            Registrieren
-          </a>
-        </p>
-      </div>
-    </main>
+              Registrieren
+            </a>
+          </p>
+        </div>
+      </main>
+    </SVScene>
   );
 }

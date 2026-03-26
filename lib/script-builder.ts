@@ -443,6 +443,20 @@ const KIDS_FORBIDDEN: RegExp[] = [
   /\bsuicid\w+\b/i,
 ];
 
+/**
+ * Strict superset of KIDS_FORBIDDEN for user-edited content.
+ * Includes standalone "Monster" and German-language unsafe roots.
+ * No repair attempt — block immediately.
+ */
+const KIDS_FORBIDDEN_STRICT: RegExp[] = [
+  ...KIDS_FORBIDDEN,
+  /\bMonster\b/i,
+  /\bDämon\w*/i,
+  /\bfress\w+/i,          // kinderfressend, Menschenfresser, etc.
+  /\btöt\w+/i,            // töten, getötet, etc.
+  /\bBlut\b/i,            // standalone Blut (German)
+];
+
 const KIDS_REPAIRS: Array<[RegExp, string]> = [
   [/\b(dead|death|died|dying)\b/gi, "resting peacefully"],
   [/\b(killed?|killing|kills)\b/gi, "fell asleep"],
@@ -487,8 +501,16 @@ function normalizeKidsFormatting(text: string): string {
 }
 
 export function enforceKidsSafety(
-  text: string
+  text: string,
+  options?: { strict?: boolean }
 ): { safe: boolean; text: string } {
+  if (options?.strict) {
+    // Strict mode: used for user-edited scripts. Block immediately — no repair.
+    const hasForbidden = KIDS_FORBIDDEN_STRICT.some((p) => p.test(text));
+    if (hasForbidden) return { safe: false, text };
+    return { safe: true, text: normalizeKidsFormatting(text) };
+  }
+
   const hasForbidden = KIDS_FORBIDDEN.some((p) => p.test(text));
 
   if (!hasForbidden) {

@@ -152,6 +152,8 @@ voice_settings: {
 console.log("[tts] modelId=", modelId, "voiceId=", voiceId, "len=", finalText.length);
 console.log("[tts] stability(normalized) =", normalizedStability);
 
+    const ttsTimeoutMs = parseInt(process.env.TTS_TIMEOUT_MS ?? "120000", 10);
+
     const res = await fetch(
       `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
       {
@@ -162,6 +164,7 @@ console.log("[tts] stability(normalized) =", normalizedStability);
           Accept: "audio/mpeg",
         },
         body: JSON.stringify(body),
+        signal: AbortSignal.timeout(ttsTimeoutMs),
       }
     );
 

@@ -120,7 +120,7 @@ export default function GenerateClient({
 }: GenerateClientProps) {
   const validPreset = PRESETS.find((p) => p.id === initialPreset)?.id ?? PRESETS[0].id;
   const [preset, setPreset] = useState<string>(validPreset);
-  const [title, setTitle] = useState("");
+  const [title, setTitle] = useState(initialSourceTitle ?? "");
   const [rawPrompt, setRawPrompt] = useState(initialPrompt ?? "");
   const [improvedPrompt, setImprovedPrompt] = useState<string | null>(null);
   const [isImproving, setIsImproving] = useState(false);
@@ -130,6 +130,12 @@ export default function GenerateClient({
   const [variationSourceTitle, setVariationSourceTitle] = useState<string | null>(initialSourceTitle ?? null);
   const [variationScript, setVariationScript] = useState<string | null>(null);
   const [scriptPanelOpen, setScriptPanelOpen] = useState(false);
+
+  // Script edit mode (only active when variationScript is loaded)
+  const [scriptEditMode, setScriptEditMode] = useState(false);
+  const [editedScript, setEditedScript] = useState("");
+  const [scriptSafetyError, setScriptSafetyError] = useState<string | null>(null);
+  const [exitScriptConfirm, setExitScriptConfirm] = useState(false);
   const [job, setJob] = useState<Job | null>(null);
   const [polling, setPolling] = useState(false);
   const [jobList, setJobList] = useState<Job[]>([]);
@@ -163,6 +169,7 @@ export default function GenerateClient({
   const [retryLeft, setRetryLeft] = useState<number | null>(null);
   const retryTimerRef = useRef<number | null>(null);
   const hideTimerRef = useRef<number | null>(null);
+  const scriptTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   function showToast(msg: string, kind: "ok" | "err" | "info" = "info", autoHideMs = 2500) {
     if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
@@ -247,12 +254,17 @@ export default function GenerateClient({
 
   const canSubmit = useMemo(() => {
     const titleOk = title.trim().length >= 3;
-    const promptOk = rawPrompt.trim().length >= 3;
-    if (!titleOk || !promptOk) return false;
+    if (scriptEditMode) {
+      // In script-edit mode: title required + non-empty edited script
+      if (!titleOk || editedScript.trim().length < 10) return false;
+    } else {
+      const promptOk = rawPrompt.trim().length >= 3;
+      if (!titleOk || !promptOk) return false;
+    }
     if (!accountSummary) return true;
     if (accountSummary.isAdmin) return true;
     return accountSummary.credits > 0;
-  }, [title, rawPrompt, accountSummary]);
+  }, [title, rawPrompt, scriptEditMode, editedScript, accountSummary]);
 
   useEffect(() => {
     void loadJobs(0);
@@ -391,6 +403,7 @@ export default function GenerateClient({
       durationSec?: number;
       voiceStyle: "soft" | "whisper";
       voiceGender: "female" | "male";
+      scriptOverride?: string;
     } = {
       title: title.trim().length > 0 ? title.trim() : "",
       preset,
@@ -398,6 +411,7 @@ export default function GenerateClient({
       language,
       voiceStyle,
       voiceGender,
+      ...(scriptEditMode && editedScript.trim() ? { scriptOverride: editedScript.trim() } : {}),
     };
 
     if (typeof durationMin === "number" && !Number.isNaN(durationMin)) {
@@ -478,6 +492,18 @@ export default function GenerateClient({
         });
 
         if (!completeRes.ok) {
+          if (completeRes.status === 422) {
+            try {
+              const errBody = (await completeRes.json()) as { error?: string; message?: string; data?: { message?: string } } | null;
+              const isSafety = errBody?.error === "CONTENT_SAFETY";
+              if (isSafety && scriptEditMode) {
+                const msg = errBody?.data?.message ?? errBody?.message ?? "Dein Script enthält unerlaubte Inhalte. Bitte überarbeite den Text.";
+                setScriptSafetyError(msg);
+                setPolling(false);
+                return;
+              }
+            } catch { /* ignore */ }
+          }
           console.error("Auto-Complete für Job fehlgeschlagen:", completeRes.status);
           return;
         }
@@ -851,30 +877,97 @@ export default function GenerateClient({
                 </div>
               )}
 
-              {/* Original script reference */}
+              {/* Original script reference + edit mode */}
               {variationScript && (
                 <div style={{
                   borderRadius: 12,
-                  border: `1px solid ${themeCfg.cardBorder}`,
+                  border: `1px solid ${scriptEditMode
+                    ? (isDark ? "rgba(251,191,36,0.45)" : "rgba(217,119,6,0.35)")
+                    : themeCfg.cardBorder}`,
                   overflow: "hidden",
+                  transition: "border-color 200ms ease",
                 }}>
-                  <button
-                    type="button"
-                    onClick={() => setScriptPanelOpen((v) => !v)}
-                    style={{
-                      width: "100%", display: "flex", justifyContent: "space-between",
-                      alignItems: "center", gap: 8,
-                      padding: "10px 14px",
-                      background: isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.04)",
-                      border: "none", cursor: "pointer",
-                      color: themeCfg.uiSoftText, fontSize: "0.78rem", fontWeight: 700,
-                      letterSpacing: "0.08em", textTransform: "uppercase" as const,
-                    }}
-                  >
-                    <span>Originales Skript</span>
-                    <span style={{ fontSize: "0.72rem" }}>{scriptPanelOpen ? "▲" : "▼"}</span>
-                  </button>
-                  {scriptPanelOpen && (
+                  {/* Panel header */}
+                  <div style={{
+                    display: "flex", justifyContent: "space-between", alignItems: "center",
+                    padding: "10px 14px",
+                    background: scriptEditMode
+                      ? (isDark ? "rgba(251,191,36,0.08)" : "rgba(217,119,6,0.06)")
+                      : (isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.04)"),
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <button
+                        type="button"
+                        onClick={() => { if (!scriptEditMode) setScriptPanelOpen((v) => !v); }}
+                        style={{
+                          background: "transparent", border: "none", cursor: scriptEditMode ? "default" : "pointer",
+                          color: themeCfg.uiSoftText, fontSize: "0.78rem", fontWeight: 700,
+                          letterSpacing: "0.08em", textTransform: "uppercase" as const, padding: 0,
+                          display: "flex", alignItems: "center", gap: 6,
+                        }}
+                      >
+                        {!scriptEditMode && <span style={{ fontSize: "0.72rem" }}>{scriptPanelOpen ? "▲" : "▼"}</span>}
+                        <span>{scriptEditMode ? "Skript bearbeiten" : "Originales Skript"}</span>
+                      </button>
+                      {scriptEditMode && (
+                        <span style={{
+                          fontSize: "0.68rem", fontWeight: 700, letterSpacing: "0.08em",
+                          textTransform: "uppercase" as const,
+                          padding: "2px 7px", borderRadius: 999,
+                          background: isDark ? "rgba(251,191,36,0.18)" : "rgba(217,119,6,0.12)",
+                          color: isDark ? "rgb(251,191,36)" : "rgb(161,71,8)",
+                        }}>
+                          Script-Modus
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      {scriptEditMode ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const hasEdits = editedScript !== variationScript;
+                            if (hasEdits) {
+                              setExitScriptConfirm(true);
+                            } else {
+                              setScriptEditMode(false);
+                              setEditedScript("");
+                              setScriptSafetyError(null);
+                            }
+                          }}
+                          style={{
+                            background: "transparent", border: "none", cursor: "pointer",
+                            color: themeCfg.uiSoftText, fontSize: "0.78rem", fontWeight: 600,
+                            padding: 0, textDecoration: "underline",
+                          }}
+                        >
+                          Zurück zum Prompt
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setScriptEditMode(true);
+                            setEditedScript(variationScript);
+                            setScriptPanelOpen(false);
+                            setExitScriptConfirm(false);
+                            setTimeout(() => scriptTextareaRef.current?.focus(), 50);
+                          }}
+                          style={{
+                            background: "transparent", border: `1px solid ${themeCfg.cardBorder}`,
+                            borderRadius: 999, cursor: "pointer",
+                            color: themeCfg.uiText, fontSize: "0.75rem", fontWeight: 600,
+                            padding: "3px 10px",
+                          }}
+                        >
+                          Skript bearbeiten
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Read-only view */}
+                  {!scriptEditMode && scriptPanelOpen && (
                     <div style={{
                       maxHeight: 240, overflowY: "auto",
                       padding: "12px 14px",
@@ -883,6 +976,83 @@ export default function GenerateClient({
                       whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.7,
                     }}>
                       {variationScript}
+                    </div>
+                  )}
+
+                  {/* Editable textarea */}
+                  {scriptEditMode && (
+                    <div style={{ padding: "12px 14px 10px", background: isDark ? "rgba(255,255,255,0.02)" : "rgba(0,0,0,0.02)" }}>
+                      <textarea
+                        ref={scriptTextareaRef}
+                        rows={12}
+                        value={editedScript}
+                        onChange={(e) => { setEditedScript(e.target.value); if (scriptSafetyError) setScriptSafetyError(null); }}
+                        style={{
+                          ...svInputStyle(themeKey, true),
+                          resize: "vertical" as const,
+                          minHeight: 200,
+                          fontFamily: "inherit",
+                          fontSize: "0.84rem",
+                          lineHeight: 1.7,
+                        }}
+                        placeholder="Skript hier bearbeiten …"
+                      />
+                      {scriptSafetyError && (
+                        <div style={{
+                          marginTop: 8,
+                          padding: "8px 12px",
+                          borderRadius: 8,
+                          background: isDark ? "rgba(239,68,68,0.12)" : "rgba(239,68,68,0.08)",
+                          border: "1px solid rgba(239,68,68,0.4)",
+                          color: isDark ? "#fca5a5" : "#b91c1c",
+                          fontSize: "0.8rem",
+                          lineHeight: 1.5,
+                        }}>
+                          {scriptSafetyError}
+                        </div>
+                      )}
+                      {exitScriptConfirm && (
+                        <div style={{
+                          marginTop: 8,
+                          padding: "10px 12px",
+                          borderRadius: 8,
+                          background: isDark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.04)",
+                          border: `1px solid ${themeCfg.cardBorder}`,
+                          fontSize: "0.8rem",
+                          color: themeCfg.uiText,
+                          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+                        }}>
+                          <span>Änderungen verwerfen und zum Prompt wechseln?</span>
+                          <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                            <button
+                              type="button"
+                              onClick={() => { setScriptEditMode(false); setEditedScript(""); setScriptSafetyError(null); setExitScriptConfirm(false); }}
+                              style={{ padding: "3px 10px", borderRadius: 999, border: "none", background: themeCfg.primaryButtonBg, color: themeCfg.primaryButtonText, fontSize: "0.78rem", fontWeight: 700, cursor: "pointer" }}
+                            >
+                              Verwerfen
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setExitScriptConfirm(false)}
+                              style={{ padding: "3px 10px", borderRadius: 999, border: `1px solid ${themeCfg.cardBorder}`, background: "transparent", color: themeCfg.uiSoftText, fontSize: "0.78rem", fontWeight: 600, cursor: "pointer" }}
+                            >
+                              Abbrechen
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      <div style={{
+                        display: "flex", justifyContent: "flex-end",
+                        fontSize: "0.72rem", marginTop: 4,
+                        color: editedScript.length > 2000
+                          ? "#e11d48"
+                          : editedScript.length > 1800
+                          ? (isDark ? "rgb(251,191,36)" : "rgb(161,71,8)")
+                          : themeCfg.uiSoftText,
+                        fontWeight: editedScript.length > 1800 ? 700 : 400,
+                      }}>
+                        {editedScript.length} / 2500 Zeichen
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1019,10 +1189,15 @@ export default function GenerateClient({
                   onChange={(e) => setTitle(e.target.value)}
                   style={svInputStyle(themeKey)}
                 />
+                {scriptEditMode && (
+                  <p style={{ fontSize: "0.78rem", color: themeCfg.uiSoftText, marginTop: 6, marginBottom: 0 }}>
+                    Dein bearbeitetes Skript wird direkt verwendet.
+                  </p>
+                )}
               </div>
 
-              {/* Prompt */}
-              <div>
+              {/* Prompt — hidden in script mode */}
+              {!scriptEditMode && <div>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                   <label className="sv-label" style={{ margin: 0, fontSize: "0.95rem" }}>
                     Was möchtest du hören?
@@ -1110,10 +1285,10 @@ export default function GenerateClient({
                     </div>
                   </div>
                 )}
-              </div>
+              </div>}
 
-              {/* Duration */}
-              <div>
+              {/* Duration — hidden in script mode */}
+              {!scriptEditMode && <div>
                 <label className="sv-label" style={{ display: "block", marginBottom: 8 }}>Wie lang?</label>
                 <input
                   type="number"
@@ -1135,7 +1310,7 @@ export default function GenerateClient({
                 <p style={{ fontSize: "0.78rem", color: themeCfg.uiSoftText, marginTop: 6 }}>
                   Typischer Bereich: 1–30 Minuten
                 </p>
-              </div>
+              </div>}
 
               {/* Credits warning — only when depleted */}
               {accountSummary && !accountSummary.isAdmin && accountSummary.credits <= 0 && (
@@ -1178,7 +1353,7 @@ export default function GenerateClient({
                 >
                   {typeof retryLeft === "number" && retryLeft > 0
                     ? `Warte ${retryLeft}s…`
-                    : "Generieren"}
+                    : scriptEditMode ? "Mit Script generieren" : "Generieren"}
                 </button>
 
                 {isAdmin && (
@@ -1404,7 +1579,7 @@ export default function GenerateClient({
                                 onClick={() => setOpenJobMenu(null)}
                                 style={{ position: "fixed", inset: 0, zIndex: 40 }}
                               />
-                              <div style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", zIndex: 200, minWidth: 140, borderRadius: 12, ...glassPanel, padding: "6px 0", overflow: "hidden" }}>
+                              <div style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", zIndex: 300, minWidth: 140, borderRadius: 12, ...glassPanel, padding: "6px 0", overflow: "hidden" }}>
                                 <button
                                   type="button"
                                   onClick={(e) => { e.stopPropagation(); void deleteJob(j.id); setOpenJobMenu(null); }}
@@ -1479,7 +1654,7 @@ export default function GenerateClient({
                                   onClick={() => setOpenJobMenu(null)}
                                   style={{ position: "fixed", inset: 0, zIndex: 40 }}
                                 />
-                                <div style={{ position: "absolute", right: 0, bottom: "calc(100% + 6px)", zIndex: 200, minWidth: 140, borderRadius: 12, ...glassPanel, padding: "6px 0", overflow: "hidden" }}>
+                                <div style={{ position: "absolute", right: 0, bottom: "calc(100% + 6px)", zIndex: 300, minWidth: 140, borderRadius: 12, ...glassPanel, padding: "6px 0", overflow: "hidden" }}>
                                   <button
                                     type="button"
                                     onClick={(e) => { e.stopPropagation(); void deleteJob(j.id); setOpenJobMenu(null); }}
@@ -1523,7 +1698,7 @@ export default function GenerateClient({
             style={{
               position: "fixed",
               right: 20,
-              bottom: 20,
+              bottom: 96,
               background:
                 toast.kind === "err" ? "rgba(239,68,68,0.18)"
                 : toast.kind === "ok" ? "rgba(22,163,74,0.18)"

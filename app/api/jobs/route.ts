@@ -22,9 +22,9 @@ type RawCreateJob = {
   duration?: unknown;
   title?: unknown;
   language?: unknown;
- 
   voiceStyle?: unknown;
   voiceGender?: unknown;
+  scriptOverride?: unknown;
 };
 
 async function readCreateJobBody(req: Request): Promise<RawCreateJob> {
@@ -129,42 +129,53 @@ export async function GET(req: Request) {
     skip: Math.max(isFinite(skip) ? skip : 0, 0),
   });
 
-  // 🔹 NEU: Story-Metadaten anreichern
-  const jobsWithStory = await Promise.all(
-    jobs.map(async (j) => {
-      const first = await prisma.track.findFirst({
+  // Story metadata: resolve storyId + chapterCount in 2 batched queries
+  // instead of 2 queries × N jobs (was 40 round-trips for a 20-job page).
+  const jobIds = jobs.map((j) => j.id);
+
+  // Query 1: first track with storyId per job (partIndex = 0)
+  const storyAnchorTracks = jobIds.length > 0
+    ? await prisma.track.findMany({
         where: {
-          jobId: j.id,
+          jobId: { in: jobIds },
           storyId: { not: null },
           partIndex: 0,
         },
-        select: {
-          storyId: true,
-          partTitle: true,
-        },
-      });
+        select: { jobId: true, storyId: true },
+      })
+    : [];
 
-      if (!first?.storyId) {
-        return {
-          ...j,
-          storyId: null as string | null,
-          chapterCount: 0,
-          firstPartTitle: null as string | null,
-        };
-      }
+  // Build jobId → storyId lookup
+  const storyByJobId = new Map<string, string>();
+  for (const t of storyAnchorTracks) {
+    if (t.jobId && t.storyId) storyByJobId.set(t.jobId, t.storyId);
+  }
 
-      const chapterCount = await prisma.track.count({
-        where: { storyId: first.storyId },
-      });
+  const storyIds = [...new Set(storyAnchorTracks.map((t) => t.storyId!))];
 
-      return {
-        ...j,
-        storyId: first.storyId,
-        chapterCount,
-        firstPartTitle: first.partTitle ?? null,
-      };
-    })
-  );
+  // Query 2: chapter counts grouped by storyId
+  const chapterCountRows = storyIds.length > 0
+    ? await prisma.track.groupBy({
+        by: ["storyId"],
+        where: { storyId: { in: storyIds } },
+        _count: { id: true },
+      })
+    : [];
+
+  const countByStoryId = new Map<string, number>();
+  for (const r of chapterCountRows) {
+    if (r.storyId) countByStoryId.set(r.storyId, r._count.id);
+  }
+
+  const jobsWithStory = jobs.map((j) => {
+    const storyId = storyByJobId.get(j.id) ?? null;
+    return {
+      ...j,
+      storyId,
+      chapterCount: storyId ? (countByStoryId.get(storyId) ?? 0) : 0,
+      firstPartTitle: null as string | null,
+    };
+  });
 
   log.info(h, "jobs:list:ok", { count: jobsWithStory.length });
   addDebugLog({
@@ -240,21 +251,19 @@ export async function POST(req: Request) {
         raw.language === "en" || raw.language === "de"
           ? raw.language
           : "de",
-
-    
-  
-    // NEU
-  voiceGender:
-    raw.voiceGender === "male" || raw.voiceGender === "female"
-      ? raw.voiceGender
-      : "female",
-
-  voiceStyle:
-    raw.voiceStyle === "whisper" || raw.voiceStyle === "soft"
-      ? raw.voiceStyle
-      : "soft",
-  
-  };
+      voiceGender:
+        raw.voiceGender === "male" || raw.voiceGender === "female"
+          ? raw.voiceGender
+          : "female",
+      voiceStyle:
+        raw.voiceStyle === "whisper" || raw.voiceStyle === "soft"
+          ? raw.voiceStyle
+          : "soft",
+      scriptOverride:
+        typeof raw.scriptOverride === "string" && raw.scriptOverride.trim() !== ""
+          ? raw.scriptOverride.trim()
+          : null,
+    };
 
     
     // 🔹 Eigene minimale Validierung statt Zod
@@ -311,24 +320,21 @@ export async function POST(req: Request) {
       return Response.json({ error: "USER_NOT_FOUND" }, { status: 401 });
     }
 
-    // 👉 Credits-Gate:
-    const currentCredits = dbUser.credits ?? 0;
-    if (!dbUser.isAdmin && currentCredits <= 0) {
+    // Fast-path credits check using already-fetched value.
+    // The authoritative atomic decrement happens below, after the rate-limit check.
+    // This early exit avoids the rate-limit DB query for users definitively at 0.
+    if (!dbUser.isAdmin && (dbUser.credits ?? 0) < 1) {
       addDebugLog({
         ts: new Date().toISOString(),
         level: "warn",
         route: "/api/jobs POST",
         userId: dbUser.id,
-        message: "No credits left",
-        data: { credits: currentCredits },
+        message: "No credits left (fast-path)",
+        data: { credits: dbUser.credits },
         reqId: h.get("x-request-id"),
       });
-
       return Response.json(
-        {
-          error: "NO_CREDITS",
-          message: "Du hast aktuell keine Credits. Bitte lade dein Guthaben auf.",
-        },
+        { error: "NO_CREDITS", message: "Du hast aktuell keine Credits. Bitte lade dein Guthaben auf." },
         { status: 402 }
       );
     }
@@ -365,50 +371,26 @@ export async function POST(req: Request) {
       );
     }
 
-    const COST_PER_JOB = 1;
-
+    // Atomic credits decrement — authoritative gate.
+    // Single UPDATE WHERE credits >= 1 prevents any race between concurrent
+    // requests from the same user. No prior read, no separate decrement later.
     if (!dbUser.isAdmin) {
-      const currentCreditsInner = dbUser.credits ?? 0;
+      const creditRes = await prisma.user.updateMany({
+        where: { id: dbUser.id, credits: { gte: 1 } },
+        data: { credits: { decrement: 1 } },
+      });
 
-      if (currentCreditsInner < COST_PER_JOB) {
+      if (creditRes.count === 0) {
         addDebugLog({
           ts: new Date().toISOString(),
           level: "warn",
           route: "/api/jobs POST",
           userId: dbUser.id,
-          message: "No credits left",
-          data: { creditsLeft: currentCreditsInner },
+          message: "No credits left (atomic gate)",
           reqId: h.get("x-request-id"),
         });
-
         return Response.json(
-          {
-            error: "NO_CREDITS",
-            message: "Du hast aktuell keine Credits mehr.",
-            creditsLeft: currentCreditsInner,
-          },
-          { status: 402 }
-        );
-      }
-
-      if (dbUser.credits < COST_PER_JOB) {
-        log.warn(h, "jobs:create:no_credits", { userId: dbUser.id });
-        addDebugLog({
-          ts: new Date().toISOString(),
-          level: "warn",
-          route: "/api/jobs POST",
-          userId: dbUser.id,
-          message: "No credits left",
-          data: { credits: dbUser.credits },
-          reqId: h.get("x-request-id"),
-        });
-
-        return Response.json(
-          {
-            error: "NO_CREDITS",
-            message:
-              "Du hast aktuell keine Credits mehr. Bitte lade dein Guthaben auf.",
-          },
+          { error: "NO_CREDITS", message: "Du hast aktuell keine Credits mehr. Bitte lade dein Guthaben auf." },
           { status: 402 }
         );
       }
@@ -423,24 +405,12 @@ export async function POST(req: Request) {
         durationSec: typeof durationSec === "number" ? durationSec : null,
         title: effectiveTitle,
         language: normalized.language,
-        
         voiceGender: normalized.voiceGender,
         voiceStyle: normalized.voiceStyle,
+        scriptOverride: normalized.scriptOverride ?? null,
       },
       select: { id: true, status: true, title: true, prompt: true },
     });
-
-    // 🔻 Credits abbuchen (nur Nicht-Admins)
-    if (!dbUser.isAdmin) {
-      await prisma.user.update({
-        where: { id: dbUser.id },
-        data: {
-          credits: {
-            decrement: COST_PER_JOB,
-          },
-        },
-      });
-    }
 
     log.info(h, "jobs:create:ok", { jobId: job.id });
     addDebugLog({

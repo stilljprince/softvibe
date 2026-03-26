@@ -29,7 +29,7 @@ export async function POST(req: Request) {
   }
 
   const key = `u:${session.user.id as string}:prompt-improve`;
-  const rl = rateLimit(key, 10, 60_000); // 10 requests per 60s per user
+  const rl = await rateLimit(key, 10, 60_000); // 10 requests per 60s per user
   if (!rl.ok) {
     return new Response(
       JSON.stringify({ ok: false, error: "RATE_LIMITED", message: "Too many requests. Please wait a moment." }),
@@ -73,6 +73,8 @@ export async function POST(req: Request) {
     return jsonError("CONFIGURATION_ERROR", 500, { message: "Service temporarily unavailable" });
   }
 
+  const promptImproveTimeoutMs = parseInt(process.env.PROMPT_IMPROVE_TIMEOUT_MS ?? "30000", 10);
+
   try {
     const completion = await openai.chat.completions.create({
       model,
@@ -82,7 +84,7 @@ export async function POST(req: Request) {
       ],
       max_tokens: 200,
       temperature: 0.7,
-    });
+    }, { timeout: promptImproveTimeoutMs });
 
     const improvedPrompt = (completion.choices[0]?.message?.content ?? "").trim();
     if (!improvedPrompt) {

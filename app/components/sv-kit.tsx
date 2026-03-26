@@ -173,13 +173,59 @@ export function SVHeader({
   logoSrc,
   onLogoClick,
   right,
-  controlsVisible,
+  controlsVisible = true,
+  variant = "player",
 }: {
   logoSrc: string;
-  onLogoClick: () => void;
+  onLogoClick?: () => void;
   right?: React.ReactNode;
-  controlsVisible: boolean;
+  controlsVisible?: boolean;
+  /** "player" — fade-on-idle (existing behaviour, default)
+   *  "auth"   — fixed glass bar, logo links to /, no fade
+   *  "app"    — fixed glass bar, logo links to /, no fade, for app pages */
+  variant?: "player" | "auth" | "app";
 }) {
+  if (variant === "auth" || variant === "app") {
+    return (
+      <header
+        style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          right: 0,
+          zIndex: 100,
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          padding: "0.6rem 1.5rem",
+          backdropFilter: "blur(12px)",
+          WebkitBackdropFilter: "blur(12px)",
+          background: "rgba(0,0,0,0.06)",
+        }}
+      >
+        {onLogoClick ? (
+          <button
+            type="button"
+            onClick={onLogoClick}
+            aria-label="Theme wechseln"
+            title="Theme wechseln"
+            style={{ border: "none", background: "transparent", padding: 0, cursor: "pointer" }}
+          >
+            <Image src={logoSrc} alt="SoftVibe Logo" width={140} height={44} priority />
+          </button>
+        ) : (
+          <a href="/" style={{ display: "block", lineHeight: 0 }}>
+            <Image src={logoSrc} alt="SoftVibe Logo" width={140} height={44} priority />
+          </a>
+        )}
+        {right && (
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>{right}</div>
+        )}
+      </header>
+    );
+  }
+
+  // "player" variant — original fade-on-idle behaviour
   return (
     <header
       style={{
@@ -195,7 +241,7 @@ export function SVHeader({
         type="button"
         onClick={(e) => {
           e.stopPropagation();
-          onLogoClick();
+          onLogoClick?.();
         }}
         style={{
           border: "none",

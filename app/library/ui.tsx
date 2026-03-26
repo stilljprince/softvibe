@@ -26,7 +26,6 @@ type Track = {
   partIndex?: number | null;
   partTitle?: string | null;
   preset?: string | null;
-  scriptText?: string | null;
 };
 
 type SortKey = "newest" | "oldest" | "short" | "long";
@@ -223,6 +222,7 @@ export default function LibraryClient() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState("");
   const [detailTrack, setDetailTrack] = useState<Track | null>(null);
+  const [detailScriptText, setDetailScriptText] = useState<string | null>(null);
 
   const [toast, setToast] = useState<{ msg: string; kind?: "ok" | "err" } | null>(null);
   const toastTimer = useRef<number | null>(null);
@@ -261,6 +261,26 @@ export default function LibraryClient() {
     document.addEventListener("click", onDocClick);
     return () => document.removeEventListener("click", onDocClick);
   }, []);
+
+  // Lazy-load scriptText when a detail modal opens.
+  // The list endpoint no longer carries scriptText to keep list responses lean.
+  // The detail endpoint (GET /api/tracks/[id]) always includes it.
+  useEffect(() => {
+    if (!detailTrack?.id) {
+      setDetailScriptText(null);
+      return;
+    }
+    void fetch(`/api/tracks/${detailTrack.id}`, { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((raw: unknown) => {
+        const payload = (raw as { ok?: boolean; data?: { scriptText?: string | null } } | null);
+        const text = payload?.ok === true
+          ? (payload.data as { scriptText?: string | null } | undefined)?.scriptText
+          : (raw as { scriptText?: string | null } | null)?.scriptText;
+        setDetailScriptText(typeof text === "string" && text.trim() ? text.trim() : null);
+      })
+      .catch(() => setDetailScriptText(null));
+  }, [detailTrack?.id]);
 
   // ── Data fetching ──────────────────────────────────────────────────────────
 
@@ -1433,8 +1453,8 @@ export default function LibraryClient() {
               </div>
             )}
 
-            {/* Script */}
-            {(detailTrack.scriptText ?? "").trim() && (
+            {/* Script — loaded lazily from detail endpoint when modal opens */}
+            {detailScriptText && (
               <div style={{ marginBottom: 20 }}>
                 <div style={{ fontSize: "0.7rem", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: themeCfg.uiSoftText, marginBottom: 6 }}>
                   Skript
@@ -1447,7 +1467,7 @@ export default function LibraryClient() {
                   fontSize: "0.85rem", color: themeCfg.uiText,
                   whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.7,
                 }}>
-                  {detailTrack.scriptText}
+                  {detailScriptText}
                 </div>
               </div>
             )}
