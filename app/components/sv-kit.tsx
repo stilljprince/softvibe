@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
+import Link from "next/link";
 
 export type ThemeKey = "light" | "pastel" | "dark";
 
@@ -214,9 +215,9 @@ export function SVHeader({
             <Image src={logoSrc} alt="SoftVibe Logo" width={140} height={44} priority />
           </button>
         ) : (
-          <a href="/" style={{ display: "block", lineHeight: 0 }}>
+          <Link href="/" style={{ display: "block", lineHeight: 0 }}>
             <Image src={logoSrc} alt="SoftVibe Logo" width={140} height={44} priority />
-          </a>
+          </Link>
         )}
         {right && (
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>{right}</div>
