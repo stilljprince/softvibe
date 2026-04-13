@@ -49,22 +49,22 @@ function settingsForPreset(preset?: string) {
     case "sleep-story":
       return {
         stability: 0.55,
-        similarity_boost: 0.85,
-        style: 0.45,
+        similarity_boost: 0.93, // High voice-locking for cross-chapter consistency (was 0.85)
+        style: 0.03,            // Near-flat expressiveness to minimise chapter drift (was 0.20)
         use_speaker_boost: false,
       };
     case "meditation":
       return {
         stability: 0.4,
         similarity_boost: 0.9,
-        style: 0.6,
+        style: 0.05, // Near-flat for breath-paced delivery (was 0.15)
         use_speaker_boost: false,
       };
     case "kids-story":
       return {
         stability: 0.65,
-        similarity_boost: 0.90,
-        style: 0.35,
+        similarity_boost: 0.92, // Slightly tighter voice-locking (was 0.90)
+        style: 0.08,            // Warmer than sleep-story but still controlled (was 0.20)
         use_speaker_boost: false,
       };
     default:
@@ -75,6 +75,49 @@ function settingsForPreset(preset?: string) {
         use_speaker_boost: false,
       };
   }
+}
+
+// Strips the title line from sleep-story chapter 1 TTS input.
+// The title line (required by the sleep-story prompt structure) is already
+// displayed in the UI and adds no value when spoken by TTS. Reading it aloud
+// creates a poor cold-start: the autoregressive v3 model warms up on a
+// whispered standalone title rather than on real narrative content.
+//
+// Detection criteria (all must match):
+//   - First non-empty line of the chunk
+//   - Short (≤ 70 chars, typical title length)
+//   - Does NOT end with sentence-ending punctuation (. ! ? , ; :)
+//   - Followed immediately by a blank line (own paragraph — not a subtitle/heading)
+//
+// Returns original text unchanged if no title line is detected.
+function stripSleepStoryTitleLine(text: string): string {
+  const lines = text.split("\n");
+  let firstIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].trim().length > 0) { firstIdx = i; break; }
+  }
+  if (firstIdx < 0) return text;
+
+  const candidate = lines[firstIdx].trim();
+  if (candidate.length > 70) return text;
+  if (/[.!?,;:]$/.test(candidate)) return text;
+
+  // Must be followed by a blank line (own standalone paragraph)
+  const nextLine = lines[firstIdx + 1];
+  if (nextLine === undefined || nextLine.trim().length > 0) return text;
+
+  // Strip the title line and any immediately following blank lines
+  return lines.slice(firstIdx + 1).join("\n").trimStart();
+}
+
+// Appends a soft trailing ellipsis to non-final chapters so the TTS model
+// produces a suspended landing rather than a hard stop. Prevents audible
+// clicks and the "end of thought" quality at chapter boundaries.
+function withSoftEnding(text: string): string {
+  const t = text.trimEnd();
+  if (t.endsWith("…") || t.endsWith("...")) return text;
+  if (t.endsWith(".") || t.endsWith("!") || t.endsWith("?")) return t.slice(0, -1) + "…";
+  return t + "…";
 }
 
 /**
@@ -109,6 +152,7 @@ function stripTtsDirectives(input: string): string {
   out = out.trim();
   return out.length > 0 ? out : input.trim();
 }
+
 
 // Für local speichern analog:
 function localAbsForJobPart(baseDirAbs: string, jobId: string, partIndex: number) {
@@ -433,6 +477,13 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
 
       console.log("[multi-chunk] preset =", safePreset, "chunks =", chunks.length);
 
+      // Hoist music-metadata import outside the loop — module is cached after first load.
+      const { parseBuffer } = await import("music-metadata");
+
+      // Track the ElevenLabs request ID from each chapter so the next call can
+      // reference it via previous_request_ids for voice-state continuity stitching.
+      let lastTtsRequestId: string | undefined;
+
       for (let partIndex = 0; partIndex < chunks.length; partIndex++) {
         const partBase = chunks[partIndex];
         const partKey = s3KeyForJobPart(id, partIndex);
@@ -447,30 +498,44 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
         let partDuration: number | null = null;
 
         if (!audioAlreadyStored) {
+          const isLastChapter = partIndex === chunks.length - 1;
+          // Apply soft trailing ellipsis on non-final chapters to prevent hard stops
+          // and audio artifacts at chapter boundaries.
+          let chunkText = isLastChapter ? partBase : withSoftEnding(partBase);
+
+          // Sleep story chapter 1: strip the spoken title line before TTS.
+          // The title is already shown in the UI; reading it aloud creates a poor
+          // cold-start where v3 warms up on a whispered standalone title instead
+          // of real narrative content. Only applied to partIndex 0.
+          if (isSleepStory && partIndex === 0) {
+            chunkText = stripSleepStoryTitleLine(chunkText);
+          }
+
           const ttsTextPart = isV3
             ? applyV3Prosody({
                 preset: safePreset,
-                text: partBase,
-                seed: `${job.id}:${partIndex}`,
+                text: chunkText,
+                seed: job.id,         // Consistent seed across all chapters of the same story
+                chapterIndex: partIndex,
               })
-            : partBase;
+            : chunkText;
 
-          const { audio } = await elevenlabs.speak({
+          const { audio, requestId } = await elevenlabs.speak({
             text: ttsTextPart,
             voiceId,
             modelId: process.env.ELEVENLABS_MODEL_ID ?? "eleven_v3",
-            stability: 0.1,
-            similarityBoost: 0.62,
-            style: 0.25,
-            useSpeakerBoost: true,
+            stability: voiceSettings.stability,
+            similarityBoost: voiceSettings.similarity_boost,
+            style: voiceSettings.style,
+            useSpeakerBoost: voiceSettings.use_speaker_boost,
             preset: safePreset,
+            previousRequestIds: lastTtsRequestId ? [lastTtsRequestId] : undefined,
           });
+          if (requestId) lastTtsRequestId = requestId;
 
           const buf = Buffer.from(audio);
 
-          // Extract duration for this chapter
           try {
-            const { parseBuffer } = await import("music-metadata");
             const meta = await parseBuffer(buf, "audio/mpeg");
             if (meta.format.duration && Number.isFinite(meta.format.duration)) {
               partDuration = Math.round(meta.format.duration);
@@ -564,11 +629,10 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
         text: ttsText,
         voiceId,
         modelId: process.env.ELEVENLABS_MODEL_ID ?? "eleven_v3",
-        stability: 0.1,
-        similarityBoost: 0.62,
-        style: 0.25,
-        useSpeakerBoost: true,
-        
+        stability: voiceSettings.stability,
+        similarityBoost: voiceSettings.similarity_boost,
+        style: voiceSettings.style,
+        useSpeakerBoost: voiceSettings.use_speaker_boost,
         preset: safePreset,
       });
 

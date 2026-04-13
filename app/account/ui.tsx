@@ -6,10 +6,10 @@ import Link from "next/link";
 import Image from "next/image";
 import type React from "react";
 
-import EmptyState from "../components/EmptyState";
 import SVScene from "@/app/components/sv-scene";
 import { useSVTheme, type ThemeConfig } from "@/app/components/sv-kit";
 import { usePlayer } from "@/app/components/player-context";
+import { AVATAR_PRESETS, getAvatarPreset } from "@/lib/avatars";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -18,6 +18,7 @@ type AccountUser = {
   name: string;
   email: string;
   image: string | null;
+  avatarKey: string | null;
   credits: number;
   isAdmin: boolean;
   hasSubscription: boolean;
@@ -130,6 +131,18 @@ export default function AccountClient({ user }: { user: AccountUser }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Avatar — initialise from sessionStorage so a stale router-cache remount can't
+  // temporarily overwrite the user's latest saved choice before fresh data arrives.
+  const [avatarKey, setAvatarKey] = useState<string | null>(() => {
+    if (typeof window !== "undefined") {
+      const stored = window.sessionStorage.getItem("sv_avatar_key");
+      if (stored !== null) return stored === "" ? null : stored;
+    }
+    return user.avatarKey;
+  });
+  const [avatarPickerOpen, setAvatarPickerOpen] = useState(false);
+  const [savingAvatar, setSavingAvatar] = useState(false);
+
   const isDark = themeKey === "dark";
 
   // Glass surface values
@@ -212,6 +225,26 @@ export default function AccountClient({ user }: { user: AccountUser }) {
   }, [state.trackId, state.isPlaying, loadTrack, play, pause]);
 
   const initials = user.name?.split(" ").map((p) => p[0]).join("").toUpperCase() || "SV";
+  const activePreset = getAvatarPreset(avatarKey);
+
+  async function handleSelectAvatar(key: string) {
+    if (key === avatarKey || savingAvatar) return;
+    setSavingAvatar(true);
+    try {
+      const res = await fetch("/api/account/avatar", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ avatarKey: key }),
+      });
+      if (res.ok) {
+        window.sessionStorage.setItem("sv_avatar_key", key);
+        setAvatarKey(key);
+        setAvatarPickerOpen(false);
+      }
+    } finally {
+      setSavingAvatar(false);
+    }
+  }
 
   return (
     <SVScene theme={themeKey}>
@@ -381,24 +414,44 @@ export default function AccountClient({ user }: { user: AccountUser }) {
               {/* Identity */}
               <div>
                 <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 14 }}>
-                  {/* Avatar */}
-                  <div
-                    style={{
-                      flexShrink: 0,
-                      width: 56,
-                      height: 56,
-                      borderRadius: "50%",
-                      background: `${themeCfg.primaryButtonBg}22`,
-                      border: `2px solid ${themeCfg.primaryButtonBg}44`,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      color: themeCfg.primaryButtonBg,
-                      fontWeight: 800,
-                      fontSize: "1.1rem",
-                    }}
-                  >
-                    {initials}
+                  {/* Avatar — clickable to open picker */}
+                  <div style={{ flexShrink: 0, position: "relative" }}>
+                    <button
+                      type="button"
+                      onClick={() => setAvatarPickerOpen(true)}
+                      aria-label="Avatar ändern"
+                      title="Avatar ändern"
+                      style={{
+                        width: 56,
+                        height: 56,
+                        borderRadius: "50%",
+                        background: `${themeCfg.primaryButtonBg}22`,
+                        border: `2px solid ${themeCfg.primaryButtonBg}44`,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        color: themeCfg.primaryButtonBg,
+                        fontWeight: 800,
+                        fontSize: "1.1rem",
+                        cursor: "pointer",
+                        padding: 0,
+                        transition: "border-color 150ms ease, background 150ms ease",
+                      }}
+                    >
+                      {activePreset ? (
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                          {activePreset.paths.map((d, i) => <path key={i} d={d} />)}
+                        </svg>
+                      ) : (
+                        initials
+                      )}
+                    </button>
+                    {/* Edit badge */}
+                    <div style={{ position: "absolute", bottom: -2, right: -2, width: 18, height: 18, borderRadius: "50%", background: themeCfg.primaryButtonBg, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
+                      <svg width="9" height="9" viewBox="0 0 12 12" fill={themeCfg.primaryButtonText} aria-hidden="true">
+                        <path d="M8.5 1.5l2 2L3 11H1V9L8.5 1.5z"/>
+                      </svg>
+                    </div>
                   </div>
 
                   <div style={{ minWidth: 0 }}>
@@ -631,11 +684,29 @@ export default function AccountClient({ user }: { user: AccountUser }) {
                   Lade…
                 </p>
               ) : tabTracks.length === 0 ? (
-                <EmptyState
-                  title="Noch keine Generierungen"
-                  hint="Wenn du generierst, erscheinen sie hier."
-                  action={{ href: "/generate", label: "Jetzt erstellen" }}
-                />
+                <div style={{ padding: "32px 0", textAlign: "center" }}>
+                  <p style={{ margin: "0 0 6px", fontWeight: 700, fontSize: "0.95rem", color: themeCfg.uiText }}>
+                    Noch keine Generierungen
+                  </p>
+                  <p style={{ margin: "0 0 18px", fontSize: "0.85rem", color: themeCfg.uiSoftText }}>
+                    Wenn du generierst, erscheinen sie hier.
+                  </p>
+                  <Link
+                    href="/generate"
+                    style={{
+                      display: "inline-block",
+                      padding: "0.45rem 1.1rem",
+                      borderRadius: 999,
+                      background: themeCfg.primaryButtonBg,
+                      color: themeCfg.primaryButtonText,
+                      fontWeight: 700,
+                      fontSize: "0.85rem",
+                      textDecoration: "none",
+                    }}
+                  >
+                    Jetzt erstellen
+                  </Link>
+                </div>
               ) : viewMode === "grid" ? (
                 <>
                   {/* ── True grid — each tile is a real glass card ── */}
@@ -840,6 +911,82 @@ export default function AccountClient({ user }: { user: AccountUser }) {
           </div>
         </div>
       </main>
+
+      {/* ── Avatar picker modal ─────────────────────────────────────────── */}
+      {avatarPickerOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 500 }}
+          onClick={() => setAvatarPickerOpen(false)}
+        >
+          <div
+            style={{ ...glassPanel, borderRadius: 20, padding: 24, width: "min(380px, 100%)", maxHeight: "80vh", overflowY: "auto" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+              <span style={{ fontWeight: 700, fontSize: "0.95rem", color: themeCfg.uiText }}>Avatar wählen</span>
+              <button type="button" onClick={() => setAvatarPickerOpen(false)} aria-label="Schließen" style={{ width: 28, height: 28, borderRadius: "50%", border: `1px solid ${glassCardBorder}`, background: "transparent", color: themeCfg.uiSoftText, cursor: "pointer", display: "grid", placeItems: "center" }}>
+                <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M2 2l8 8M10 2l-8 8" /></svg>
+              </button>
+            </div>
+
+            {/* Grid of avatar options */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+              {AVATAR_PRESETS.map((preset) => {
+                const isSelected = avatarKey === preset.key;
+                return (
+                  <button
+                    key={preset.key}
+                    type="button"
+                    onClick={() => void handleSelectAvatar(preset.key)}
+                    disabled={savingAvatar}
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "14px 8px",
+                      borderRadius: 14,
+                      border: isSelected ? `2px solid ${themeCfg.primaryButtonBg}` : `1px solid ${glassCardBorder}`,
+                      background: isSelected ? `${themeCfg.primaryButtonBg}18` : "transparent",
+                      color: isSelected ? themeCfg.primaryButtonBg : themeCfg.uiSoftText,
+                      cursor: savingAvatar ? "wait" : "pointer",
+                      transition: "border-color 120ms ease, background 120ms ease, color 120ms ease",
+                    }}
+                  >
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                      {preset.paths.map((d, i) => <path key={i} d={d} />)}
+                    </svg>
+                    <span style={{ fontSize: "0.7rem", fontWeight: isSelected ? 700 : 500, color: isSelected ? themeCfg.primaryButtonBg : themeCfg.uiSoftText, lineHeight: 1 }}>
+                      {preset.label}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Remove avatar option */}
+            {avatarKey && (
+              <button
+                type="button"
+                onClick={async () => {
+                  setSavingAvatar(true);
+                  try {
+                    const res = await fetch("/api/account/avatar", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ avatarKey: null }) });
+                    if (res.ok) { window.sessionStorage.setItem("sv_avatar_key", ""); setAvatarKey(null); setAvatarPickerOpen(false); }
+                  } finally { setSavingAvatar(false); }
+                }}
+                disabled={savingAvatar}
+                style={{ marginTop: 14, width: "100%", padding: "8px 0", borderRadius: 999, border: `1px solid ${glassCardBorder}`, background: "transparent", color: themeCfg.uiSoftText, fontSize: "0.78rem", fontWeight: 600, cursor: savingAvatar ? "wait" : "pointer" }}
+              >
+                Initialen verwenden
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </SVScene>
   );
 }

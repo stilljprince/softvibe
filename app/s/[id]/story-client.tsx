@@ -16,6 +16,8 @@ type Chapter = {
 let CURRENT_AUDIO: HTMLAudioElement | null = null;
 
 const UI_HIDE_DELAY_MS = 2500;
+const CHAPTER_PAUSE_MS = 500;
+const FIRST_CHAPTER_PAUSE_MS = 900; // first boundary is narratively weaker — needs more breathing room
 
 
 
@@ -161,10 +163,23 @@ export default function StoryClient({ storyId }: { storyId: string }) {
 
   // Audio
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const preloadRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const wasPlayingRef = useRef(false);
   const [progress, setProgress] = useState(0);
   const scrubDraggingRef = useRef(false);
+  // Set to true by onEnded when the chapter transition is handled imperatively.
+  // Tells the "Apply src" effect to skip its reload for that chapter change.
+  const skipNextLoadRef = useRef(false);
+  // Kept in sync with activeIdx/chapters so zero-dep event handlers can read
+  // current values without stale closures.
+  const isLastChapterRef = useRef(false);
+  const currentChapterDurationRef = useRef<number>(0);
+  // Timer and RAF handles for the end-of-chapter volume ramp.
+  const rampTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rampRafRef = useRef<number | null>(null);
+  // Timer handle for the intentional inter-chapter pause.
+  const chapterPauseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // UI auto-hide
   const [controlsVisible, setControlsVisible] = useState(true);
@@ -210,6 +225,9 @@ useEffect(() => {
 
   const storyTitle = useMemo(() => (chapters[0]?.storyTitle ?? "Story").trim(), [chapters]);
   const active = chapters[activeIdx];
+  // Keep refs synchronous with render so zero-dep event handlers read current values.
+  isLastChapterRef.current = activeIdx >= chapters.length - 1;
+  currentChapterDurationRef.current = chapters[activeIdx]?.durationSeconds ?? 0;
 
 useEffect(() => {
   if (!panelVisible) return;
@@ -232,14 +250,33 @@ useEffect(() => {
   return () => window.removeEventListener("mousedown", onDown);
 }, [panelVisible]);
 
+  // Preload the next chapter while the current one plays so chapter transitions
+  // are instant rather than waiting for a cold network load.
+  useEffect(() => {
+    const next = chapters[activeIdx + 1];
+    const pre = preloadRef.current;
+    if (!pre || !next?.url) return;
+    if (pre.src !== next.url) {
+      pre.src = next.url;
+      pre.load();
+    }
+  }, [chapters, activeIdx]);
+
   // Apply src whenever active changes (preload should happen automatically)
   useEffect(() => {
     const a = audioRef.current;
     if (!a || !active?.url) return;
 
-    // persist idx
-    window.localStorage.setItem(storageKey, String(activeIdx));
+    // Automatic chapter transition: onEnded already set src + called load() + play()
+    // imperatively on the same tick as the ended event. Skip the duplicate reload here
+    // to avoid an unnecessary network round-trip and audible gap.
+    if (skipNextLoadRef.current) {
+      skipNextLoadRef.current = false;
+      window.localStorage.setItem(storageKey, String(activeIdx));
+      return;
+    }
 
+    // Manual chapter change or initial load — perform a full reload.
     const shouldAutoPlay = wasPlayingRef.current;
 
     a.pause();
@@ -263,15 +300,87 @@ useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
 
-    const onPlay = () => setIsPlaying(true);
+    // Cancel any in-flight ramp timer or RAF loop.
+    const cancelFade = () => {
+      if (rampTimerRef.current !== null) { clearTimeout(rampTimerRef.current); rampTimerRef.current = null; }
+      if (rampRafRef.current !== null) { cancelAnimationFrame(rampRafRef.current); rampRafRef.current = null; }
+    };
+
+    const cancelChapterPause = () => {
+      if (chapterPauseTimerRef.current !== null) {
+        clearTimeout(chapterPauseTimerRef.current);
+        chapterPauseTimerRef.current = null;
+      }
+    };
+
+    // Schedule a smooth RAF-based volume ramp starting 1s before chapter end.
+    // Keyed off durationSeconds from chapter metadata (server-computed via music-metadata),
+    // so it is reliable on the FIRST play — unlike audio.duration which may not be
+    // available until the audio file is fully parsed by the browser.
+    const scheduleFade = (durationSec: number) => {
+      cancelFade();
+      if (isLastChapterRef.current || durationSec <= 1.5) return;
+      // Conservative: 0.5s fade (was 1.0s) to reduce the window where durationSeconds
+      // undershooting real playback duration causes dead air.
+      // Floor at 0.08 (not 0) — audio stays nearly inaudible until onEnded fires,
+      // preventing multi-second silence if the fade completes before the audio ends.
+      const RAMP_SEC = 0.5;
+      const RAMP_FLOOR = 0.08;
+      const delayMs = Math.max(0, (durationSec - RAMP_SEC) * 1000);
+      rampTimerRef.current = setTimeout(() => {
+        rampTimerRef.current = null;
+        if (isLastChapterRef.current) return; // chapter may have changed
+        const rampStart = performance.now();
+        const rampMs = RAMP_SEC * 1000;
+        const tick = () => {
+          const t = Math.min(1, (performance.now() - rampStart) / rampMs);
+          a.volume = Math.max(RAMP_FLOOR, 1 - t);
+          if (t < 1) { rampRafRef.current = requestAnimationFrame(tick); }
+          else { rampRafRef.current = null; }
+        };
+        rampRafRef.current = requestAnimationFrame(tick);
+      }, delayMs);
+    };
+
+    const onPlay = () => {
+      setIsPlaying(true);
+      // Schedule the fade every time playback (re)starts so it works on first play.
+      scheduleFade(currentChapterDurationRef.current);
+    };
+
     const onPause = () => setIsPlaying(false);
+
     const onEnded = () => {
-      setIsPlaying(false);
+      cancelFade();
+      cancelChapterPause(); // defensive: clear any orphaned timer
       setProgress(0);
       if (activeIdx < chapters.length - 1) {
-        wasPlayingRef.current = true;
-        setActiveIdx((i) => Math.min(i + 1, chapters.length - 1));
+        const nextIdx = activeIdx + 1;
+        const nextChapter = chapters[nextIdx];
+        if (a && nextChapter?.url) {
+          a.volume = 1;
+          skipNextLoadRef.current = true;
+          a.src = nextChapter.url;
+          a.load(); // buffer immediately — don't wait for the pause timer
+          wasPlayingRef.current = true;
+
+          // Intentional pause before next chapter starts. a.load() fires now so
+          // the browser has time to buffer before playback begins.
+          // First transition gets a longer pause — the narrative boundary at ~2500
+          // chars is typically weaker than later splits.
+          const pauseMs = activeIdx === 0 ? FIRST_CHAPTER_PAUSE_MS : CHAPTER_PAUSE_MS;
+          chapterPauseTimerRef.current = setTimeout(() => {
+            chapterPauseTimerRef.current = null;
+            // Guard: only play if user hasn't paused or skipped during the gap.
+            if (wasPlayingRef.current && a.src === nextChapter.url) {
+              void a.play().catch(() => {});
+              setIsPlaying(true);
+            }
+          }, pauseMs);
+        }
+        setActiveIdx(nextIdx); // update chapter indicator immediately
       } else {
+        setIsPlaying(false);
         wasPlayingRef.current = false;
         setControlsVisible(true);
       }
@@ -284,8 +393,23 @@ useEffect(() => {
       a.removeEventListener("play", onPlay);
       a.removeEventListener("pause", onPause);
       a.removeEventListener("ended", onEnded);
+      cancelFade();
+      // NOTE: do NOT cancel chapterPauseTimerRef here — onEnded sets the timer
+      // and then updates activeIdx, which triggers this cleanup. Cancelling here
+      // kills the play() call before it fires. The timer is already guarded and
+      // cancelled in togglePlayPause, skip, and selectChapterAndPlay.
     };
   }, [activeIdx, chapters.length]);
+
+  // Clean up the chapter-pause timer on unmount only (empty deps).
+  useEffect(() => {
+    return () => {
+      if (chapterPauseTimerRef.current !== null) {
+        clearTimeout(chapterPauseTimerRef.current);
+        chapterPauseTimerRef.current = null;
+      }
+    };
+  }, []);
 
 
                     // ✅ Panel via scroll (manual/scroll)
@@ -316,12 +440,32 @@ useEffect(() => {
 
   // Progress tracking via timeupdate — driven by the audio element directly,
   // not by isPlaying state. Immune to chapter-switch state sync races.
+  // Also provides a backup ramp for chapters whose durationSeconds is missing or zero,
+  // i.e. cases where the timer-based ramp (scheduleFade) couldn't activate.
   useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
     const onTimeUpdate = () => {
       if (a.duration && !Number.isNaN(a.duration) && a.duration > 0) {
         setProgress(Math.max(0, Math.min(a.currentTime / a.duration, 1)));
+        // Backup ramp: activates only when no timer or RAF ramp is running AND
+        // durationSeconds was not available (so scheduleFade never fired).
+        // Uses audio.duration which IS reliable once the browser has parsed the file.
+        // This covers the edge case; the primary ramp is the timer in scheduleFade.
+        if (
+          !isLastChapterRef.current &&
+          rampTimerRef.current === null &&
+          rampRafRef.current === null &&
+          a.volume > 0.05
+        ) {
+          const remaining = a.duration - a.currentTime;
+          if (remaining < 0.8 && remaining >= 0) {
+            // Math.min ensures we only ever decrease volume here, never increase it.
+            // Without this, the backup ramp could boost volume back up after the
+            // primary ramp has already faded it down.
+            a.volume = Math.min(a.volume, Math.max(0, remaining / 0.8));
+          }
+        }
       }
     };
     a.addEventListener("timeupdate", onTimeUpdate);
@@ -331,6 +475,12 @@ useEffect(() => {
   const togglePlayPause = () => {
     const a = audioRef.current;
     if (!a) return;
+
+    // Cancel any pending chapter-pause timer so toggle takes effect immediately.
+    if (chapterPauseTimerRef.current !== null) {
+      clearTimeout(chapterPauseTimerRef.current);
+      chapterPauseTimerRef.current = null;
+    }
 
     // panel soll weg, wenn play gedrückt wird
     setPanelVisible(false);
@@ -353,6 +503,10 @@ useEffect(() => {
   };
 
   const skip = (dir: -1 | 1) => {
+    if (chapterPauseTimerRef.current !== null) {
+      clearTimeout(chapterPauseTimerRef.current);
+      chapterPauseTimerRef.current = null;
+    }
     if (!chapters.length) return;
     const next = Math.max(0, Math.min(activeIdx + dir, chapters.length - 1));
     if (next === activeIdx) return;
@@ -361,6 +515,10 @@ useEffect(() => {
   };
 
   const selectChapterAndPlay = (idx: number) => {
+    if (chapterPauseTimerRef.current !== null) {
+      clearTimeout(chapterPauseTimerRef.current);
+      chapterPauseTimerRef.current = null;
+    }
     if (idx < 0 || idx >= chapters.length) return;
 
     // ✅ wichtig: Play bleibt bedienbar. Panel geht weg.
@@ -414,8 +572,9 @@ useEffect(() => {
       {/* Invisible scroll area (keeps “scroll gesture”), nothing else moves */}
       <div style={{ position: "relative", zIndex: 1, height: "135vh" }} />
 
-      {/* Audio */}
-      <audio ref={audioRef} preload="metadata" />
+      {/* Audio — preload="auto" buffers the full chapter; the hidden element buffers the next. */}
+      <audio ref={audioRef} preload="auto" />
+      <audio ref={preloadRef} preload="auto" style={{ display: "none" }} />
 
       {/* Fixed header (static) */}
       <header

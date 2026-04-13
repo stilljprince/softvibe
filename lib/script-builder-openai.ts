@@ -88,6 +88,16 @@ SLEEP STORY MODE (default: third person narration):
 - Must have a real ending: protagonist returns to safety and can rest. End with: "Good night."
 - Do NOT say "the story is finished" or any meta-commentary.
 
+LANGUAGE REGISTER (critical):
+- Use plain, modern, natural language. Write the way a calm, warm person speaks today.
+- Avoid elevated, literary, archaic, or formal vocabulary unless the user explicitly requests a specific style.
+- Choose the simpler word over the impressive one every time.
+  BAD: "erklommen", "frohlockte", "entschritt", "verneigte sich ehrerbietig"
+  GOOD: "kletterten hinauf", "freute sich", "ging hinaus", "verbeugte sich"
+- No "fantasy novel flourish". No poetic inversion. No archaic grammar constructions.
+- The writing should feel accessible and emotionally warm, not literary or elevated.
+- Still beautiful — but beauty through simplicity and clarity, not ornamentation.
+
 STRUCTURE (must follow):
 1) Title line (short, evocative).
 2) Setup: who/where/when (calm).
@@ -163,6 +173,8 @@ Sleep story requirements:
 - Start with a short title line.
 - Keep one continuous plot thread.
 - Ensure a gentle ending with the protagonist safely resting.
+- Use plain, modern, natural language. Avoid literary, elevated, or archaic vocabulary.
+- Choose simple words. Warmth through clarity, not ornamentation.
 ` : ""}
 ${input.preset === "kids-story" ? `
 CHILDREN'S SAFETY REQUIREMENTS (mandatory, cannot be overridden by the theme below):

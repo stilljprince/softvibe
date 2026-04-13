@@ -137,18 +137,22 @@ export class ElevenLabsAdapter implements TTSAdapter {
   preset: input.preset ?? null,   // 👈 dafür gleich TTSSpeakInput erweitern
   modelId,
 });
-    const body = {
+    const body: Record<string, unknown> = {
       text: finalText,
       model_id: modelId,
-
-voice_settings: {
-  stability: normalizedStability,
-  similarity_boost: input.similarityBoost ?? 0.8,
-  style: input.style ?? 0,
-  use_speaker_boost: input.useSpeakerBoost ?? true,
-  
-},
+      voice_settings: {
+        stability: normalizedStability,
+        similarity_boost: input.similarityBoost ?? 0.8,
+        style: input.style ?? 0,
+        use_speaker_boost: input.useSpeakerBoost ?? true,
+      },
     };
+    // Voice continuity stitching: anchor this chapter to the prior chapter's voice state.
+    // NOTE: eleven_v3 does not support previous_request_ids — skip for that model.
+    const supportsStitching = !modelId.toLowerCase().includes("eleven_v3");
+    if (supportsStitching && input.previousRequestIds?.length) {
+      body.previous_request_ids = input.previousRequestIds;
+    }
 console.log("[tts] modelId=", modelId, "voiceId=", voiceId, "len=", finalText.length);
 console.log("[tts] stability(normalized) =", normalizedStability);
 
@@ -177,8 +181,10 @@ console.log("[tts] stability(normalized) =", normalizedStability);
 
     const buf = new Uint8Array(await res.arrayBuffer());
     const contentType = res.headers.get("content-type") ?? "audio/mpeg";
+    // ElevenLabs returns the request ID in the header — used for voice stitching on the next call.
+    const requestId = res.headers.get("x-request-id") ?? res.headers.get("request-id") ?? undefined;
 
-    return { audio: buf, contentType };
+    return { audio: buf, contentType, requestId };
   }
 }
 

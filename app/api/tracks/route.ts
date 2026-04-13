@@ -23,7 +23,7 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const take = Math.min(
     Math.max(Number(searchParams.get("take") ?? "10"), 1),
-    50
+    200
   );
   const q = (searchParams.get("q") ?? "").trim();
   const cursor = searchParams.get("cursor") ?? "";

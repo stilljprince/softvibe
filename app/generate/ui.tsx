@@ -17,6 +17,42 @@ const PRESETS = [
   { id: "meditation",   label: "Meditation",   desc: "Breath · Soft Tone" },
 ];
 
+// ── Suggestion pills — static V1 ─────────────────────────────────────────────
+// Each entry sets prompt + preset on click. No auto-generation.
+// Future: extend with history-based, refreshable, or AI-generated suggestions.
+const SUGGESTIONS: { label: string; prompt: string; preset: string }[] = [
+  {
+    label: "Sanfte Einschlafgeschichte",
+    prompt: "Eine sanfte Einschlafgeschichte über einen ruhigen Abend, der langsam in einen tiefen, erholsamen Schlaf gleitet",
+    preset: "sleep-story",
+  },
+  {
+    label: "Ruhige persönliche Aufmerksamkeit",
+    prompt: "Eine ruhige, persönliche ASMR-Session mit sanfter Stimme und achtsamer Aufmerksamkeit",
+    preset: "classic-asmr",
+  },
+  {
+    label: "Kurze Atemmeditation",
+    prompt: "Eine kurze Atemmeditation zum Loslassen von Anspannung und Ankommen im Moment",
+    preset: "meditation",
+  },
+  {
+    label: "Langsame ASMR-Session",
+    prompt: "Eine langsame, beruhigende ASMR-Session mit weicher Stimme und ruhigem Tempo",
+    preset: "classic-asmr",
+  },
+  {
+    label: "Gute-Nacht für Kinder",
+    prompt: "Eine freundliche Gute-Nacht-Geschichte für Kinder über ein kleines Tier, das seinen Schlafplatz findet",
+    preset: "kids-story",
+  },
+  {
+    label: "Körperscan zum Einschlafen",
+    prompt: "Eine geführte Körperscan-Meditation, die Schritt für Schritt zu tiefer Entspannung und Schlaf führt",
+    preset: "meditation",
+  },
+];
+
 type JobStatus = "QUEUED" | "PROCESSING" | "DONE" | "FAILED";
 
 type Job = {
@@ -122,6 +158,7 @@ export default function GenerateClient({
   const [preset, setPreset] = useState<string>(validPreset);
   const [title, setTitle] = useState(initialSourceTitle ?? "");
   const [rawPrompt, setRawPrompt] = useState(initialPrompt ?? "");
+  const [suggestionsOpen, setSuggestionsOpen] = useState(true);
   const [improvedPrompt, setImprovedPrompt] = useState<string | null>(null);
   const [isImproving, setIsImproving] = useState(false);
   const [durationMin, setDurationMin] = useState<number | "">(initialDurationMin ?? "");
@@ -170,6 +207,7 @@ export default function GenerateClient({
   const retryTimerRef = useRef<number | null>(null);
   const hideTimerRef = useRef<number | null>(null);
   const scriptTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const promptTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   function showToast(msg: string, kind: "ok" | "err" | "info" = "info", autoHideMs = 2500) {
     if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
@@ -529,7 +567,7 @@ export default function GenerateClient({
           if (isCompletedStory) {
             const chapters = await fetchStoryChapters(completed.storyId!);
             if (chapters.length > 0) {
-              loadStory(completed.storyId!, chapters);
+              loadStory(completed.storyId!, chapters, undefined, playerTitle);
             } else {
               // Auto-complete is silent from the user's perspective; log so it's traceable.
               console.error(
@@ -1221,12 +1259,82 @@ export default function GenerateClient({
                   </button>
                 </div>
                 <textarea
+                  ref={promptTextareaRef}
                   rows={5}
                   placeholder="Beschreibe, was du hören möchtest …"
                   value={rawPrompt}
                   onChange={(e) => setRawPrompt(e.target.value)}
                   style={svInputStyle(themeKey, true)}
                 />
+
+                {/* Suggestion pills — only shown when prompt is empty */}
+                {!rawPrompt.trim() && (
+                  <div style={{ marginTop: 12 }}>
+                    <button
+                      type="button"
+                      onClick={() => setSuggestionsOpen((o) => !o)}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 5,
+                        background: "transparent",
+                        border: "none",
+                        padding: 0,
+                        cursor: "pointer",
+                        color: themeCfg.uiSoftText,
+                        fontSize: "0.78rem",
+                        fontWeight: 600,
+                        letterSpacing: "0.02em",
+                        marginBottom: suggestionsOpen ? 10 : 0,
+                      }}
+                    >
+                      Ideen gefällig?
+                      <svg
+                        width="12"
+                        height="12"
+                        viewBox="0 0 12 12"
+                        fill="none"
+                        style={{
+                          transition: "transform 250ms ease",
+                          transform: suggestionsOpen ? "rotate(180deg)" : "rotate(0deg)",
+                        }}
+                      >
+                        <path d="M2 4l4 4 4-4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </button>
+                    {suggestionsOpen && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                        {SUGGESTIONS.map((s) => (
+                          <button
+                            key={s.label}
+                            type="button"
+                            onClick={() => {
+                              setRawPrompt(s.prompt);
+                              setPreset(s.preset);
+                              setImprovedPrompt(null);
+                              promptTextareaRef.current?.focus();
+                            }}
+                            style={{
+                              padding: "0.35rem 0.85rem",
+                              borderRadius: 999,
+                              border: `1px solid ${themeCfg.secondaryButtonBorder}`,
+                              background: themeCfg.secondaryButtonBg,
+                              color: themeCfg.secondaryButtonText,
+                              fontSize: "0.82rem",
+                              fontWeight: 650,
+                              cursor: "pointer",
+                              whiteSpace: "nowrap",
+                              boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+                            }}
+                          >
+                            {s.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {improvedPrompt !== null && (
                   <div
                     style={{
@@ -1415,7 +1523,7 @@ export default function GenerateClient({
                         if (job.storyId && (job.chapterCount ?? 0) > 1) {
                           void fetchStoryChapters(job.storyId).then((chapters) => {
                             if (chapters.length > 0) {
-                              loadStory(job.storyId!, chapters);
+                              loadStory(job.storyId!, chapters, undefined, playerTitle);
                             } else {
                               showToast("Kapitel konnten nicht geladen werden.", "err");
                             }

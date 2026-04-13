@@ -48,7 +48,8 @@ export default async function AccountPage() {
       name: true,
       credits: true,
       isAdmin: true,
-      stripeSubscriptionId: true, // 🔹 wichtig
+      stripeSubscriptionId: true,
+      avatarKey: true,
       createdAt: true,
     },
   });
@@ -88,6 +89,7 @@ export default async function AccountPage() {
         name: dbUser.name ?? session.user.name ?? "Unbekannt",
         email: dbUser.email ?? session.user.email ?? "",
         image: null,
+        avatarKey: dbUser.avatarKey ?? null,
 
         credits: dbUser.credits,
         isAdmin: dbUser.isAdmin,

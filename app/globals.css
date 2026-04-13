@@ -529,3 +529,55 @@ html.sv-hide-cursor,
 html.sv-hide-cursor * {
   cursor: none !important;
 }
+
+/* ===== Manual playlist open-state ===== */
+
+/* Outer wrapper: animates grid-template-rows 0fr→1fr so the panel
+   literally pushes the rest of the layout downward (real reflow).        */
+@keyframes svPanelExpand {
+  from { grid-template-rows: 0fr; }
+  to   { grid-template-rows: 1fr; }
+}
+/* Inner node: starts overflow:hidden (so 0fr rows clip the content),
+   then flips to overflow:visible at 50% so menus/dropdowns inside
+   can escape the bounding box after the main expand is complete.          */
+@keyframes svPanelClip {
+  0%, 50%   { overflow: hidden; }
+  51%, 100% { overflow: visible; }
+}
+/* Content itself fades in with a short delay after space starts opening.  */
+@keyframes svPanelFade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.sv-pl-panel-wrap {
+  display: grid;
+  animation: svPanelExpand 360ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+/* min-height:0 is required so the grid can compress the row to 0fr.
+   overflow toggles via animation: hidden during expand, visible after.    */
+.sv-pl-panel-inner {
+  min-height: 0;
+  overflow: hidden;
+  animation: svPanelClip 360ms linear both;
+}
+/* Panel content fades in after the space starts opening (80ms delay).     */
+.sv-pl-panel {
+  animation: svPanelFade 280ms 80ms ease both;
+}
+
+/* All tiles smoothly transition opacity, transform, and shadow.
+   transform drives the persistent open-state vertical offset:
+   non-open tiles shift down while a playlist is open, then return
+   smoothly when it closes.                                                */
+.sv-pl-tile {
+  transition: opacity 180ms ease,
+              transform 300ms cubic-bezier(0.16, 1, 0.3, 1),
+              box-shadow 150ms ease;
+}
+/* Auto playlist tiles share the same transition set */
+.sv-pl-auto-tile {
+  transition: opacity 180ms ease,
+              transform 300ms cubic-bezier(0.16, 1, 0.3, 1);
+}

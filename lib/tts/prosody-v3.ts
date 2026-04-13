@@ -21,12 +21,28 @@ function pick<T>(arr: T[], r: number) {
 
 function normalizeForV3(text: string) {
   // v3: Absätze sind gut. Ellipsen nicht übertreiben.
-  // Entferne übermäßige Ellipsen-Folgen und komische Trennstriche.
+  // Each step below prevents a formatting difference between chapters
+  // from triggering a different voice mode in eleven_v3.
   return text
-    .replace(/[–—]/g, ",")        // lange Dashes -> Komma (stabiler)
-    .replace(/\.{4,}/g, "…")      // .... -> …
-    .replace(/…{2,}/g, "…")       // …… -> …
-    .replace(/\n{3,}/g, "\n\n")   // max 1 Leerabsatz
+    // Smart/curly quotes → straight (prevents unexpected vocal inflection shifts)
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/[\u2018\u2019]/g, "'")
+    // Markdown bold/italic residue → plain text
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/_([^_]+)_/g, "$1")
+    // Semicolons → comma (semicolons produce inconsistent pause lengths in v3)
+    .replace(/;/g, ",")
+    // Long dashes → comma (stable pacing)
+    .replace(/[–—]/g, ",")
+    // Normalise ellipsis forms
+    .replace(/\.{4,}/g, "…")
+    .replace(/…{2,}/g, "…")
+    // Collapse multiple spaces (can arise after stripping markdown)
+    .replace(/  +/g, " ")
+    // Max one blank line between paragraphs
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
 
@@ -102,7 +118,8 @@ function tagsForPreset(preset: ScriptPreset) {
 export function applyV3Prosody(opts: {
   preset: ScriptPreset;
   text: string;
-  seed?: string; // z.B. job.id (damit gleiche Inputs gleiche Tag-Pattern geben)
+  seed?: string;        // job.id — same seed for all chapters of one story
+  chapterIndex?: number; // 0-based; chapters > 0 receive a forced soft opener
 }): string {
   const preset = opts.preset;
   const base = normalizeForV3(opts.text ?? "");
@@ -112,6 +129,9 @@ export function applyV3Prosody(opts: {
 
   const paragraphs = base.split(/\n\s*\n/);
   let chucklesUsed = 0;
+  // Non-first chapters always open with a low-energy tag so the narration
+  // re-enters gently rather than starting cold at full expressiveness.
+  const isNonFirstChapter = typeof opts.chapterIndex === "number" && opts.chapterIndex > 0;
 
   const out = paragraphs.map((p, pi) => {
     const lines = p.split("\n").map((x) => x.trim()).filter(Boolean);
@@ -121,9 +141,16 @@ export function applyV3Prosody(opts: {
     const seed0 = `${opts.seed ?? "seed"}|p:${pi}|a`;
     const r0 = hashToFloat(seed0);
 
-    const addParagraphTag = r0 < cfg.paragraphChance && !alreadyHasTag(lines[0]);
+    // Force opener tag on the very first paragraph of non-first chapters
+    // to ensure a soft, low-energy chapter entry (suppresses cold restarts).
+    const addParagraphTag = (isNonFirstChapter && pi === 0)
+      ? !alreadyHasTag(lines[0])
+      : (r0 < cfg.paragraphChance && !alreadyHasTag(lines[0]));
     if (addParagraphTag) {
-      const tag = pick(cfg.opener, r0);
+      // Non-first chapter openings always use the first (mildest) opener tag.
+      // A random pick here can land on [whispers] or [hushed] which destabilises
+      // the model at exactly the moment it is re-initialising for a new chapter.
+      const tag = (isNonFirstChapter && pi === 0) ? cfg.opener[0] : pick(cfg.opener, r0);
       lines[0] = `${tag} ${lines[0]}`;
     }
 
@@ -136,6 +163,11 @@ export function applyV3Prosody(opts: {
 
     const decorated = sentences.map((s, si) => {
       if (alreadyHasTag(s)) return s;
+
+      // First paragraph of a non-first chapter: suppress all sentence-level tags.
+      // Give the TTS model one clean paragraph to stabilise before normal
+      // prosody resumes in paragraph 2+.
+      if (isNonFirstChapter && pi === 0) return s;
 
       const seed1 = `${opts.seed ?? "seed"}|p:${pi}|s:${si}`;
       const r1 = hashToFloat(seed1);
