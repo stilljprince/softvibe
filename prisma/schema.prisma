@@ -47,6 +47,19 @@ model Job {
   voiceGender     String  @default("female") // "female" | "male"
   scriptOverride  String?
 
+  // Credit-refund audit fields
+  // ttsStartedAt    — persisted immediately before the first ElevenLabs call.
+  //                   NULL means TTS was never attempted for this job.
+  //                   Survives serverless function crashes; used by both the
+  //                   /complete failure paths and the stale-recovery GET handler
+  //                   to decide whether a credit refund is appropriate.
+  // creditRefundedAt — set atomically (inside a transaction) the moment a refund
+  //                   is issued. Acts as an idempotency gate: no second refund can
+  //                   be issued once this is non-NULL, even across concurrent requests
+  //                   or function retries.
+  ttsStartedAt     DateTime?
+  creditRefundedAt DateTime?
+
   user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   tracks Track[]
 

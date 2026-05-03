@@ -359,49 +359,76 @@ console.log("COMPLETE language:", job?.id, job?.language);
   // Business rule: 1 credit was debited atomically at POST /api/jobs creation.
   // We refund it when /complete fails BEFORE ElevenLabs TTS has been called —
   // i.e. the user never received any audio. Once TTS has started (even if it
-  // partially fails) we do NOT automatically refund, because compute cost was
-  // incurred and idempotency re-runs would otherwise double-refund.
+  // partially fails), no automatic refund is issued because compute cost was
+  // already incurred.
   //
-  // Idempotency guarantee: the atomic QUEUED→PROCESSING lock above ensures only
-  // one concurrent /complete call can reach this point per job. On a retry call,
-  // the lock fails (status is already FAILED/DONE/PROCESSING), so the code below
-  // is never re-entered and the refund cannot be issued twice.
+  // Idempotency mechanism:
+  //   • Job.ttsStartedAt is written to the DB immediately before the first
+  //     elevenlabs.speak() call (not an in-memory flag — survives crashes).
+  //   • Job.creditRefundedAt is set atomically inside a prisma.$transaction
+  //     guarded by WHERE creditRefundedAt IS NULL AND ttsStartedAt IS NULL.
+  //     Only one execution ever wins that gate, even across concurrent calls.
+  //   • The QUEUED→PROCESSING lock above ensures only one /complete call per
+  //     job reaches this code section. The DB gate is an additional belt-and-
+  //     suspenders guard that survives function restarts and future code changes.
   //
-  // Admins bypass the credit debit at job creation, so they are excluded from refunds.
+  // Admins bypass the credit debit at job creation; they are excluded entirely.
   const dbUser = await prisma.user.findFirst({
     where: { id: session.user.id as string },
     select: { isAdmin: true },
   });
   const callerIsAdmin = dbUser?.isAdmin ?? false;
 
-  // Set to true immediately before the first elevenlabs.speak() call.
-  // Any failure path that returns before this flag is set triggers a refund.
-  let ttsStarted = false;
-
-  // Helper: refund 1 credit to the caller (best-effort, never blocks error response).
-  const refundCredit = async (reason: string) => {
-    if (callerIsAdmin || ttsStarted) return;
+  /**
+   * Attempt to refund 1 credit for a pre-TTS failure.
+   *
+   * Uses an atomic DB transaction:
+   *   1. Claim the refund slot by setting Job.creditRefundedAt (only succeeds
+   *      if both creditRefundedAt IS NULL and ttsStartedAt IS NULL).
+   *   2. If the claim succeeds, increment User.credits by 1.
+   *
+   * This ensures at most one refund per job, regardless of concurrency or retries.
+   * Admin calls are short-circuited before the DB round-trip.
+   */
+  const tryRefundCredit = async (reason: string): Promise<void> => {
+    if (callerIsAdmin) return; // admins are never debited
     try {
-      await prisma.user.update({
-        where: { id: session.user.id as string },
-        data: { credits: { increment: 1 } },
+      const refunded = await prisma.$transaction(async (tx) => {
+        // Atomically claim the refund slot. The WHERE guard is the idempotency key:
+        //   creditRefundedAt IS NULL → not already refunded
+        //   ttsStartedAt IS NULL     → TTS was never started (no audio rendered)
+        const claim = await tx.job.updateMany({
+          where: { id, creditRefundedAt: null, ttsStartedAt: null },
+          data: { creditRefundedAt: new Date() },
+        });
+        if (claim.count === 0) return false; // already refunded, or TTS had started
+
+        await tx.user.update({
+          where: { id: session.user.id as string },
+          data: { credits: { increment: 1 } },
+        });
+        return true;
       });
+
       addDebugLog({
         ts: new Date().toISOString(),
         level: "info",
         route: "/api/jobs/[id]/complete POST",
         userId: session.user.id as string,
-        message: `Credit refunded: ${reason}`,
+        message: refunded
+          ? `Credit refunded: ${reason}`
+          : `Credit refund skipped — already refunded or TTS had started (${reason})`,
         data: { id },
         reqId,
       });
     } catch (refundErr) {
+      // Never let a refund failure block the error response returned to the client.
       addDebugLog({
         ts: new Date().toISOString(),
         level: "error",
         route: "/api/jobs/[id]/complete POST",
         userId: session.user.id as string,
-        message: "Credit refund failed",
+        message: "Credit refund transaction failed",
         data: { id, error: String(refundErr) },
         reqId,
       });
@@ -487,7 +514,7 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
       data: { status: $Enums.JobStatus.FAILED, error: msg },
     });
     // TTS never started — refund the credit
-    await refundCredit("empty script text");
+    await tryRefundCredit("empty script text");
     return jsonError(msg, 500);
   }
 
@@ -506,7 +533,7 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
         data: { status: $Enums.JobStatus.FAILED, error: safetyMsg },
       });
       // TTS never started — refund the credit so the user can correct and retry
-      await refundCredit("content safety rejection (pre-TTS)");
+      await tryRefundCredit("content safety rejection (pre-TTS)");
       return jsonError("CONTENT_SAFETY", 422, { message: safetyMsg });
     }
     kidsSafetyApplied = safeResult.text !== finalText;
@@ -653,8 +680,15 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
             }
           }
 
-          // Mark TTS as started; failures from here on do not refund the credit
-          ttsStarted = true;
+          // Persist ttsStartedAt on the first chunk only (partIndex === 0).
+          // Writing to DB instead of using an in-memory flag means this survives
+          // a serverless function crash — the stale-recovery path can read it.
+          if (partIndex === 0) {
+            await prisma.job.update({
+              where: { id },
+              data: { ttsStartedAt: new Date() },
+            });
+          }
           const { audio } = await elevenlabs.speak({
             text: ttsTextPart,
             voiceId,
@@ -755,7 +789,7 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
           data: { status: $Enums.JobStatus.FAILED, error: msg },
         });
         // TTS never started — refund the credit
-        await refundCredit("script too long for single-chunk TTS");
+        await tryRefundCredit("script too long for single-chunk TTS");
         return jsonError(msg, 422);
       }
 
@@ -769,8 +803,12 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
 
       console.log("[tts] v3 text preview:\n", ttsText.slice(0, 260));
 
-      // Mark TTS as started; failures from here on do not refund the credit
-      ttsStarted = true;
+      // Persist ttsStartedAt before the ElevenLabs call.
+      // DB write instead of in-memory flag — survives serverless function crashes.
+      await prisma.job.update({
+        where: { id },
+        data: { ttsStartedAt: new Date() },
+      });
       const { audio } = await elevenlabs.speak({
         text: ttsText,
         voiceId,
@@ -824,7 +862,7 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
     });
     // Only refund if TTS had not started yet (e.g. OpenAI failure, voiceId error,
     // or exception thrown before the first elevenlabs.speak() call)
-    await refundCredit("exception before or during pre-TTS setup");
+    await tryRefundCredit("exception before or during pre-TTS setup");
     return jsonError(msg, 500);
   }
 }

@@ -46,7 +46,8 @@ export async function GET(
       createdAt: true,
       updatedAt: true,
       durationSec: true,
-    
+      ttsStartedAt: true,     // needed for stale-recovery credit refund logic
+      creditRefundedAt: true, // needed to guard against duplicate refunds on stale-recovery
     },
   });
 
@@ -62,21 +63,70 @@ export async function GET(
   // configurable threshold, it means the serverless function was killed before
   // the catch block could write FAILED. Detect this lazily on the next poll
   // and transition to FAILED so the client can surface a clean error.
+  //
+  // Credit refund: if the function was killed before TTS started (ttsStartedAt IS NULL)
+  // and no refund was issued yet (creditRefundedAt IS NULL), we issue the refund here
+  // using the same atomic transaction pattern used in /complete — so there is no risk
+  // of double-refunding even if this stale-recovery path and a concurrent /complete
+  // somehow race.
   if (job.status === "PROCESSING") {
     const staleMs = parseInt(process.env.PROCESSING_STALE_MS ?? String(15 * 60 * 1000), 10);
     const staleCutoff = new Date(Date.now() - staleMs);
     if (job.updatedAt < staleCutoff) {
       const staleError = "Generation timed out. Please try again.";
-      await prisma.job.update({
-        where: { id: jobId },
-        data: { status: "FAILED", error: staleError },
-      });
-      const { userId, ...safe } = job;
+
+      const canRefund = !job.ttsStartedAt && !job.creditRefundedAt;
+
+      if (canRefund) {
+        // Check isAdmin before crediting (isAdmin is not in the JWT; re-fetch from DB).
+        const owner = await prisma.user.findFirst({
+          where: { id: job.userId },
+          select: { isAdmin: true },
+        });
+        const ownerIsAdmin = owner?.isAdmin ?? false;
+
+        if (!ownerIsAdmin) {
+          // Atomic: claim the refund slot and increment credits in one transaction.
+          // The WHERE guard (creditRefundedAt IS NULL AND ttsStartedAt IS NULL) ensures
+          // no double-refund even if this executes concurrently with /complete.
+          await prisma.$transaction(async (tx) => {
+            const claim = await tx.job.updateMany({
+              where: {
+                id: jobId,
+                status: "PROCESSING",
+                creditRefundedAt: null,
+                ttsStartedAt: null,
+              },
+              data: { status: "FAILED", error: staleError, creditRefundedAt: new Date() },
+            });
+            if (claim.count > 0) {
+              await tx.user.update({
+                where: { id: job.userId },
+                data: { credits: { increment: 1 } },
+              });
+            }
+          });
+        } else {
+          // Admin: just mark FAILED, no credit change.
+          await prisma.job.update({
+            where: { id: jobId },
+            data: { status: "FAILED", error: staleError },
+          });
+        }
+      } else {
+        // TTS had started or refund already issued; just set FAILED.
+        await prisma.job.update({
+          where: { id: jobId },
+          data: { status: "FAILED", error: staleError },
+        });
+      }
+
+      const { userId, ttsStartedAt, creditRefundedAt, ...safe } = job;
       return jsonOk({ ...safe, status: "FAILED", error: staleError }, 200);
     }
   }
 
-  const { userId, ...safe } = job;
+  const { userId, ttsStartedAt, creditRefundedAt, ...safe } = job;
   return jsonOk(safe, 200);
 }
 
