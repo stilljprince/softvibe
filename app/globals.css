@@ -1,0 +1,583 @@
+/* neu – greift nur, wenn das Attribut gesetzt ist */
+html[data-scroll-behavior="smooth"] { scroll-behavior: smooth; }
+
+/* ===========================
+   Basis Reset
+=========================== */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  width: 100%;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+  background: var(--color-bg);
+  color: var(--color-text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ===========================
+   Farben: Light / Dark / Pastel
+=========================== */
+:root {
+  --color-bg: #faf8f5;
+  --color-text: #222;
+  --color-accent: #6a5acd; /* violett */
+  --color-nav-bg: rgba(0, 0, 0, 0.05);
+  --color-nav-text: #222;
+  --color-card: #ffffff;
+  --color-button-bg: #eee;
+  --color-button-text: #222;
+  --color-input-bg: #fff;
+  --color-input-text: #222;
+  --color-input-border: #ccc;
+}
+
+.dark {
+  --color-bg: #1a1a1a;
+  --color-text: #f5f5f5;
+  --color-accent: #4da6ff; /* hellblau */
+  --color-nav-bg: rgba(255, 255, 255, 0.08);
+  --color-nav-text: #f5f5f5;
+  --color-card: #2a2a2a;
+  --color-button-bg: #333;
+  --color-button-text: #fff;
+  --color-input-bg: #333;
+  --color-input-text: #fff;
+  --color-input-border: #555;
+}
+
+.pastel {
+  --color-bg: #fdf6f9;
+  --color-text: #333;
+  --color-accent: #ff7eb9; /* pastel pink */
+  --color-nav-bg: rgba(0, 0, 0, 0.05);
+  --color-nav-text: #333;
+  --color-card: #fff;
+  --color-button-bg: #f0e6ef;
+  --color-button-text: #333;
+  --color-input-bg: #fff;
+  --color-input-text: #333;
+  --color-input-border: #ccc;
+}
+
+/* ===========================
+   Buttons
+=========================== */
+button,
+a.btn,
+input[type="submit"] {
+  transition: all 0.2s ease;
+}
+
+button:hover,
+a.btn:hover,
+input[type="submit"]:hover {
+  transform: translateY(-2px);
+  filter: brightness(90%);
+}
+
+button:active,
+a.btn:active,
+input[type="submit"]:active {
+  transform: translateY(0);
+  filter: brightness(100%);
+}
+
+/* ===========================
+   Inputs & Textarea
+=========================== */
+input,
+textarea {
+  width: 100%;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--color-input-border);
+  background: var(--color-input-bg);
+  color: var(--color-input-text);
+  font-size: 1rem;
+  outline: none;
+  transition: border 0.2s ease, box-shadow 0.2s ease;
+}
+
+input:focus,
+textarea:focus {
+  border: 1px solid var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent + "20");
+}
+
+/* ===========================
+   Links
+=========================== */
+a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* ===========================
+   Kontaktformular Button
+=========================== */
+form button {
+  width: 150px;
+  padding: 0.5rem;
+  border-radius: 6px;
+  background: var(--color-accent);
+  color: #fff;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  align-self: center;
+}
+
+
+/* ===========================
+   Systemleisten iOS/Android
+=========================== */
+@supports (color-scheme: light dark) {
+  :root {
+    color-scheme: light dark;
+  }
+}
+
+html {
+  background-color: var(--color-bg);
+}
+body {
+  background-color: var(--color-bg);
+}
+
+/* ===== SoftVibe AuthStatus (Premium) ===== */
+:root{
+  --sv-bg: #fdfbf7;          /* deine Light-Background-Farbe */
+  --sv-text: #0f172a;        /* sehr dunkles Blau-Grau für Text */
+  --sv-muted: #e9e4dc;       /* zarte Konturen auf warmem Beige */
+  --sv-surface: #ffffff;     /* Karten-/Button-Hintergrund */
+  --sv-primary: #111827;     /* Primary (fast schwarz) */
+  --sv-primary-fore: #ffffff;
+  --sv-shadow: 0 8px 20px rgba(17,24,39,0.08);
+}
+
+.sv-bar{
+  display: inline-flex;
+  gap: 10px;
+  align-items: center;
+  background: transparent;
+}
+
+.sv-chip{
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--sv-surface);
+  border: 1px solid var(--sv-muted);
+  box-shadow: var(--sv-shadow);
+  text-decoration: none;
+  color: var(--sv-text);
+  transition: transform .08s ease, box-shadow .2s ease, background .2s ease;
+}
+.sv-chip:hover{ transform: translateY(-1px); box-shadow: 0 10px 24px rgba(17,24,39,0.1); }
+.sv-chip:active{ transform: translateY(0); }
+
+.sv-avatar{
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--sv-primary);
+  color: var(--sv-primary-fore);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .3px;
+}
+
+.sv-username{
+  max-width: 180px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+
+.sv-btn{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--sv-muted);
+  background: var(--sv-surface);
+  color: var(--sv-text);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 14px;
+  line-height: 1;
+  min-width: 120px;
+  box-shadow: var(--sv-shadow);
+  transition: transform .08s ease, box-shadow .2s ease, background .2s ease, opacity .2s ease;
+  cursor: pointer;
+}
+.sv-btn:hover{ transform: translateY(-1px); box-shadow: 0 10px 24px rgba(17,24,39,0.1); }
+.sv-btn:active{ transform: translateY(0); }
+.sv-btn:disabled{ opacity: .6; cursor: not-allowed; }
+
+.sv-btn--primary{
+  background: var(--sv-primary);
+  color: var(--sv-primary-fore);
+  border-color: var(--sv-primary);
+}
+
+/* Skeletons für Loading-State */
+.sv-skeleton{
+  height: 36px;
+  background: linear-gradient(90deg, #eee, #f8f8f8, #eee);
+  background-size: 200% 100%;
+  border-radius: 12px;
+  animation: svShine 1.2s linear infinite;
+}
+@keyframes svShine { 0%{ background-position: 0 0 } 100%{ background-position: 200% 0 } }
+
+/* ===== SoftVibe Theme Tokens ===== */
+html, body {
+  background: var(--sv-bg);
+  color: var(--sv-text);
+}
+
+/* Default (falls keine Klasse) = light */
+:root {
+  --sv-bg: #fdfbf7;
+  --sv-text: #0f172a;
+  --sv-muted: #e9e4dc;
+  --sv-surface: #ffffff;
+  --sv-primary: #111827;
+  --sv-primary-fore: #ffffff;
+  --sv-shadow: 0 8px 20px rgba(17,24,39,0.08);
+}
+
+/* Light */
+.light {
+  --sv-bg: #fdfbf7;
+  --sv-text: #0f172a;
+  --sv-muted: #e9e4dc;
+  --sv-surface: #ffffff;
+  --sv-primary: #111827;
+  --sv-primary-fore: #ffffff;
+  --sv-shadow: 0 8px 20px rgba(17,24,39,0.08);
+}
+
+/* Dark */
+.dark {
+  --sv-bg: #0b0f1a;
+  --sv-text: #f8fafc;
+  --sv-muted: #253047;
+  --sv-surface: #111827;
+  --sv-primary: #f8fafc;
+  --sv-primary-fore: #0b0f1a;
+  --sv-shadow: 0 6px 16px rgba(0,0,0,0.35);
+}
+
+/* Pastel */
+.pastel {
+  --sv-bg: #fbf7ff;
+  --sv-text: #23213a;
+  --sv-muted: #e9e4ff;
+  --sv-surface: #ffffff;
+  --sv-primary: #6b5bd2;         /* soft-violett Akzent */
+  --sv-primary-fore: #ffffff;
+  --sv-shadow: 0 8px 20px rgba(107,91,210,0.15);
+}
+
+/* ===== Topbar ===== */
+.sv-topbar{
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--sv-muted);
+  background: color-mix(in oklab, var(--sv-bg) 92%, white 8%);
+  backdrop-filter: saturate(180%) blur(6px);
+}
+
+/* ===== AuthStatus Styles ===== */
+.sv-bar{
+  display: inline-flex;
+  gap: 10px;
+  align-items: center;
+}
+
+/* Chip */
+.sv-chip{
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--sv-surface);
+  border: 1px solid var(--sv-muted);
+  box-shadow: var(--sv-shadow);
+  text-decoration: none;
+  color: var(--sv-text);
+  transition: transform .08s ease, box-shadow .2s ease, background .2s ease;
+}
+.sv-chip:hover{ transform: translateY(-1px); box-shadow: 0 10px 24px rgba(17,24,39,0.1); }
+.sv-chip:active{ transform: translateY(0); }
+
+.sv-avatar{
+  width: 28px; height: 28px; border-radius: 50%;
+  background: var(--sv-primary); color: var(--sv-primary-fore);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; letter-spacing: .3px;
+}
+
+.sv-username{
+  max-width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-weight: 600;
+}
+
+/* Buttons */
+.sv-btn{
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 10px 14px; border-radius: 12px;
+  border: 1px solid var(--sv-muted);
+  background: var(--sv-surface); color: var(--sv-text);
+  text-decoration: none; font-weight: 600; font-size: 14px; line-height: 1;
+  min-width: 120px; box-shadow: var(--sv-shadow);
+  transition: transform .08s ease, box-shadow .2s ease, background .2s ease, opacity .2s;
+  cursor: pointer;
+}
+.sv-btn:hover{ transform: translateY(-1px); box-shadow: 0 10px 24px rgba(17,24,39,0.1); }
+.sv-btn:active{ transform: translateY(0); }
+.sv-btn:disabled{ opacity: .6; cursor: not-allowed; }
+
+.sv-btn--primary{
+  background: var(--sv-primary);
+  color: var(--sv-primary-fore);
+  border-color: var(--sv-primary);
+}
+
+/* Skeleton */
+.sv-skeleton{
+  height: 36px;
+  background: linear-gradient(90deg, #eee, #f8f8f8, #eee);
+  background-size: 200% 100%;
+  border-radius: 12px;
+  animation: svShine 1.2s linear infinite;
+}
+@keyframes svShine { 0%{ background-position: 0 0 } 100%{ background-position: 200% 0 } }
+
+/* Theme Button */
+.sv-theme-btn{
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px; border-radius: 12px;
+  border: 1px solid var(--sv-muted);
+  background: var(--sv-surface); color: var(--sv-text);
+  box-shadow: var(--sv-shadow); margin-left: 10px; cursor: pointer;
+  transition: transform .08s ease, box-shadow .2s ease, background .2s ease;
+}
+.sv-theme-btn:hover{ transform: translateY(-1px); box-shadow: 0 10px 24px rgba(17,24,39,0.1); }
+
+/* Topbar slots */
+.sv-topbar__left { display:flex; align-items:center; gap:12px; }
+.sv-topbar__right { display:flex; align-items:center; gap:10px; }
+/* === SoftVibe: AuthStatus Buttons an Site-Palette anbinden === */
+.sv-btn{
+  background: var(--color-button-bg);
+  color: var(--color-button-text);
+  border: 1px solid var(--color-button-border, transparent);
+}
+.sv-btn:hover{ opacity: .95; }
+
+.sv-btn--primary{
+  background: var(--color-accent);
+  color: #fff;
+  border-color: var(--color-accent);
+}
+.sv-btn--primary:hover{ filter: brightness(0.96); }
+
+/* (Optional, nur falls der Chip nicht gut aussieht) */
+.sv-chip{
+  background: var(--color-card);
+  border: 1px solid var(--color-button-border, rgba(0,0,0,0.06));
+  color: var(--color-text);
+}
+
+.sv-form{ display:flex; flex-direction:column; gap: 14px; }
+.sv-form-row{ display:flex; flex-direction:column; gap: 6px; }
+
+/* === SoftVibe: Auth Form Inputs ===
+   Base structural styles live here so they are available from the first paint.
+   Theme-specific colors (background, color, border-color) are applied via
+   inline style on each <input> element, driven by useSVTheme(). Focus-ring
+   colours are supplied through CSS custom properties set on the parent form. */
+.sv-auth-input {
+  width: 100%;
+  appearance: none;
+  outline: none;
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 14px;
+  font-family: inherit;
+  transition: border-color .15s ease, box-shadow .15s ease;
+  /* Neutral glass fallback — overridden immediately by inline style */
+  background: rgba(255,255,255,0.08);
+  color: inherit;
+  border: 1px solid rgba(148,163,184,0.28);
+}
+.sv-auth-input:focus {
+  border-color: var(--sv-auth-focus-border, rgba(100,100,100,0.6));
+  box-shadow: 0 0 0 3px var(--sv-auth-focus-ring, rgba(100,100,100,0.2));
+}
+.sv-auth-input::placeholder {
+  opacity: 0.4;
+}
+/* Suppress browser autofill yellow/white flash */
+.sv-auth-input:-webkit-autofill,
+.sv-auth-input:-webkit-autofill:hover,
+.sv-auth-input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 100px var(--sv-auth-input-bg, rgba(30,40,60,0.7)) inset;
+  -webkit-text-fill-color: var(--sv-auth-input-color, #e5e7eb);
+  caret-color: var(--sv-auth-input-color, #e5e7eb);
+  transition: background-color 5000s ease-in-out 0s;
+}
+
+.sv-label{ font-weight: 600; }
+
+.sv-input{
+  appearance:none;
+  outline: none;
+  border-radius: 12px;
+  border: 1px solid var(--color-nav-bg);
+  background: var(--color-bg);
+  color: var(--color-text);
+  padding: 12px 14px;
+  font-size: 14px;
+  transition: border-color .15s ease, box-shadow .15s ease, background .2s ease;
+}
+.sv-input:focus{
+  border-color: color-mix(in oklab, var(--color-accent), #000 12%);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-accent) 25%, transparent);
+}
+
+.sv-actions{
+  display:flex; gap: 12px; justify-content:flex-end; margin-top: 6px;
+}
+
+.sv-help{ font-size: 0.925rem; opacity:.9; margin-top: 6px; }
+.sv-error{ color: #e11d48; font-weight: 600; }
+
+.sv-link{
+  color: var(--color-accent); text-decoration: none; font-weight: 700;
+}
+.sv-link:hover{ text-decoration: underline; }
+
+.sv-spinner{
+  width: 28px; height: 28px; border-radius: 50%;
+  border: 3px solid color-mix(in oklab, var(--color-accent) 25%, transparent);
+  border-top-color: var(--color-accent);
+  animation: svSpin .8s linear infinite;
+  margin: 14px auto 4px;
+}
+@keyframes svSpin { to { transform: rotate(360deg); } }
+/* ===== SoftVibe: mobile menu hard background ===== */
+.sv-mobile-menu {
+  background: var(--color-card) !important;
+  /* falls var(--color-card) mal transparent gesetzt wird: */
+  background-color: var(--color-card, #fdfbf7) !important;
+}
+.dark .sv-mobile-menu {
+  background: #111827 !important;
+}
+
+.pastel .sv-mobile-menu {
+  background: #fdf7ff !important;
+}
+/* Hide scrollbar but keep scrolling */
+html, body {
+  scrollbar-width: none;      /* Firefox */
+}
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+  width: 0px;                 /* Safari/Chrome */
+  height: 0px;
+}
+
+/* Hide cursor everywhere when UI is hidden */
+html.sv-hide-cursor,
+html.sv-hide-cursor * {
+  cursor: none !important;
+}
+
+/* ===== Manual playlist open-state ===== */
+
+/* Outer wrapper: animates grid-template-rows 0fr→1fr so the panel
+   literally pushes the rest of the layout downward (real reflow).        */
+@keyframes svPanelExpand {
+  from { grid-template-rows: 0fr; }
+  to   { grid-template-rows: 1fr; }
+}
+/* Inner node: starts overflow:hidden (so 0fr rows clip the content),
+   then flips to overflow:visible at 50% so menus/dropdowns inside
+   can escape the bounding box after the main expand is complete.          */
+@keyframes svPanelClip {
+  0%, 50%   { overflow: hidden; }
+  51%, 100% { overflow: visible; }
+}
+/* Content itself fades in with a short delay after space starts opening.  */
+@keyframes svPanelFade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.sv-pl-panel-wrap {
+  display: grid;
+  animation: svPanelExpand 360ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+/* min-height:0 is required so the grid can compress the row to 0fr.
+   overflow toggles via animation: hidden during expand, visible after.    */
+.sv-pl-panel-inner {
+  min-height: 0;
+  overflow: hidden;
+  animation: svPanelClip 360ms linear both;
+}
+/* Panel content fades in after the space starts opening (80ms delay).     */
+.sv-pl-panel {
+  animation: svPanelFade 280ms 80ms ease both;
+}
+
+/* All tiles smoothly transition opacity, transform, and shadow.
+   transform drives the persistent open-state vertical offset:
+   non-open tiles shift down while a playlist is open, then return
+   smoothly when it closes.                                                */
+.sv-pl-tile {
+  transition: opacity 180ms ease,
+              transform 300ms cubic-bezier(0.16, 1, 0.3, 1),
+              box-shadow 150ms ease;
+}
+/* Auto playlist tiles share the same transition set */
+.sv-pl-auto-tile {
+  transition: opacity 180ms ease,
+              transform 300ms cubic-bezier(0.16, 1, 0.3, 1);
+}
