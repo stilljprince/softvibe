@@ -115,6 +115,34 @@ export async function getObjectByKey(
   };
 }
 
+/**
+ * Get: partial-content range request.
+ * Passes a valid HTTP Range header (e.g. "bytes=0-1023") to S3.
+ * Returns ContentRange (e.g. "bytes 0-1023/45678") alongside the partial body.
+ * S3/R2 natively supports Range and returns HTTP 206; the SDK surfaces the
+ * result the same way as a full GET — we just pass the header through.
+ */
+export async function getObjectByKeyRange(
+  key: string,
+  range: string,
+): Promise<
+  Pick<GetObjectCommandOutput, "Body" | "ContentLength" | "ContentType"> & {
+    ContentRange: string | undefined;
+  }
+> {
+  const Bucket = process.env.S3_BUCKET;
+  if (!Bucket) throw new Error("S3_BUCKET missing");
+  const out = await s3.send(
+    new GetObjectCommand({ Bucket, Key: key, Range: range }),
+  );
+  return {
+    Body: out.Body,
+    ContentLength: out.ContentLength,
+    ContentType: out.ContentType,
+    ContentRange: out.ContentRange,
+  };
+}
+
 /** Objekt per Key löschen */
 export async function deleteObjectByKey(key: string): Promise<void> {
   const Bucket = process.env.S3_BUCKET;

@@ -354,6 +354,61 @@ console.log("COMPLETE language:", job?.id, job?.language);
     }
   }
 
+  // ─── Credit refund state ──────────────────────────────────────────────────
+  //
+  // Business rule: 1 credit was debited atomically at POST /api/jobs creation.
+  // We refund it when /complete fails BEFORE ElevenLabs TTS has been called —
+  // i.e. the user never received any audio. Once TTS has started (even if it
+  // partially fails) we do NOT automatically refund, because compute cost was
+  // incurred and idempotency re-runs would otherwise double-refund.
+  //
+  // Idempotency guarantee: the atomic QUEUED→PROCESSING lock above ensures only
+  // one concurrent /complete call can reach this point per job. On a retry call,
+  // the lock fails (status is already FAILED/DONE/PROCESSING), so the code below
+  // is never re-entered and the refund cannot be issued twice.
+  //
+  // Admins bypass the credit debit at job creation, so they are excluded from refunds.
+  const dbUser = await prisma.user.findFirst({
+    where: { id: session.user.id as string },
+    select: { isAdmin: true },
+  });
+  const callerIsAdmin = dbUser?.isAdmin ?? false;
+
+  // Set to true immediately before the first elevenlabs.speak() call.
+  // Any failure path that returns before this flag is set triggers a refund.
+  let ttsStarted = false;
+
+  // Helper: refund 1 credit to the caller (best-effort, never blocks error response).
+  const refundCredit = async (reason: string) => {
+    if (callerIsAdmin || ttsStarted) return;
+    try {
+      await prisma.user.update({
+        where: { id: session.user.id as string },
+        data: { credits: { increment: 1 } },
+      });
+      addDebugLog({
+        ts: new Date().toISOString(),
+        level: "info",
+        route: "/api/jobs/[id]/complete POST",
+        userId: session.user.id as string,
+        message: `Credit refunded: ${reason}`,
+        data: { id },
+        reqId,
+      });
+    } catch (refundErr) {
+      addDebugLog({
+        ts: new Date().toISOString(),
+        level: "error",
+        route: "/api/jobs/[id]/complete POST",
+        userId: session.user.id as string,
+        message: "Credit refund failed",
+        data: { id, error: String(refundErr) },
+        reqId,
+      });
+    }
+  };
+  // ─────────────────────────────────────────────────────────────────────────
+
   let nextResultUrl = body.resultUrl ?? null;
   let detectedDuration: number | undefined;
   let kidsSafetyApplied = false;
@@ -431,6 +486,8 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
       where: { id },
       data: { status: $Enums.JobStatus.FAILED, error: msg },
     });
+    // TTS never started — refund the credit
+    await refundCredit("empty script text");
     return jsonError(msg, 500);
   }
 
@@ -448,6 +505,8 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
         where: { id },
         data: { status: $Enums.JobStatus.FAILED, error: safetyMsg },
       });
+      // TTS never started — refund the credit so the user can correct and retry
+      await refundCredit("content safety rejection (pre-TTS)");
       return jsonError("CONTENT_SAFETY", 422, { message: safetyMsg });
     }
     kidsSafetyApplied = safeResult.text !== finalText;
@@ -594,6 +653,8 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
             }
           }
 
+          // Mark TTS as started; failures from here on do not refund the credit
+          ttsStarted = true;
           const { audio } = await elevenlabs.speak({
             text: ttsTextPart,
             voiceId,
@@ -693,6 +754,8 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
           where: { id },
           data: { status: $Enums.JobStatus.FAILED, error: msg },
         });
+        // TTS never started — refund the credit
+        await refundCredit("script too long for single-chunk TTS");
         return jsonError(msg, 422);
       }
 
@@ -706,6 +769,8 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
 
       console.log("[tts] v3 text preview:\n", ttsText.slice(0, 260));
 
+      // Mark TTS as started; failures from here on do not refund the credit
+      ttsStarted = true;
       const { audio } = await elevenlabs.speak({
         text: ttsText,
         voiceId,
@@ -757,6 +822,9 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
       where: { id },
       data: { status: $Enums.JobStatus.FAILED, error: msg },
     });
+    // Only refund if TTS had not started yet (e.g. OpenAI failure, voiceId error,
+    // or exception thrown before the first elevenlabs.speak() call)
+    await refundCredit("exception before or during pre-TTS setup");
     return jsonError(msg, 500);
   }
 }

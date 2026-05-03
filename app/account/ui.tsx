@@ -203,10 +203,12 @@ export default function AccountClient({ user }: { user: AccountUser }) {
     try {
       const res = await fetch("/api/billing/portal", { method: "POST" });
       if (!res.ok) { console.error("Failed to create portal session"); return; }
-      const data: unknown = await res.json();
-      if (data && typeof data === "object" && "url" in data && typeof (data as { url: unknown }).url === "string") {
-        window.location.href = (data as { url: string }).url;
-      }
+      const raw: unknown = await res.json();
+      // Support both the new envelope shape { ok, data: { url } }
+      // and the legacy flat shape { url } for safety during transition
+      const d = raw as { ok?: boolean; data?: { url?: string }; url?: string };
+      const url = d.data?.url ?? d.url;
+      if (url) window.location.href = url;
     } catch (error) {
       console.error(error);
     }

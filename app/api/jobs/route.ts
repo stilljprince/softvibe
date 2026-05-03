@@ -358,10 +358,14 @@ export async function POST(req: Request) {
         data: { retryAfter },
         reqId: h.get("x-request-id") ?? undefined,
       });
+      // Both field names are included: retryAfter (read by the web UI) and
+      // retryAfterSeconds (the originally released name). The Retry-After header
+      // is the authoritative value for all clients.
       return new Response(
         JSON.stringify({
           ok: false,
           error: "RATE_LIMITED",
+          retryAfter: retryAfter,
           retryAfterSeconds: retryAfter,
         }),
         {
