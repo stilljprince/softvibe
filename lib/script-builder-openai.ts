@@ -677,7 +677,9 @@ async function editSleepStory(opts: {
   return { editedText, changesSummary };
 }
 
-export async function buildScriptOpenAI(input: ScriptInput & { language: "de" | "en" }): Promise<{ finalText: string }> {
+export async function buildScriptOpenAI(
+  input: ScriptInput & { language: "de" | "en"; preferenceContext?: string }
+): Promise<{ finalText: string }> {
   if (!process.env.OPENAI_API_KEY) {
     throw new Error("Missing OPENAI_API_KEY");
   }
@@ -868,7 +870,18 @@ MEDITATION MODE:
 - No direct coaching loops or repetitive instruction patterns.
 `.trim();
 
-const system = `${baseSystem}\n\n${presetSystem}`.trim();
+// Preference context: secondary, soft style guidance only. Bypassed entirely
+// for kids-story (children's safety rules must remain authoritative). Always
+// appended after the preset system block so the user-prompt and preset rules
+// remain primary.
+const preferenceContextBlock =
+  input.preset !== "kids-story" && (input.preferenceContext ?? "").trim().length > 0
+    ? input.preferenceContext!.trim()
+    : "";
+
+const system = preferenceContextBlock
+  ? `${baseSystem}\n\n${presetSystem}\n\n${preferenceContextBlock}`.trim()
+  : `${baseSystem}\n\n${presetSystem}`.trim();
 
 const outputLanguage =
   input.language === "en" ? "English" : "German";
@@ -1236,9 +1249,12 @@ const sleepStorySystemV3 = [
 // bypass the editor and restore pure single-writer behaviour.
 if (input.preset === "sleep-story" && sleepPhases) {
   const openaiTimeoutMs = parseInt(process.env.OPENAI_TIMEOUT_MS ?? "90000", 10);
+  const sleepStorySystemWithPrefs = preferenceContextBlock
+    ? `${sleepStorySystemV3}\n\n${preferenceContextBlock}`
+    : sleepStorySystemV3;
   const writerResult = await buildSleepStoryPhased({
     phases: sleepPhases,
-    system: sleepStorySystemV3,
+    system: sleepStorySystemWithPrefs,
     outputLanguage,
     userPrompt,
     wordTarget,

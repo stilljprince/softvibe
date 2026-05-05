@@ -14,6 +14,7 @@ import { jsonOk, jsonError } from "@/lib/api";
 import { makeTitleFromPrompt } from "@/lib/title";
 import { buildScriptV2, enforceKidsSafety } from "@/lib/script-builder";
 import { buildScriptOpenAI } from "@/lib/script-builder-openai";
+import { buildPreferenceContextBlock } from "@/lib/preferences";
 import { applyV3Prosody } from "@/lib/tts/prosody-v3";
 import { s3KeyForJobPart } from "@/lib/s3";
 import { splitToChunksSafe, getMaxCharsPerRequest } from "@/lib/audio/chunks";
@@ -494,11 +495,26 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
 } else if (SMOKE_BYPASS_SCRIPT_BUILDER) {
   finalText = ((job.prompt ?? "") as string).trim();
 } else {
+  // Preference context: secondary, soft style guidance only. Bypassed for
+  // kids-story by buildScriptOpenAI (children's safety stays authoritative).
+  let preferenceContext = "";
+  try {
+    const profile = await prisma.userPreferenceProfile.findUnique({
+      where: { userId: session.user.id as string },
+    });
+    preferenceContext = buildPreferenceContextBlock(profile);
+  } catch (err) {
+    // A profile-fetch failure must never break generation.
+    const msg = err instanceof Error ? err.message : "unknown";
+    console.warn("[preferences] fetch failed; continuing without:", msg);
+  }
+
   const out = await buildScriptOpenAI({
     preset: safePreset,
     userPrompt: (job.prompt ?? "").trim(),
     targetDurationSec: typeof job.durationSec === "number" ? job.durationSec : undefined,
     language,
+    preferenceContext,
   });
 
   finalText = (out?.finalText ?? "").trim();

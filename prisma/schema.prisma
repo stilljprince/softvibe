@@ -28,6 +28,38 @@ model User {
   tracks    Track[]
   stories   Story[]
   playlists Playlist[]
+
+  preferenceProfile UserPreferenceProfile?
+}
+
+model UserPreferenceProfile {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Structured fields (all optional — users may fill in any subset)
+  primaryGoal             String? // sleep | stress_relief | focus | relaxation | comfort | other
+  preferredTone           String? // very_soft | calm | neutral | immersive
+  pacing                  String? // very_slow | slow | medium
+  preferredFormats        String[] @default([]) // ["sleep-story","meditation","classic-asmr","kids-story"]
+  likedThemes             String[] @default([])
+  dislikedThemes          String[] @default([])
+  voicePreference         String? // female | male | no_preference
+  directAddressPreference String? // yes | no | subtle
+  contentBoundaries       String[] @default([])
+  emotionalContext        String?
+  desiredOutcome          String?
+
+  // Narrative summary suitable for LLM prompt injection (server-derived; user never edits directly).
+  summaryMarkdown String?
+
+  // Raw onboarding answers (free-form JSON) — kept so we can re-derive
+  // structured fields if the questionnaire schema evolves.
+  onboardingAnswers Json?
+
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Job {
