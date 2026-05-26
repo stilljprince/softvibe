@@ -10,6 +10,7 @@ import { addDebugLog } from "@/lib/debug-log";
 import { toErrData } from "@/lib/error";
 import { jsonOk, jsonError } from "@/lib/api";
 import { makeTitleFromPrompt } from "@/lib/title";
+import { runPromptGate } from "@/lib/validation/promptGate";
 console.log("[BOOT] jobs route loaded from:", __filename);
 export const runtime = "nodejs";
 
@@ -265,23 +266,23 @@ export async function POST(req: Request) {
           : null,
     };
 
-    
-    // 🔹 Eigene minimale Validierung statt Zod
-    if (!normalized.prompt || normalized.prompt.trim().length < 3) {
+    // P0 Safety Gate — shape check + local safety + OpenAI moderation.
+    // Runs before any credit/rate-limit work so a rejected prompt costs nothing.
+    const gate = await runPromptGate(normalized.prompt ?? "");
+    if (!gate.ok) {
       addDebugLog({
         ts: new Date().toISOString(),
         level: "warn",
         route: "/api/jobs POST",
         userId: session.user.id as string,
-        message: "Prompt too short or missing",
+        message: "Prompt rejected by gate",
+        data: { code: gate.code },
         reqId: h.get("x-request-id") ?? undefined,
       });
-      return jsonError("BAD_REQUEST", 400, {
-        message: "Prompt ist erforderlich und muss mindestens 3 Zeichen haben.",
-      });
+      return jsonError(gate.code, gate.httpStatus, { message: gate.message });
     }
 
-    const prompt = normalized.prompt.trim();
+    const prompt = gate.normalized;
     const preset = normalized.preset;
     const durationSec = normalized.durationSec;
 

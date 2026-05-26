@@ -4,6 +4,12 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/config";
 import { rateLimit } from "@/lib/rate";
 import { jsonOk, jsonError } from "@/lib/api";
+import {
+  looksLikeRefusal,
+  moderatePromptContent,
+  PROMPT_GATE_COPY,
+  runPromptGate,
+} from "@/lib/validation/promptGate";
 import OpenAI from "openai";
 
 export const runtime = "nodejs";
@@ -47,9 +53,13 @@ export async function POST(req: Request) {
     return jsonError("BAD_REQUEST", 400, { message: "Invalid request body" });
   }
 
-  if (prompt.length < 3) {
-    return jsonError("BAD_REQUEST", 400, { message: "Prompt is too short" });
+  // P0 Safety Gate — same gate as /api/jobs so "Verbessern" cannot silently
+  // soften gibberish or unsafe input. Runs before any OpenAI call.
+  const gate = await runPromptGate(prompt);
+  if (!gate.ok) {
+    return jsonError(gate.code, gate.httpStatus, { message: gate.message });
   }
+  prompt = gate.normalized;
 
   const isKids = preset === "kids-story";
   const model = process.env.OPENAI_IMPROVE_MODEL ?? "gpt-5.4-mini";
@@ -89,6 +99,26 @@ export async function POST(req: Request) {
     const improvedPrompt = (completion.choices[0]?.message?.content ?? "").trim();
     if (!improvedPrompt) {
       return jsonError("GENERATION_FAILED", 500, { message: "Could not improve prompt" });
+    }
+
+    // If the model refused (e.g. "I'm sorry, but I can't assist with that."),
+    // do NOT pass that refusal back to the client as the improved prompt —
+    // iOS would put it into the prompt field and overwrite the user's text.
+    // Surface a typed safety response so the iOS safety card appears and
+    // the original prompt stays unchanged.
+    if (looksLikeRefusal(improvedPrompt)) {
+      return jsonError("SAFETY_BLOCKED", 422, {
+        message: PROMPT_GATE_COPY.SAFETY_BLOCKED,
+      });
+    }
+
+    // Re-moderate the output: defense-in-depth in case the model rewrote a
+    // borderline input into something the input gate could not catch.
+    const outputModeration = await moderatePromptContent(improvedPrompt);
+    if (!outputModeration.ok) {
+      return jsonError(outputModeration.code, outputModeration.httpStatus, {
+        message: outputModeration.message,
+      });
     }
 
     return jsonOk({ improvedPrompt });
