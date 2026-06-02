@@ -20,7 +20,13 @@ const VOICE_MEDITATION =
   process.env.ELEVENLABS_VOICE_MEDITATION_ID || DEFAULT_VOICE;
 
 // Read at call time so deployments that set the env after module init still work.
-let kidsStoryFallbackWarned = false;
+// One slot per distinct fallback path so each path warns at most once.
+const kidsStoryWarned = new Set<string>();
+function warnKidsStoryOnce(key: string, message: string) {
+  if (kidsStoryWarned.has(key)) return;
+  kidsStoryWarned.add(key);
+  console.warn(message);
+}
 
 
 
@@ -112,27 +118,40 @@ export function resolveVoiceId(
     return VOICE_MEDITATION;
   }
 
-  // ✅ KIDS STORY: dedicated voice with one-shot fallback warning
+  // ✅ KIDS STORY: gendered voices (Lumen V2 / Atlas V5) with layered fallbacks.
   if (preset === "kids-story") {
-    const kidsVoice = process.env.ELEVENLABS_VOICE_KIDS_STORY_ID;
-    if (kidsVoice && kidsVoice.trim().length > 0) {
-      return kidsVoice;
-    }
-    if (!kidsStoryFallbackWarned) {
-      kidsStoryFallbackWarned = true;
-      console.warn(
-        "[TTS] ELEVENLABS_VOICE_KIDS_STORY_ID is not set – falling back to DEFAULT_VOICE for kids-story."
+    const femaleVoice = process.env.ELEVENLABS_VOICE_KIDS_STORY_FEMALE_ID?.trim();
+    const maleVoice = process.env.ELEVENLABS_VOICE_KIDS_STORY_MALE_ID?.trim();
+    const wantMale = voiceGender === "male";
+
+    const primary = wantMale ? maleVoice : femaleVoice;
+    if (primary) return primary;
+
+    const alt = wantMale ? femaleVoice : maleVoice;
+    if (alt) {
+      const missingVar = wantMale
+        ? "ELEVENLABS_VOICE_KIDS_STORY_MALE_ID"
+        : "ELEVENLABS_VOICE_KIDS_STORY_FEMALE_ID";
+      warnKidsStoryOnce(
+        `cross:${missingVar}`,
+        `[TTS] ${missingVar} is not set – falling back to the other kids-story voice.`
       );
+      return alt;
     }
+
+    warnKidsStoryOnce(
+      "default",
+      "[TTS] Neither ELEVENLABS_VOICE_KIDS_STORY_FEMALE_ID nor ELEVENLABS_VOICE_KIDS_STORY_MALE_ID is set – falling back to DEFAULT_VOICE for kids-story."
+    );
     return DEFAULT_VOICE;
   }
 
   return DEFAULT_VOICE;
 }
 
-// Test-only helper. Lets the smoke test reset the warn-once flag between cases.
+// Test-only helper. Lets the smoke test reset warn-once flags between cases.
 export function __resetKidsStoryWarnedForTests() {
-  kidsStoryFallbackWarned = false;
+  kidsStoryWarned.clear();
 }
 /**
  * 🔹 NEU (optional): sehr kurzer “Whisper-Cue” Prefix.
