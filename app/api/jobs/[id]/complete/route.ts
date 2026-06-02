@@ -532,8 +532,12 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
   finalText = (out?.finalText ?? "").trim();
 }
 
-console.log("[SLEEP CHECK] preset=", safePreset, "hasYou=", /\byou\b/i.test(finalText));
-console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
+{
+  const firstLine = finalText.split("\n")[0] ?? "";
+  const firstLinePreview = firstLine.slice(0, 150);
+  const firstLineEllipsis = firstLine.length > 150 ? "…" : "";
+  console.log(`[SLEEP CHECK] preset=${safePreset} hasYou=${/\byou\b/i.test(finalText)} firstLine="${firstLinePreview}${firstLineEllipsis}"`);
+}
 
   if (!finalText) {
     const msg = "Script generation returned empty text";
@@ -851,7 +855,12 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
     })
   : baseText;
 
-      console.log("[tts] v3 text preview:\n", ttsText.slice(0, 260));
+      {
+        const previewWords = ttsText.split(/\s+/).filter(Boolean).length;
+        const previewText = ttsText.slice(0, 150).replace(/\s+/g, " ").trim();
+        const ellipsis = ttsText.length > 150 ? "…" : "";
+        console.log(`[SCRIPT] words=${previewWords} chars=${ttsText.length} preview="${previewText}${ellipsis}"`);
+      }
 
       // Persist ttsStartedAt before the ElevenLabs call.
       // DB write instead of in-memory flag — survives serverless function crashes.

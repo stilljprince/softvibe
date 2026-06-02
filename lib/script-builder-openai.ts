@@ -1384,8 +1384,10 @@ Return ONLY JSON.
   const respStatus = resp.status ?? "unknown";
   console.log("[SCRIPT-DEBUG] status=", respStatus, "output_text.length=", rawText.length, "maxOutputTokens=", maxOutputTokens);
   if (rawText.length > 0) {
-    console.log("[SCRIPT-DEBUG] first300=", rawText.slice(0, 300));
-    console.log("[SCRIPT-DEBUG] last300=", rawText.slice(-300));
+    const previewWords = rawText.split(/\s+/).filter(Boolean).length;
+    const previewText = rawText.slice(0, 150).replace(/\s+/g, " ").trim();
+    const ellipsis = rawText.length > 150 ? "…" : "";
+    console.log(`[SCRIPT] words=${previewWords} chars=${rawText.length} preview="${previewText}${ellipsis}"`);
   }
   if (respStatus === "incomplete") {
     const details = (resp as unknown as Record<string, unknown>).incomplete_details ?? "no details";
