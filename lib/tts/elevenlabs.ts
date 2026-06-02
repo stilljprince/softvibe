@@ -19,6 +19,9 @@ const VOICE_SLEEP_STORY =
 const VOICE_MEDITATION =
   process.env.ELEVENLABS_VOICE_MEDITATION_ID || DEFAULT_VOICE;
 
+// Read at call time so deployments that set the env after module init still work.
+let kidsStoryFallbackWarned = false;
+
 
 
 
@@ -109,7 +112,27 @@ export function resolveVoiceId(
     return VOICE_MEDITATION;
   }
 
+  // ✅ KIDS STORY: dedicated voice with one-shot fallback warning
+  if (preset === "kids-story") {
+    const kidsVoice = process.env.ELEVENLABS_VOICE_KIDS_STORY_ID;
+    if (kidsVoice && kidsVoice.trim().length > 0) {
+      return kidsVoice;
+    }
+    if (!kidsStoryFallbackWarned) {
+      kidsStoryFallbackWarned = true;
+      console.warn(
+        "[TTS] ELEVENLABS_VOICE_KIDS_STORY_ID is not set – falling back to DEFAULT_VOICE for kids-story."
+      );
+    }
+    return DEFAULT_VOICE;
+  }
+
   return DEFAULT_VOICE;
+}
+
+// Test-only helper. Lets the smoke test reset the warn-once flag between cases.
+export function __resetKidsStoryWarnedForTests() {
+  kidsStoryFallbackWarned = false;
 }
 /**
  * 🔹 NEU (optional): sehr kurzer “Whisper-Cue” Prefix.
