@@ -284,10 +284,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       if (isLastChapter || durationSec <= 1.5) return;
       // Conservative: 0.5s fade (was 1.0s) to reduce the window where durationSeconds
       // undershooting real playback duration causes dead air.
-      // Floor at 0.08 (not 0) — audio stays nearly inaudible until onEnded fires,
-      // preventing multi-second silence if the fade completes before the audio ends.
+      // Floor at 0.72 — a gentle dip signals the chapter transition without the
+      // ~12x perceived loudness swing back to 1.0 that prompted users to grab the
+      // hardware volume knob. Still protects against dead air if the fade finishes
+      // slightly before the audio ends.
       const RAMP_SEC = 0.5;
-      const RAMP_FLOOR = 0.08;
+      const RAMP_FLOOR = 0.72;
       const delayMs = Math.max(0, (durationSec - RAMP_SEC) * 1000);
       rampTimerRef.current = setTimeout(() => {
         rampTimerRef.current = null;
