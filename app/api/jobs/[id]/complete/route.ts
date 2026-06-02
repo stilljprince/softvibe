@@ -18,6 +18,7 @@ import { buildPreferenceContextBlock } from "@/lib/preferences";
 import { applyV3Prosody } from "@/lib/tts/prosody-v3";
 import { s3KeyForJobPart } from "@/lib/s3";
 import { splitToChunksSafe, getMaxCharsPerRequest } from "@/lib/audio/chunks";
+import { countWords, logDurationSummary } from "@/lib/duration-metrics";
 console.log("[prosody] typeof applyV3Prosody =", typeof applyV3Prosody);
 
 // 🔹 ElevenLabs-Adapter & Voice-Resolver
@@ -445,6 +446,17 @@ console.log("COMPLETE language:", job?.id, job?.language);
   let completedChapterCount = 0;
   let capturedScript = "";
 
+  // Duration observability — populated by both the single-chunk and multi-chunk
+  // code paths and emitted as a single [DURATION-SUMMARY] line at the end.
+  // requestedDurationSec is captured BEFORE any /complete write so it reflects
+  // the value originally stored at job creation, independent of the
+  // preserve-requested-duration fix below.
+  const requestedDurationSec =
+    typeof job.durationSec === "number" ? job.durationSec : null;
+  let summaryPreset: string | null = null;
+  let summaryWordCount = 0;
+  let summaryActualSec: number | null = null;
+
   const localRel = `/generated/${id}.mp3`;
   const localAbs = path.join(
     process.cwd(),
@@ -627,7 +639,10 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
 
       // Hoist music-metadata import outside the loop — module is cached after first load.
       const { parseBuffer } = await import("music-metadata");
+      // Aggregates for [DURATION-SUMMARY]. We always sum; sleep-story-only
+      // [DURATION-DEBUG] traces below are preserved untouched.
       let totalRenderedSec = 0;
+      let multiChunkActualKnown = true;
 
       for (let partIndex = 0; partIndex < chunks.length; partIndex++) {
         const partBase = chunks[partIndex];
@@ -726,8 +741,14 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
           } catch {
             /* ignore */
           }
+          // Sum rendered duration for all multi-chunk presets so the
+          // [DURATION-SUMMARY] emitted below covers kids-story too, not just
+          // sleep-story. A null partDuration (music-metadata parse failure)
+          // makes the total an under-estimate — flag that explicitly.
+          if (partDuration !== null) totalRenderedSec += partDuration;
+          else multiChunkActualKnown = false;
+
           if (isSleepStory) {
-            if (partDuration !== null) totalRenderedSec += partDuration;
             const chunkWords = partBase.split(/\s+/).filter(Boolean).length;
             console.log("[DURATION-DEBUG] ch" + (partIndex + 1) + " rendered=" + (partDuration ?? "?") + "s words=" + chunkWords + " wps=" + (partDuration ? (chunkWords / partDuration).toFixed(2) : "?"));
           }
@@ -784,8 +805,21 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
       }
 
       console.log("[tts] multi-chunk total speak ms =", Date.now() - t0);
+
+      // Multi-chunk DURATION-SUMMARY inputs — populated for ALL multi-chunk
+      // presets (sleep-story, kids-story, plus any long classic-asmr/meditation
+      // that may span chunks in future).
+      const fullWordCount = chunks.reduce(
+        (sum, c) => sum + countWords(c),
+        0
+      );
+      summaryPreset = safePreset;
+      summaryWordCount = fullWordCount;
+      // If any part's duration was unknown the total is an under-estimate; emit
+      // null so the [DURATION-SUMMARY] line marks it as `?` instead of lying.
+      summaryActualSec = multiChunkActualKnown && totalRenderedSec > 0 ? totalRenderedSec : null;
+
       if (isSleepStory) {
-        const fullWordCount = chunks.reduce((sum, c) => sum + c.split(/\s+/).filter(Boolean).length, 0);
         console.log("[DURATION-DEBUG] SUMMARY requestedSec=" + (job.durationSec ?? "?") + " totalRendered=" + totalRenderedSec + "s totalWords=" + fullWordCount + " effectiveWPS=" + (totalRenderedSec > 0 ? (fullWordCount / totalRenderedSec).toFixed(2) : "N/A"));
       }
 
@@ -851,6 +885,13 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
         /* ignore */
       }
 
+      // Capture single-chunk metrics for the unified [DURATION-SUMMARY] line.
+      // baseText is the post-directive-strip TTS input, which matches what was
+      // actually narrated more closely than the unprocessed finalText would.
+      summaryPreset = safePreset;
+      summaryWordCount = countWords(baseText);
+      summaryActualSec = typeof detectedDuration === "number" ? detectedDuration : null;
+
       // MP3 speichern (S3 oder lokal)
       try {
         if (hasS3Env()) {
@@ -883,19 +924,32 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
   }
 }
 
-  const nextDuration =
+  // Actual rendered duration, used for Track.durationSeconds writes below.
+  // Sources of truth, in order:
+  //   1. body.durationSec  — client-measured (legacy path; rarely used today)
+  //   2. detectedDuration  — server-side music-metadata parse of the MP3
+  //   3. job.durationSec   — falls back to the requested value when no actual
+  //                          can be determined (best effort to keep tracks
+  //                          searchable; matches pre-refactor behavior)
+  const actualRenderedSec =
     typeof body.durationSec === "number" && !Number.isNaN(body.durationSec)
       ? body.durationSec
       : typeof detectedDuration === "number"
       ? detectedDuration
       : job.durationSec ?? undefined;
 
+  // Preserve the REQUESTED duration on the Job row. Job.durationSec was
+  // previously overwritten with the actual rendered seconds on completion,
+  // which destroyed the original target and made drift impossible to compute
+  // after the fact. Actual duration continues to live on Track.durationSeconds
+  // (per-chapter for multi-chunk, total for single-chunk) — see the writes
+  // immediately below — so no information is lost and no Prisma migration is
+  // required.
   const updated = await prisma.job.update({
     where: { id },
     data: {
       status: $Enums.JobStatus.DONE,
       resultUrl: nextResultUrl ?? localRel,
-      durationSec: nextDuration,
       error: null,
     },
     select: {
@@ -911,11 +965,11 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
   });
 
   // Only update track durations in bulk for single-chunk jobs.
-  // Multi-chunk jobs store per-chapter durations during TTS; overwriting with job.durationSec would corrupt them.
-  if (!isMultiChunk && typeof nextDuration === "number") {
+  // Multi-chunk jobs store per-chapter durations during TTS; overwriting with the job's total would corrupt them.
+  if (!isMultiChunk && typeof actualRenderedSec === "number") {
     await prisma.track.updateMany({
       where: { jobId: id },
-      data: { durationSeconds: nextDuration },
+      data: { durationSeconds: actualRenderedSec },
     });
   }
 
@@ -942,18 +996,14 @@ console.log("[SLEEP CHECK] firstLine=", finalText.split("\n")[0]);
             title: safeTitle,
             url,
             durationSeconds:
-              typeof updated.durationSec === "number"
-                ? updated.durationSec
-                : typeof nextDuration === "number"
-                ? nextDuration
-                : null,
+              typeof actualRenderedSec === "number" ? actualRenderedSec : null,
             scriptText: capturedScript || null,
           },
         });
-      } else if (typeof nextDuration === "number") {
+      } else if (typeof actualRenderedSec === "number") {
         await prisma.track.update({
           where: { id: existing.id },
-          data: { durationSeconds: nextDuration },
+          data: { durationSeconds: actualRenderedSec },
         });
       }
     }
@@ -967,6 +1017,23 @@ console.log("[SLEEP-STORY CHECK]", {
   voiceGender: job.voiceGender,
   modelId: process.env.ELEVENLABS_MODEL_ID,
 });
+
+  // Unified, grep-friendly drift summary for every completed generation.
+  // Covers all four presets (classic-asmr, sleep-story, meditation, kids-story)
+  // across both single-chunk and multi-chunk paths. Only emitted when the
+  // server actually rendered audio in this request — pre-rendered (resultUrl)
+  // and idempotent re-completions are skipped because summaryPreset stays null.
+  if (summaryPreset) {
+    logDurationSummary({
+      jobId: updated.id,
+      preset: summaryPreset,
+      requestedSec: requestedDurationSec,
+      actualSec: summaryActualSec,
+      wordCount: summaryWordCount,
+      userId: session.user.id as string,
+      reqId,
+    });
+  }
 
   addDebugLog({
     ts: new Date().toISOString(),
