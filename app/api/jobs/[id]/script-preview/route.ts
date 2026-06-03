@@ -18,11 +18,12 @@ import { splitToChunksSafe, getMaxCharsPerRequest } from "@/lib/audio/chunks";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Mirrors wordTargetFor() wps constants from lib/script-builder-openai.ts
-function wpsForPreset(preset: string): number {
-  if (preset === "sleep-story") return 2.5;
-  if (preset === "classic-asmr") return 2.2;
-  if (preset === "kids-story") return 2.0;
+// Mirrors wordTargetFor() wps constants from lib/script-builder-openai.ts.
+// classic-asmr depends on voiceStyle; other presets ignore it.
+function wpsForPreset(preset: string, voiceStyle?: "soft" | "whisper"): number {
+  if (preset === "sleep-story") return 1.95;
+  if (preset === "kids-story") return 1.85;
+  if (preset === "classic-asmr") return voiceStyle === "whisper" ? 1.12 : 1.5;
   return 1.8; // meditation
 }
 
@@ -98,6 +99,15 @@ export async function POST(
   const isSleepStory = safePreset === "sleep-story";
   const isKidsStory = safePreset === "kids-story";
 
+  // sleep-story and kids-story always use "soft" delivery regardless of the
+  // stored job.voiceStyle, so the WPS target must match that effective style.
+  const effectiveStyle: "soft" | "whisper" =
+    isSleepStory || isKidsStory
+      ? "soft"
+      : job.voiceStyle === "whisper"
+      ? "whisper"
+      : "soft";
+
   let finalText: string;
   try {
     const out = await buildScriptOpenAI({
@@ -105,6 +115,7 @@ export async function POST(
       userPrompt: (job.prompt ?? "").trim(),
       targetDurationSec:
         typeof job.durationSec === "number" ? job.durationSec : undefined,
+      voiceStyle: effectiveStyle,
       language,
     });
     finalText = (out?.finalText ?? "").trim();
@@ -149,19 +160,14 @@ export async function POST(
     (c) => c.split(/\s+/).filter(Boolean).length
   );
 
-  // Voice resolution (sleep-story and kids-story always use "soft" style)
-  const effectiveStyle: "soft" | "whisper" =
-    isSleepStory || isKidsStory
-      ? "soft"
-      : job.voiceStyle === "whisper"
-      ? "whisper"
-      : "soft";
+  // Voice resolution (sleep-story and kids-story always use "soft" style;
+  // effectiveStyle was computed before generation so the WPS target matches).
   const effectiveGender: "female" | "male" =
     job.voiceGender === "male" ? "male" : "female";
   const voiceId = resolveVoiceId(safePreset, effectiveStyle, effectiveGender);
 
   // Estimated duration (word count / words-per-second for this preset)
-  const wps = wpsForPreset(safePreset);
+  const wps = wpsForPreset(safePreset, effectiveStyle);
   const estimatedDurationSec = Math.round(wordCount / wps);
 
   // Warm-up text — injected at TTS time for sleep-story chapters 2+, not stored in script

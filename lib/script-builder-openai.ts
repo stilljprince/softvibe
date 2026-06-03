@@ -12,17 +12,28 @@ function clampTarget(target?: number): number {
   return Math.max(15, Math.min(1800, Math.round(target)));
 }
 
-function wordTargetFor(preset: ScriptPreset, durationSec: number): number {
-  // Calibrated against measured production renders (Duration Observability Pass):
-  //   sleep-story  ~1.93–1.95 wps effective (avg of two ~20min runs)
-  //   kids-story   ~1.86 wps effective (post-fix run)
-  //   meditation   ~1.72 wps effective, 0% drift — leave wps untouched
-  //   classic-asmr ~1.30 wps effective, large drift — separate investigation; leave wps untouched
-  const wps =
-    preset === "sleep-story" ? 1.95
-    : preset === "classic-asmr" ? 2.2
-    : preset === "kids-story" ? 1.85
-    : 1.8; // meditation
+export function wordTargetFor(
+  preset: ScriptPreset,
+  durationSec: number,
+  voiceStyle?: "soft" | "whisper" | null,
+): number {
+  // Calibrated against measured production renders.
+  //   sleep-story        1.95 wps   (Duration Observability Pass)
+  //   kids-story         1.85 wps   (Duration Observability Pass)
+  //   meditation         1.80 wps   (0% drift — untouched)
+  //   classic-asmr soft  1.50 wps   (measured 1.46–1.60 across 1–3 min)
+  //   classic-asmr wsp.  1.12 wps   (measured 1.07–1.20 across 1–3 min)
+  // Gender-specific WPS not introduced yet — male/female share the same target.
+  let wps: number;
+  if (preset === "sleep-story") {
+    wps = 1.95;
+  } else if (preset === "kids-story") {
+    wps = 1.85;
+  } else if (preset === "classic-asmr") {
+    wps = voiceStyle === "whisper" ? 1.12 : 1.5;
+  } else {
+    wps = 1.8; // meditation
+  }
 
   return Math.round(durationSec * wps);
 }
@@ -687,9 +698,9 @@ export async function buildScriptOpenAI(
   }
 
   const durationSec = clampTarget(input.targetDurationSec);
-  const wordTarget = wordTargetFor(input.preset, durationSec);
+  const wordTarget = wordTargetFor(input.preset, durationSec, input.voiceStyle);
   const userPrompt = (input.userPrompt ?? "").trim();
-  console.log("[DURATION-DEBUG] preset=", input.preset, "requestedDurationSec=", durationSec, "wordTarget=", wordTarget);
+  console.log("[DURATION-DEBUG] preset=", input.preset, "voiceStyle=", input.voiceStyle ?? "soft", "requestedDurationSec=", durationSec, "wordTarget=", wordTarget);
 
   // Sleep-story phased structure: mandatory word budgets per narrative phase.
   // Forces the model to write through all phases instead of finishing early.

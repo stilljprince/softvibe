@@ -6,6 +6,9 @@ export type ScriptInput = {
   preset: ScriptPreset;
   userPrompt: string;
   targetDurationSec?: number; // v3 nutzt das aktiv
+  // Used by classic-asmr to calibrate wordTarget against the slower whisper
+  // delivery vs. the louder soft-spoken delivery. Other presets ignore it.
+  voiceStyle?: "soft" | "whisper" | null;
 };
 
 export type ScriptOutput = {

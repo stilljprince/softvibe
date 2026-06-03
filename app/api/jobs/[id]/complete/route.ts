@@ -525,6 +525,7 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
     preset: safePreset,
     userPrompt: (job.prompt ?? "").trim(),
     targetDurationSec: typeof job.durationSec === "number" ? job.durationSec : undefined,
+    voiceStyle: job.voiceStyle === "whisper" ? "whisper" : "soft",
     language,
     preferenceContext,
   });
