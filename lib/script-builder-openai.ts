@@ -13,14 +13,15 @@ function clampTarget(target?: number): number {
 }
 
 function wordTargetFor(preset: ScriptPreset, durationSec: number): number {
-  // Calibrated to observed ElevenLabs output rate (~1.85 wps measured from smoke tests).
-  // Sleep-story value tuned down from 2.6 to 2.5 after observing writer+editor pipeline
-  // consistently running ~5% over target; tighter upstream budget brings edited output
-  // closer to the requested duration without flattening prose quality.
+  // Calibrated against measured production renders (Duration Observability Pass):
+  //   sleep-story  ~1.93–1.95 wps effective (avg of two ~20min runs)
+  //   kids-story   ~1.86 wps effective (post-fix run)
+  //   meditation   ~1.72 wps effective, 0% drift — leave wps untouched
+  //   classic-asmr ~1.30 wps effective, large drift — separate investigation; leave wps untouched
   const wps =
-    preset === "sleep-story" ? 2.5
+    preset === "sleep-story" ? 1.95
     : preset === "classic-asmr" ? 2.2
-    : preset === "kids-story" ? 2.0
+    : preset === "kids-story" ? 1.85
     : 1.8; // meditation
 
   return Math.round(durationSec * wps);
