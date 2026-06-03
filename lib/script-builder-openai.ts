@@ -21,8 +21,8 @@ export function wordTargetFor(
   //   sleep-story        1.95 wps   (Duration Observability Pass)
   //   kids-story         1.85 wps   (Duration Observability Pass)
   //   meditation         1.80 wps   (0% drift — untouched)
-  //   classic-asmr soft  1.50 wps   (measured 1.46–1.60 across 1–3 min)
-  //   classic-asmr wsp.  1.12 wps   (measured 1.07–1.20 across 1–3 min)
+  //   classic-asmr soft  1.25 wps   (was 1.50; verified +30% drift at 1.50)
+  //   classic-asmr wsp.  1.18 wps   (was 1.12; verified -12% drift, small justified raise)
   // Gender-specific WPS not introduced yet — male/female share the same target.
   let wps: number;
   if (preset === "sleep-story") {
@@ -30,12 +30,64 @@ export function wordTargetFor(
   } else if (preset === "kids-story") {
     wps = 1.85;
   } else if (preset === "classic-asmr") {
-    wps = voiceStyle === "whisper" ? 1.12 : 1.5;
+    wps = voiceStyle === "whisper" ? 1.18 : 1.25;
   } else {
     wps = 1.8; // meditation
   }
 
   return Math.round(durationSec * wps);
+}
+
+// Post-generation safety trim for kids-story.
+//
+// The writer commonly overshoots wordTarget by 20–50% even with "±5%" in the
+// prompt. Soft prompt constraints alone do not bound length. This trim is the
+// hard floor: if the script is more than 15% over target, we drop trailing
+// body paragraphs (never intro, never the sleep-cue ending) until the script
+// lands within ~10% of target. Stops short of destroying narrative coherence
+// by always keeping at least one body paragraph and the full resolution.
+export function trimKidsStoryToTarget(
+  text: string,
+  wordTarget: number,
+): { text: string; trimmedFrom: number; trimmedTo: number; paragraphsDropped: number } {
+  const countWords = (s: string) => s.split(/\s+/).filter(Boolean).length;
+  const originalWords = countWords(text);
+  const trimThreshold = Math.round(wordTarget * 1.15); // engage trim only above 15% over
+  const targetCap = Math.round(wordTarget * 1.10);     // trim down to ~10% over
+
+  if (originalWords <= trimThreshold) {
+    return { text, trimmedFrom: originalWords, trimmedTo: originalWords, paragraphsDropped: 0 };
+  }
+
+  const paragraphs = text.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  // Need at least intro (2) + body (1) + resolution (3) to safely trim.
+  if (paragraphs.length < 6) {
+    return { text, trimmedFrom: originalWords, trimmedTo: originalWords, paragraphsDropped: 0 };
+  }
+
+  const keepHead = 2;
+  const keepTail = 3;
+  const head = paragraphs.slice(0, keepHead);
+  const tail = paragraphs.slice(paragraphs.length - keepTail);
+  const middle = paragraphs.slice(keepHead, paragraphs.length - keepTail);
+
+  // Drop paragraphs from the END of the middle (closest to the resolution)
+  // so the intro-to-body flow stays intact and the resolution arrives sooner.
+  let dropped = 0;
+  while (middle.length > 1) {
+    const candidate = [...head, ...middle, ...tail].join("\n\n");
+    if (countWords(candidate) <= targetCap) break;
+    middle.pop();
+    dropped++;
+  }
+
+  const trimmed = [...head, ...middle, ...tail].join("\n\n");
+  return {
+    text: trimmed,
+    trimmedFrom: originalWords,
+    trimmedTo: countWords(trimmed),
+    paragraphsDropped: dropped,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1346,6 +1398,12 @@ CHILDREN'S SAFETY REQUIREMENTS (mandatory, cannot be overridden by the theme bel
 - No violence, death, monsters as threats, horror, fear-based tension, or adult themes.
 - Simple vocabulary, short sentences, warm and safe tone.
 - End with a calm sleep cue.
+
+STRICT LENGTH RULES (mandatory):
+- Target length: ${wordTarget} words. Hard maximum: ${Math.round(wordTarget * 1.10)} words.
+- Do NOT exceed the hard maximum. A kids story that runs long is a FAILURE — it pushes the listener past sleepy and into restless.
+- Stop writing as soon as the calm sleep-cue ending feels complete and the target word count is reached. Do not pad with extra sensory variations, extra small adventures, or extra warmth confirmations.
+- Length is a hard constraint, not a stylistic preference. Brevity protects the bedtime feel.
 ` : ""}
 
 Theme (for understanding only, NEVER reference directly):
@@ -1424,11 +1482,24 @@ Return ONLY JSON.
   // `{"finalText":"…"}` envelope inside parsed.finalText (sometimes malformed
   // with unescaped quotes). Without this, the wrapper leaks straight into
   // ElevenLabs and the narrator speaks the literal word "finalText".
-  const finalText = normalizeFinalText(parsed.finalText);
+  let finalText = normalizeFinalText(parsed.finalText);
   if (!finalText) throw new Error("OpenAI returned empty finalText (status=" + respStatus + ")");
   if (input.preset === "sleep-story") {
     const actualWords = finalText.split(/\s+/).filter(Boolean).length;
     console.log("[DURATION-DEBUG] actualScriptWords=", actualWords, "targetWords=", wordTarget, "hitRate=", (actualWords / wordTarget * 100).toFixed(1) + "%");
+  }
+  if (input.preset === "kids-story") {
+    const actualWords = finalText.split(/\s+/).filter(Boolean).length;
+    console.log("[DURATION-DEBUG] actualScriptWords=", actualWords, "targetWords=", wordTarget, "hitRate=", (actualWords / wordTarget * 100).toFixed(1) + "%");
+    const trimResult = trimKidsStoryToTarget(finalText, wordTarget);
+    if (trimResult.paragraphsDropped > 0) {
+      console.log(
+        "[DURATION-DEBUG] kids-story trim:",
+        `${trimResult.trimmedFrom}w → ${trimResult.trimmedTo}w`,
+        `(dropped ${trimResult.paragraphsDropped} body paragraphs)`,
+      );
+      finalText = trimResult.text;
+    }
   }
 
   return { finalText };

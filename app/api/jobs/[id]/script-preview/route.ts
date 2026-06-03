@@ -23,7 +23,7 @@ export const dynamic = "force-dynamic";
 function wpsForPreset(preset: string, voiceStyle?: "soft" | "whisper"): number {
   if (preset === "sleep-story") return 1.95;
   if (preset === "kids-story") return 1.85;
-  if (preset === "classic-asmr") return voiceStyle === "whisper" ? 1.12 : 1.5;
+  if (preset === "classic-asmr") return voiceStyle === "whisper" ? 1.18 : 1.25;
   return 1.8; // meditation
 }
 
