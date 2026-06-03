@@ -1,6 +1,7 @@
 // lib/script-builder-openai.ts
 import OpenAI from "openai";
 import type { ScriptInput, ScriptPreset } from "@/lib/script-builder";
+import { normalizeFinalText } from "@/lib/script-builder-normalize";
 
 // OpenAI client is module-level here to match existing pattern in this file.
 // New handlers (e.g. prompt-improve) must lazily initialize per CLAUDE.md.
@@ -1407,7 +1408,11 @@ Return ONLY JSON.
     );
   }
 
-  const finalText = (parsed.finalText ?? "").trim();
+  // Defensive normalization: kids-story occasionally returns a stringified
+  // `{"finalText":"…"}` envelope inside parsed.finalText (sometimes malformed
+  // with unescaped quotes). Without this, the wrapper leaks straight into
+  // ElevenLabs and the narrator speaks the literal word "finalText".
+  const finalText = normalizeFinalText(parsed.finalText);
   if (!finalText) throw new Error("OpenAI returned empty finalText (status=" + respStatus + ")");
   if (input.preset === "sleep-story") {
     const actualWords = finalText.split(/\s+/).filter(Boolean).length;
