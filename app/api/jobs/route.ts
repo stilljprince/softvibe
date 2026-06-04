@@ -256,10 +256,22 @@ export async function POST(req: Request) {
         raw.voiceGender === "male" || raw.voiceGender === "female"
           ? raw.voiceGender
           : "female",
-      voiceStyle:
-        raw.voiceStyle === "whisper" || raw.voiceStyle === "soft"
-          ? raw.voiceStyle
-          : "soft",
+      voiceStyle: ((): "soft" | "whisper" => {
+        const requested: "soft" | "whisper" =
+          raw.voiceStyle === "whisper" || raw.voiceStyle === "soft"
+            ? raw.voiceStyle
+            : "soft";
+        // sleep-story and kids-story always render with "soft" delivery
+        // (resolveVoiceId + script wps both ignore voiceStyle for these presets).
+        // Normalize at create-time so job.voiceStyle reflects the effective style
+        // — keeps DB state and all downstream logs consistent.
+        const presetStr =
+          typeof raw.preset === "string" ? raw.preset.trim() : "";
+        if (presetStr === "sleep-story" || presetStr === "kids-story") {
+          return "soft";
+        }
+        return requested;
+      })(),
       scriptOverride:
         typeof raw.scriptOverride === "string" && raw.scriptOverride.trim() !== ""
           ? raw.scriptOverride.trim()
