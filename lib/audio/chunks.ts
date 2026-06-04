@@ -16,6 +16,9 @@
 //       4) extend up to maxLen * maxOvershoot to reach the NEXT sentence end
 //       5) word boundary (space) as last resort
 //   - Tiny chunks (< minChunkLen chars) are merged into the previous chunk
+//   - Mini-tail post-pass: if the FINAL chunk is noticeably smaller than maxLen
+//     AND merging it back into the previous chunk still respects maxLen, merge.
+//     Otherwise leave it — natural endings stay natural, the hard limit wins.
 
 const FALLBACK_MAX_CHARS = 2500;
 
@@ -31,7 +34,8 @@ export function splitToChunksSafe(
   text: string,
   maxLen: number = getMaxCharsPerRequest(),
   maxOvershoot = 1.2,
-  minChunkLen = 200
+  minChunkLen = 200,
+  miniTailThreshold: number = Math.floor(maxLen * 0.4)
 ): string[] {
   const clean = (text ?? "").trim();
   if (!clean) return [];
@@ -122,6 +126,26 @@ export function splitToChunksSafe(
       result[result.length - 1] = result[result.length - 1] + "\n\n" + part;
     } else {
       result.push(part);
+    }
+  }
+
+  // Conservative mini-tail post-pass.
+  // Only the FINAL chunk is considered. If it is noticeably smaller than
+  // maxLen (< miniTailThreshold) AND merging it into the previous chunk
+  // would still respect maxLen, merge. Otherwise leave it alone so we
+  // never violate the hard character limit and never redistribute
+  // sentences across chunks.
+  if (result.length >= 2) {
+    const lastIdx = result.length - 1;
+    const last = result[lastIdx];
+    const prev = result[lastIdx - 1];
+    const joiner = "\n\n";
+    if (
+      last.length < miniTailThreshold &&
+      prev.length + joiner.length + last.length <= maxLen
+    ) {
+      result[lastIdx - 1] = prev + joiner + last;
+      result.pop();
     }
   }
 
