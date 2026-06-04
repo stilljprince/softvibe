@@ -278,30 +278,82 @@ export default function GenerateClient({
         return;
       }
       if (res.status === 429) {
-        showToast("Zu viele Anfragen. Bitte warte.", "info");
+        showToast("Zu viele Anfragen. Bitte warte einen Moment.", "info", 4000);
         return;
       }
+
+      // Read the body once. The route always returns JSON (jsonOk / jsonError),
+      // but defend against an empty/HTML body from an upstream/proxy error.
+      type ImproveBody = {
+        ok?: boolean;
+        error?: string;
+        message?: string;
+        data?: { improvedPrompt?: string };
+        improvedPrompt?: string;
+      };
+      let body: ImproveBody | null = null;
+      try {
+        body = (await res.json()) as ImproveBody;
+      } catch {
+        body = null;
+      }
+
       if (!res.ok) {
-        showToast("Prompt-Verbesserung fehlgeschlagen.", "err");
+        const code = body?.error;
+        const serverMessage = body?.message?.trim();
+        // 422 → safety / refusal. Kids preset gets a soft alternative hint
+        // so the user understands *why* and what to try next.
+        if (res.status === 422 || code === "SAFETY_BLOCKED") {
+          const base =
+            serverMessage ||
+            "Diese Art von Inhalt unterstützen wir nicht. Magst du ein anderes Thema wählen?";
+          const hint =
+            preset === "kids-story"
+              ? " Versuche es mit einer märchenhaften Geschichte ohne reale historische Personen oder schwere Themen."
+              : "";
+          showToast(base + hint, "info", 7000);
+          return;
+        }
+        // 400 → validation (too short / too long / gibberish). Server copy
+        // is already calm German; surface it verbatim when present.
+        if (res.status === 400) {
+          showToast(
+            serverMessage ||
+              "Damit daraus etwas Schönes entstehen kann, braucht der Prompt noch etwas mehr Richtung.",
+            "info",
+            5000
+          );
+          return;
+        }
+        // 5xx and everything else → generic, calm retry copy.
+        showToast(
+          "Wir konnten den Prompt gerade nicht verbessern. Bitte versuche es gleich noch einmal.",
+          "err",
+          4500
+        );
         return;
       }
+
       // NOTE: lib/api.ts jsonOk always wraps its argument as { ok: true, data: <payload> }.
       // The route returns jsonOk({ improvedPrompt }), so the wire format is
       // { ok: true, data: { improvedPrompt: "..." } } — NOT { improvedPrompt: "..." } at the top level.
       // Read from json.data.improvedPrompt, not json.improvedPrompt directly.
-      const json = (await res.json()) as {
-        ok?: boolean;
-        data?: { improvedPrompt?: string };
-        improvedPrompt?: string;
-      };
-      const improved = json.data?.improvedPrompt ?? json.improvedPrompt ?? "";
+      const improved = body?.data?.improvedPrompt ?? body?.improvedPrompt ?? "";
       if (improved) {
         setImprovedPrompt(improved);
       } else {
-        showToast("Kein verbesserter Prompt erhalten.", "err");
+        showToast(
+          "Wir konnten den Prompt gerade nicht verbessern. Bitte versuche es gleich noch einmal.",
+          "err",
+          4500
+        );
       }
     } catch {
-      showToast("Prompt-Verbesserung fehlgeschlagen.", "err");
+      showToast(
+        "Verbindungsproblem. Bitte prüfe deine Internetverbindung und versuche es erneut.",
+        "err",
+        4500
+      );
     } finally {
       setIsImproving(false);
     }
