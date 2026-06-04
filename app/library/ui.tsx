@@ -813,13 +813,41 @@ export default function LibraryClient() {
   async function saveEdit(id: string) {
     const title = editingValue.trim();
     if (!title) { cancelEdit(); return; }
-    const res = await fetch(`/api/tracks/${encodeURIComponent(id)}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title }),
-    });
-    if (!res.ok) { showToast("Konnte Titel nicht speichern.", "err"); return; }
-    setTracks((prev) => prev.map((t) => (t.id === id ? { ...t, title } : t)));
+
+    // Story rows rename the underlying Story (source of truth for storyTitle);
+    // standalone tracks rename Track.title as before.
+    const row = tracks.find((t) => t.id === id);
+    const storyId = row?.storyId ?? null;
+
+    if (storyId) {
+      const res = await fetch(`/api/stories/${encodeURIComponent(storyId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+      });
+      if (!res.ok) { showToast("Konnte Titel nicht speichern.", "err"); return; }
+      // Reflect new title on every chapter belonging to this story, without
+      // touching Track.title (which carries the per-chapter label).
+      setTracks((prev) =>
+        prev.map((t) => (t.storyId === storyId ? { ...t, storyTitle: title } : t))
+      );
+      setManualPlaylistItems((prev) =>
+        prev.map((item) =>
+          item.track.storyId === storyId
+            ? { ...item, track: { ...item.track, storyTitle: title } }
+            : item
+        )
+      );
+    } else {
+      const res = await fetch(`/api/tracks/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+      });
+      if (!res.ok) { showToast("Konnte Titel nicht speichern.", "err"); return; }
+      setTracks((prev) => prev.map((t) => (t.id === id ? { ...t, title } : t)));
+    }
+
     showToast("Titel gespeichert.", "ok");
     cancelEdit();
   }
