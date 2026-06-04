@@ -799,8 +799,13 @@ export default function LibraryClient() {
   // ── Mutations ──────────────────────────────────────────────────────────────
 
   function beginEdit(t: Track) {
+    // Seed from the displayed title — for story items prefer storyTitle so the
+    // input never shows an internal chapter label (e.g. "Kapitel 1/6").
+    const seed = t.storyId
+      ? (t.storyTitle ?? t.title ?? t.prompt ?? "")
+      : (t.title ?? t.prompt ?? "");
     setEditingId(t.id);
-    setEditingValue((t.title ?? t.prompt ?? "").trim());
+    setEditingValue(seed.trim());
     setOpenMenuId(null);
   }
   function cancelEdit() { setEditingId(null); setEditingValue(""); }
