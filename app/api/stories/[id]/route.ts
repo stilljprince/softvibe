@@ -1,10 +1,12 @@
 // app/api/stories/[id]/route.ts
+import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/config";
 import { prisma } from "@/lib/prisma";
 import { headers } from "next/headers";
 import { log } from "@/lib/log";
 import { jsonOk, jsonError } from "@/lib/api";
+import { hasS3Env, deleteObjectByKey, s3KeyFromUrl } from "@/lib/s3";
 
 export const runtime = "nodejs";
 
@@ -114,4 +116,84 @@ export async function PATCH(
 
   log.info(h, "stories:rename:ok", { id });
   return jsonOk(updated, 200);
+}
+
+// DELETE /api/stories/[id] -> Story löschen (DB + S3)
+// Cascade (Prisma schema): Story → Track → PlaylistItem werden automatisch entfernt.
+export async function DELETE(
+  _req: Request,
+  ctx: { params: Promise<{ id: string }> }
+) {
+  const h = await headers();
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) {
+    log.warn(h, "stories:delete:unauthorized");
+    return jsonError("UNAUTHORIZED", 401);
+  }
+
+  const { id } = await ctx.params;
+  log.info(h, "stories:delete:start", { id, userId: session.user.id });
+
+  const story = await prisma.story.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      userId: true,
+      tracks: { select: { id: true, url: true } },
+    },
+  });
+
+  if (!story) {
+    log.warn(h, "stories:delete:not_found", { id });
+    return jsonError("NOT_FOUND", 404);
+  }
+  if (story.userId !== session.user.id) {
+    log.warn(h, "stories:delete:forbidden", {
+      id,
+      ownerUserId: story.userId,
+      sessionUserId: session.user.id,
+    });
+    return jsonError("FORBIDDEN", 403);
+  }
+
+  log.info(h, "stories:delete:cascade_plan", {
+    id,
+    trackCount: story.tracks.length,
+  });
+
+  // S3-Objekte best-effort löschen (pro Kapitel-Track), bevor die DB-Zeilen verschwinden.
+  if (hasS3Env()) {
+    for (const t of story.tracks) {
+      const key = s3KeyFromUrl(t.url);
+      if (!key) {
+        log.warn(h, "stories:delete:s3_key_missing", { id, trackId: t.id, url: t.url });
+        continue;
+      }
+      try {
+        await deleteObjectByKey(key);
+        log.info(h, "stories:delete:s3_deleted", { id, trackId: t.id, key });
+      } catch (err) {
+        console.error("[stories:delete] S3 delete failed", err);
+        log.warn(h, "stories:delete:s3_failed", { id, trackId: t.id, key });
+        // kein Hard-Error – Story darf trotzdem aus DB raus
+      }
+    }
+  }
+
+  // Cascade entfernt Tracks und referenzierende PlaylistItems automatisch.
+  // Wrapped so a DB-level failure (e.g., missing FK cascade migration in
+  // production) surfaces as a logged 500 with a real reason instead of an
+  // opaque crash — the iOS client then surfaces that reason in its alert.
+  try {
+    await prisma.story.delete({ where: { id: story.id } });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[stories:delete] prisma.story.delete failed", err);
+    log.error(h, "stories:delete:db_failed", { id, message });
+    return jsonError("DELETE_FAILED", 500, { message });
+  }
+  log.info(h, "stories:delete:ok", { id });
+
+  // 204: kein Body → bewusst ohne jsonOk
+  return new NextResponse(null, { status: 204 });
 }
