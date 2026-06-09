@@ -2,6 +2,7 @@
 import OpenAI from "openai";
 import type { ScriptInput, ScriptPreset } from "@/lib/script-builder";
 import { normalizeFinalText } from "@/lib/script-builder-normalize";
+import { buildNarrativeOpenAIPrompts } from "@/lib/script-builder-narrative";
 
 // OpenAI client is module-level here to match existing pattern in this file.
 // New handlers (e.g. prompt-improve) must lazily initialize per CLAUDE.md.
@@ -753,6 +754,91 @@ export async function buildScriptOpenAI(
   const wordTarget = wordTargetFor(input.preset, durationSec, input.voiceStyle);
   const userPrompt = (input.userPrompt ?? "").trim();
   console.log("[DURATION-DEBUG] preset=", input.preset, "voiceStyle=", input.voiceStyle ?? "soft", "requestedDurationSec=", durationSec, "wordTarget=", wordTarget);
+
+  // Narrative preset: dedicated single-call path. The default cascade below
+  // falls through to the meditation system block when no preset branch matches,
+  // which would force narrative outputs into meditation scaffolding. Dispatch
+  // here before any of the other preset-specific blocks run so the actual
+  // OpenAI request uses the narrative builders' system/user prompts.
+  if (input.preset === "narrative") {
+    const outputLanguage = input.language === "en" ? "English" : "German";
+    const { system: narrSystem, user: narrUser, resolvedMode } = buildNarrativeOpenAIPrompts(
+      {
+        userPrompt,
+        outputLanguage,
+        wordTarget,
+        targetDurationSec: durationSec,
+      },
+      input.narrativeMode ?? null,
+    );
+
+    const preferenceContextBlockN =
+      (input.preferenceContext ?? "").trim().length > 0
+        ? input.preferenceContext!.trim()
+        : "";
+    const systemN = preferenceContextBlockN
+      ? `${narrSystem}\n\n${preferenceContextBlockN}`
+      : narrSystem;
+
+    console.log("[NARRATIVE] mode=", resolvedMode, "outputLanguage=", outputLanguage, "wordTarget=", wordTarget);
+
+    const maxOutputTokensN = Math.min(16000, wordTarget * 3 + 512);
+    const openaiTimeoutMsN = parseInt(process.env.OPENAI_TIMEOUT_MS ?? "90000", 10);
+
+    const respN = await openai.responses.create({
+      model: process.env.OPENAI_SCRIPT_MODEL ?? "gpt-5.4",
+      max_output_tokens: maxOutputTokensN,
+      input: [
+        { role: "system", content: systemN },
+        { role: "user", content: narrUser },
+      ],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "SoftVibeFinalText",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              finalText: { type: "string" },
+            },
+            required: ["finalText"],
+          },
+        },
+      },
+    }, { timeout: openaiTimeoutMsN });
+
+    const rawTextN = respN.output_text ?? "";
+    const respStatusN = respN.status ?? "unknown";
+    console.log("[SCRIPT-DEBUG] status=", respStatusN, "output_text.length=", rawTextN.length, "maxOutputTokens=", maxOutputTokensN);
+    if (rawTextN.length > 0) {
+      const previewWords = rawTextN.split(/\s+/).filter(Boolean).length;
+      const previewText = rawTextN.slice(0, 150).replace(/\s+/g, " ").trim();
+      const ellipsis = rawTextN.length > 150 ? "…" : "";
+      console.log(`[SCRIPT] words=${previewWords} chars=${rawTextN.length} preview="${previewText}${ellipsis}"`);
+    }
+    if (respStatusN === "incomplete") {
+      const details = (respN as unknown as Record<string, unknown>).incomplete_details ?? "no details";
+      console.error("[SCRIPT-DEBUG] Generation truncated by max_output_tokens or other limit:", details);
+    }
+
+    let parsedN: { finalText: string };
+    try {
+      parsedN = JSON.parse(rawTextN) as { finalText: string };
+    } catch {
+      const preview = rawTextN.slice(0, 200) || "(empty)";
+      const tail = rawTextN.length > 200 ? rawTextN.slice(-200) : "";
+      throw new Error(
+        `Script generation failed: invalid JSON from OpenAI (status=${respStatusN}, length=${rawTextN.length}). ` +
+        `Start: ${preview}${tail ? " … End: " + tail : ""}`
+      );
+    }
+
+    const finalTextN = normalizeFinalText(parsedN.finalText);
+    if (!finalTextN) throw new Error("OpenAI returned empty finalText (status=" + respStatusN + ")");
+    return { finalText: finalTextN };
+  }
 
   // Sleep-story phased structure: mandatory word budgets per narrative phase.
   // Forces the model to write through all phases instead of finishing early.
