@@ -762,6 +762,15 @@ export async function buildScriptOpenAI(
   // OpenAI request uses the narrative builders' system/user prompts.
   if (input.preset === "narrative") {
     const outputLanguage = input.language === "en" ? "English" : "German";
+
+    const promptBuildT0 = Date.now();
+    console.log(
+      "[NARRATIVE-TIMING]",
+      "phase=prompt.build.start",
+      `mode=${input.narrativeMode ?? "—"}`,
+      `wordTarget=${wordTarget}`,
+      `durationSec=${durationSec}`,
+    );
     const { system: narrSystem, user: narrUser, resolvedMode } = buildNarrativeOpenAIPrompts(
       {
         userPrompt,
@@ -780,37 +789,92 @@ export async function buildScriptOpenAI(
       ? `${narrSystem}\n\n${preferenceContextBlockN}`
       : narrSystem;
 
+    console.log(
+      "[NARRATIVE-TIMING]",
+      "phase=prompt.build.end",
+      `mode=${resolvedMode}`,
+      `durationMs=${Date.now() - promptBuildT0}`,
+      `systemChars=${systemN.length}`,
+      `userChars=${narrUser.length}`,
+    );
+
     console.log("[NARRATIVE] mode=", resolvedMode, "outputLanguage=", outputLanguage, "wordTarget=", wordTarget);
 
     const maxOutputTokensN = Math.min(16000, wordTarget * 3 + 512);
-    const openaiTimeoutMsN = parseInt(process.env.OPENAI_TIMEOUT_MS ?? "90000", 10);
+    // Narrative single-call generation can legitimately take longer than the
+    // shared OPENAI_TIMEOUT_MS default (90s). Use a narrative-specific override
+    // and disable SDK retries so a slow request fails once instead of stacking
+    // three ~90s attempts into ~270s of wall-clock.
+    const openaiTimeoutMsN = parseInt(process.env.OPENAI_NARRATIVE_TIMEOUT_MS ?? "240000", 10);
+    const openaiMaxRetriesN = 0;
 
-    const respN = await openai.responses.create({
-      model: process.env.OPENAI_SCRIPT_MODEL ?? "gpt-5.4",
-      max_output_tokens: maxOutputTokensN,
-      input: [
-        { role: "system", content: systemN },
-        { role: "user", content: narrUser },
-      ],
-      text: {
-        format: {
-          type: "json_schema",
-          name: "SoftVibeFinalText",
-          strict: true,
-          schema: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              finalText: { type: "string" },
+    const modelN = process.env.OPENAI_SCRIPT_MODEL ?? "gpt-5.4";
+    const openaiT0 = Date.now();
+    const userPromptPreview = (userPrompt || "").slice(0, 120).replace(/\s+/g, " ");
+    console.log(
+      "[NARRATIVE-TIMING]",
+      "phase=openai.start",
+      `model=${modelN}`,
+      `mode=${resolvedMode}`,
+      `wordTarget=${wordTarget}`,
+      `maxOutputTokens=${maxOutputTokensN}`,
+      `timeoutMs=${openaiTimeoutMsN}`,
+      `maxRetries=${openaiMaxRetriesN}`,
+      `promptPreview="${userPromptPreview}${userPrompt.length > 120 ? "…" : ""}"`,
+    );
+
+    let respN;
+    try {
+      respN = await openai.responses.create({
+        model: modelN,
+        max_output_tokens: maxOutputTokensN,
+        input: [
+          { role: "system", content: systemN },
+          { role: "user", content: narrUser },
+        ],
+        text: {
+          format: {
+            type: "json_schema",
+            name: "SoftVibeFinalText",
+            strict: true,
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                finalText: { type: "string" },
+              },
+              required: ["finalText"],
             },
-            required: ["finalText"],
           },
         },
-      },
-    }, { timeout: openaiTimeoutMsN });
+      }, { timeout: openaiTimeoutMsN, maxRetries: openaiMaxRetriesN });
+    } catch (err) {
+      const e = err as { name?: string; message?: string; status?: number; code?: string; type?: string };
+      console.error(
+        "[NARRATIVE-TIMING]",
+        "phase=openai.error",
+        `mode=${resolvedMode}`,
+        `durationMs=${Date.now() - openaiT0}`,
+        `name=${e?.name ?? "—"}`,
+        `status=${e?.status ?? "—"}`,
+        `code=${e?.code ?? "—"}`,
+        `type=${e?.type ?? "—"}`,
+        `message=${(e?.message ?? "—").slice(0, 240)}`,
+      );
+      throw err;
+    }
+    const openaiDurationMs = Date.now() - openaiT0;
 
     const rawTextN = respN.output_text ?? "";
     const respStatusN = respN.status ?? "unknown";
+    console.log(
+      "[NARRATIVE-TIMING]",
+      "phase=openai.end",
+      `mode=${resolvedMode}`,
+      `durationMs=${openaiDurationMs}`,
+      `status=${respStatusN}`,
+      `outputChars=${rawTextN.length}`,
+    );
     console.log("[SCRIPT-DEBUG] status=", respStatusN, "output_text.length=", rawTextN.length, "maxOutputTokens=", maxOutputTokensN);
     if (rawTextN.length > 0) {
       const previewWords = rawTextN.split(/\s+/).filter(Boolean).length;
@@ -823,19 +887,42 @@ export async function buildScriptOpenAI(
       console.error("[SCRIPT-DEBUG] Generation truncated by max_output_tokens or other limit:", details);
     }
 
+    const parseT0 = Date.now();
     let parsedN: { finalText: string };
     try {
       parsedN = JSON.parse(rawTextN) as { finalText: string };
     } catch {
       const preview = rawTextN.slice(0, 200) || "(empty)";
       const tail = rawTextN.length > 200 ? rawTextN.slice(-200) : "";
+      console.error(
+        "[NARRATIVE-TIMING]",
+        "phase=parse.error",
+        `mode=${resolvedMode}`,
+        `durationMs=${Date.now() - parseT0}`,
+        `outputChars=${rawTextN.length}`,
+        `status=${respStatusN}`,
+      );
       throw new Error(
         `Script generation failed: invalid JSON from OpenAI (status=${respStatusN}, length=${rawTextN.length}). ` +
         `Start: ${preview}${tail ? " … End: " + tail : ""}`
       );
     }
+    console.log(
+      "[NARRATIVE-TIMING]",
+      "phase=parse.end",
+      `mode=${resolvedMode}`,
+      `durationMs=${Date.now() - parseT0}`,
+    );
 
+    const normalizeT0 = Date.now();
     const finalTextN = normalizeFinalText(parsedN.finalText);
+    console.log(
+      "[NARRATIVE-TIMING]",
+      "phase=normalize.end",
+      `mode=${resolvedMode}`,
+      `durationMs=${Date.now() - normalizeT0}`,
+      `outputChars=${finalTextN.length}`,
+    );
     if (!finalTextN) throw new Error("OpenAI returned empty finalText (status=" + respStatusN + ")");
     return { finalText: finalTextN };
   }
