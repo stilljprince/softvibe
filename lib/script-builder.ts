@@ -1,6 +1,8 @@
 // lib/script-builder.ts
 
-export type ScriptPreset = "classic-asmr" | "sleep-story" | "meditation" | "kids-story";
+import { buildNarrative_v3 } from "./script-builder-narrative";
+
+export type ScriptPreset = "classic-asmr" | "sleep-story" | "meditation" | "kids-story" | "narrative";
 
 export type ScriptInput = {
   preset: ScriptPreset;
@@ -9,6 +11,8 @@ export type ScriptInput = {
   // Used by classic-asmr to calibrate wordTarget against the slower whisper
   // delivery vs. the louder soft-spoken delivery. Other presets ignore it.
   voiceStyle?: "soft" | "whisper" | null;
+  // Narrative-only submode. Other presets ignore it.
+  narrativeMode?: "story" | "quiet-knowledge" | null;
 };
 
 export type ScriptOutput = {
@@ -41,6 +45,9 @@ export function buildScriptV3(input: ScriptInput): ScriptOutput {
       break;
     case "kids-story":
       base = buildKidsStory_v3(cleanedPrompt);
+      break;
+    case "narrative":
+      base = buildNarrative_v3(cleanedPrompt);
       break;
     default:
       base = cleanedPrompt;

@@ -1,6 +1,6 @@
 // lib/tts/prosody_v3.ts
 
-export type ScriptPreset = "classic-asmr" | "sleep-story" | "meditation" | "kids-story";
+export type ScriptPreset = "classic-asmr" | "sleep-story" | "meditation" | "kids-story" | "narrative";
 
 function hashToFloat(seed: string) {
   // deterministische Pseudo-Random (0..1)
@@ -100,6 +100,22 @@ function tagsForPreset(preset: ScriptPreset) {
       neutral: ["[softly]", "[calm]"],
       paragraphChance: 0.30,
       sentenceChance: 0.10,
+      maxChucklesPer250w: 0,
+    };
+  }
+
+  if (preset === "narrative") {
+    // Narrative: calm, grounded narration. Same minimal-tag philosophy as
+    // sleep-story — keep voice-mode switching out of the way of long-form
+    // story / quiet-knowledge delivery.
+    return {
+      opener: ["[softly]"],
+      positive: ["[softly]"],
+      comfort: ["[softly]"],
+      amused: ["[softly]"],
+      neutral: ["[softly]"],
+      paragraphChance: 0,
+      sentenceChance: 0,
       maxChucklesPer250w: 0,
     };
   }
