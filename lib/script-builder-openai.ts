@@ -3,6 +3,11 @@ import OpenAI from "openai";
 import type { ScriptInput, ScriptPreset } from "@/lib/script-builder";
 import { normalizeFinalText } from "@/lib/script-builder-normalize";
 import { buildNarrativeOpenAIPrompts } from "@/lib/script-builder-narrative";
+import {
+  LONGFORM_THRESHOLD_SEC,
+  orchestrateLongformNarrative,
+  pickNarrativeSegmentCount,
+} from "@/lib/narrative/orchestrator";
 
 // OpenAI client is module-level here to match existing pattern in this file.
 // New handlers (e.g. prompt-improve) must lazily initialize per CLAUDE.md.
@@ -750,7 +755,22 @@ export async function buildScriptOpenAI(
     throw new Error("Missing OPENAI_API_KEY");
   }
 
-  const durationSec = clampTarget(input.targetDurationSec);
+  // Narrative preset supports long-form orchestration up to 60 min. The
+  // shared clampTarget caps at 30 min, which would silently downsize 45/60-min
+  // narrative requests before the orchestrator ever sees them. For narrative,
+  // allow up to 3600s; all other presets keep the original 30-min cap.
+  const durationSec =
+    input.preset === "narrative"
+      ? Math.max(
+          15,
+          Math.min(
+            3600,
+            typeof input.targetDurationSec === "number" && Number.isFinite(input.targetDurationSec)
+              ? Math.round(input.targetDurationSec)
+              : 60,
+          ),
+        )
+      : clampTarget(input.targetDurationSec);
   const wordTarget = wordTargetFor(input.preset, durationSec, input.voiceStyle);
   const userPrompt = (input.userPrompt ?? "").trim();
   console.log("[DURATION-DEBUG] preset=", input.preset, "voiceStyle=", input.voiceStyle ?? "soft", "requestedDurationSec=", durationSec, "wordTarget=", wordTarget);
@@ -762,6 +782,34 @@ export async function buildScriptOpenAI(
   // OpenAI request uses the narrative builders' system/user prompts.
   if (input.preset === "narrative") {
     const outputLanguage = input.language === "en" ? "English" : "German";
+
+    // Pass-C2: long-form orchestration. Only Story mode (the default) uses
+    // the outline → segment → merge pipeline; Quiet-Knowledge continues to
+    // run through the single-call path below regardless of duration.
+    const isStoryMode = input.narrativeMode !== "quiet-knowledge";
+    if (isStoryMode && durationSec >= LONGFORM_THRESHOLD_SEC) {
+      const segmentCount = pickNarrativeSegmentCount(durationSec);
+      console.log(
+        "[NARRATIVE-TIMING]",
+        "phase=orchestrator.dispatch",
+        `durationSec=${durationSec}`,
+        `wordTarget=${wordTarget}`,
+        `segmentCount=${segmentCount}`,
+      );
+
+      const { finalText: orchText } = await orchestrateLongformNarrative({
+        userPrompt,
+        outputLanguage,
+        targetDurationSec: durationSec,
+        wordTarget,
+      });
+
+      const finalTextO = normalizeFinalText(orchText);
+      if (!finalTextO) {
+        throw new Error("Long-form orchestrator returned empty finalText");
+      }
+      return { finalText: finalTextO };
+    }
 
     const promptBuildT0 = Date.now();
     console.log(
