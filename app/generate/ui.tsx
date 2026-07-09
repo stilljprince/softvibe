@@ -15,6 +15,7 @@ const PRESETS = [
   { id: "kids-story",   label: "Kids Story",   desc: "Gentle · Safe" },
   { id: "classic-asmr", label: "Classic ASMR", desc: "Whisper · Tapping" },
   { id: "meditation",   label: "Meditation",   desc: "Breath · Soft Tone" },
+  { id: "narrative",    label: "Narrative",    desc: "Story · Knowledge" },
 ];
 
 // ── Suggestion pills — static V1 ─────────────────────────────────────────────
@@ -182,6 +183,9 @@ export default function GenerateClient({
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [voiceStyle, setVoiceStyle] = useState<"soft" | "whisper">("soft");
   const [voiceGender, setVoiceGender] = useState<"female" | "male">("female");
+  // Quiet Knowledge is deferred post-MVP. Narrative jobs use "story" only.
+  // The QK code path (server + builders) stays intact for later reactivation.
+  const narrativeMode: "story" | "quiet-knowledge" = "story";
   const [credits, setCredits] = useState<number | null>(null);
 
   // Admin script preview state
@@ -510,6 +514,7 @@ export default function GenerateClient({
       durationSec?: number;
       voiceStyle: "soft" | "whisper";
       voiceGender: "female" | "male";
+      narrativeMode?: "story" | "quiet-knowledge";
       scriptOverride?: string;
     } = {
       title: title.trim().length > 0 ? title.trim() : "",
@@ -518,6 +523,7 @@ export default function GenerateClient({
       language,
       voiceStyle,
       voiceGender,
+      ...(preset === "narrative" ? { narrativeMode } : {}),
       ...(scriptEditMode && editedScript.trim() ? { scriptOverride: editedScript.trim() } : {}),
     };
 
@@ -1316,6 +1322,7 @@ export default function GenerateClient({
                     </div>
                   </div>
                 )}
+
               </div>
 
               {/* Title */}
@@ -1505,8 +1512,8 @@ export default function GenerateClient({
                 <label className="sv-label" style={{ display: "block", marginBottom: 8 }}>Wie lang?</label>
                 <input
                   type="number"
-                  min={1}
-                  max={30}
+                  min={preset === "narrative" ? 10 : 1}
+                  max={preset === "narrative" ? 60 : 30}
                   className="sv-no-spinner"
                   style={{ ...svInputStyle(themeKey), maxWidth: 140 }}
                   value={durationMin}
@@ -1521,7 +1528,9 @@ export default function GenerateClient({
                   placeholder="z. B. 10 Min."
                 />
                 <p style={{ fontSize: "0.78rem", color: themeCfg.uiSoftText, marginTop: 6 }}>
-                  Typischer Bereich: 1–30 Minuten
+                  {preset === "narrative"
+                    ? "Typischer Bereich: 10–60 Minuten"
+                    : "Typischer Bereich: 1–30 Minuten"}
                 </p>
               </div>}
 

@@ -25,6 +25,7 @@ import type {
   RelationshipSketch,
   TrajectoryShape,
   EndingTone,
+  EndingApproach,
 } from "./types";
 
 // Allowed enum values, mirrored in `./types`. Exported so tests and future
@@ -45,6 +46,18 @@ export const ALLOWED_ENDING_TONES: readonly EndingTone[] = [
   "quietly-tragic",
   "settled",
   "unresolved",
+] as const;
+
+// Pass C3A: a small pool of ending approaches. The model picks the one that
+// best fits THIS story — they are inspirations, not rigid templates. They
+// do NOT prescribe plot beats or scene order; they describe the SHAPE of
+// closure the writer leans toward in the final stretch.
+export const ALLOWED_ENDING_APPROACHES: readonly EndingApproach[] = [
+  "resolved-mystery",
+  "emotional-closure",
+  "quiet-ending",
+  "bittersweet-ending",
+  "reflective-ending",
 ] as const;
 
 export type BuildStoryOutlineInput = {
@@ -75,6 +88,12 @@ export type GenerateStorySegmentInput = {
   // Optional tail of the previous segment's prose. When provided the model
   // can pick up the same voice and rhythm without a hard seam.
   previousSegmentText?: string;
+  // Pass C3A: signals that this is the closing stretch of the story. When
+  // true, the segment prompt switches on the final-segment contract — the
+  // story must reach a natural completion and the primary story question
+  // must land. When false/undefined, the segment is treated as a
+  // continuation that should NOT close out the whole story.
+  isFinalSegment?: boolean;
   // Optional model / timeout overrides for tests and tuning.
   model?: string;
   timeoutMs?: number;
@@ -121,6 +140,19 @@ export function buildStoryOutlinePrompts(input: BuildStoryOutlineInput): {
     `- Pressure may build steadily, oscillate, settle, fragment, drift, or stay unresolved — choose what suits THIS brief.`,
     `- Preserve genre variety: a quiet character study, a slow-burn investigation, a fractured trauma narrative, and a forward-moving adventure should NOT all collapse into the same shape.`,
     ``,
+    `CRITICAL — THIS STORY IS A SELF-CONTAINED EXPERIENCE:`,
+    `- This is one whole story, not the first installment of a longer novel. The listener should finish it feeling that they have lived through a complete story — not that the real story begins afterwards.`,
+    `- Plan a SINGLE primary story question or central tension that drives the story end-to-end. It should be specific enough to be answered, settled, transformed, or to land emotionally by the close — not so abstract that nothing could ever satisfy it.`,
+    `- Plan an ending APPROACH the story is genuinely moving toward — an inspiration, not a rigid template. The approach is the SHAPE of closure (mystery answered, emotional shift, quiet settling, bittersweet acceptance, reflective understanding) — not a plot formula, and never a fixed positional beat.`,
+    `- Secondary questions may remain open. Bittersweet, ambiguous, or quiet endings are welcome. Not every detail needs explaining. But the close should not feel like a cliffhanger or a setup for the next story.`,
+    `- Do NOT plan endings that introduce new central mysteries near the close, reveal a larger problem after the original pressure has been addressed, or telegraph that the real story begins after the runtime ends.`,
+    ``,
+    `CRITICAL — REVELATION FLOW AND CAST DESIGN:`,
+    `- Prefer a clear and easy-to-follow flow of revelations. Avoid introducing too many separate information carriers or explanation-heavy characters in a short span of time.`,
+    `- When possible, let important discoveries flow through a smaller number of people, while supporting characters contribute through emotion, companionship, conflict, atmosphere, or everyday life rather than additional exposition.`,
+    `- Preserve realism and variety: some stories naturally require several perspectives, but the listener should rarely feel that every new character arrives mainly to deliver another piece of information.`,
+    `- This is architectural guidance for cast and revelation flow — not a cap on ensemble stories, village settings, or family dramas. Do not assign rigid roles or fixed cast templates; shape the information flow so the listener can follow it without strain.`,
+    ``,
     `WHAT TO PRODUCE (story bible — abstract, literary, flexible):`,
     `- title: a real title if one emerges, otherwise null. No placeholder titles.`,
     `- protagonistSummary: a person, not an archetype. Who they are, what they want or fear, what they stand to lose.`,
@@ -129,8 +161,10 @@ export function buildStoryOutlinePrompts(input: BuildStoryOutlineInput): {
     `- pressureSources: 2–4 specific forces pressing on the protagonist — relational, internal, external, environmental, social. Not abstract themes ("loss", "love"); concrete pressure ("the sister who hasn't called back", "the rent due Friday").`,
     `- importantRelationships: relevant character pairs and the texture of the bond — affection, debt, suspicion, rivalry, complicity. Use the same names from protagonist/supporting fields.`,
     `- unresolvedQuestions: 0–4 questions the listener might carry into the story. These need NOT all be answered. They give the writer room to maneuver.`,
+    `- primaryStoryQuestion: ONE concrete central question/tension that the whole story is fundamentally about. The final stretch should answer it, settle it, transform it, or let it land emotionally. Specific, not abstract. Examples of shape: "Will Mara return her brother's call before she leaves the city?" "What does the lighthouse keeper do with the letter she can no longer read?" — not "Will she find herself?"`,
     `- endingTone: one of the allowed values, chosen because it fits this story — not as a structural slot.`,
     `- trajectoryShape: one of the allowed shapes, chosen because it matches how pressure naturally moves in THIS story.`,
+    `- endingApproach: one of the allowed approaches, chosen because it fits the kind of closure THIS story is aiming for. This is an inspiration the writer leans into in the final stretch, not a fixed plot formula.`,
     ``,
     `Be concrete. Real names, real places, real pressure sources. Avoid vague abstractions like "a journey", "a conflict", "growth".`,
     ``,
@@ -163,6 +197,13 @@ export function buildStoryOutlinePrompts(input: BuildStoryOutlineInput): {
     ``,
     `Ending tone choices (pick what fits THIS story):`,
     `- warm, bittersweet, ambiguous, quietly-tragic, settled, unresolved`,
+    ``,
+    `Ending approach choices (pick the closure SHAPE that fits THIS story — inspirations, not rigid templates):`,
+    `- resolved-mystery: the central uncertainty becomes clear by the close`,
+    `- emotional-closure: completion arrives through an emotional or relational shift`,
+    `- quiet-ending: completion arrives through atmosphere settling and life continuing`,
+    `- bittersweet-ending: completion arrives through acceptance of a complex truth`,
+    `- reflective-ending: completion arrives through understanding reaching the protagonist`,
     ``,
     `Return ONLY the JSON object — no commentary.`,
   ].join("\n");
@@ -221,6 +262,7 @@ export const STORY_BIBLE_JSON_SCHEMA = {
       type: "array",
       items: { type: "string" },
     },
+    primaryStoryQuestion: { type: "string" },
     endingTone: {
       type: "string",
       enum: [...ALLOWED_ENDING_TONES],
@@ -228,6 +270,10 @@ export const STORY_BIBLE_JSON_SCHEMA = {
     trajectoryShape: {
       type: "string",
       enum: [...ALLOWED_TRAJECTORY_SHAPES],
+    },
+    endingApproach: {
+      type: "string",
+      enum: [...ALLOWED_ENDING_APPROACHES],
     },
   },
   required: [
@@ -238,8 +284,10 @@ export const STORY_BIBLE_JSON_SCHEMA = {
     "pressureSources",
     "importantRelationships",
     "unresolvedQuestions",
+    "primaryStoryQuestion",
     "endingTone",
     "trajectoryShape",
+    "endingApproach",
   ],
 } as const;
 
@@ -297,6 +345,24 @@ export function validateStoryBible(raw: unknown): StoryBible {
   }
   const trajectoryShape = trajectoryShapeRaw as TrajectoryShape;
 
+  const endingApproachRaw = raw.endingApproach;
+  if (
+    typeof endingApproachRaw !== "string" ||
+    !(ALLOWED_ENDING_APPROACHES as readonly string[]).includes(endingApproachRaw)
+  ) {
+    throw new Error(
+      `StoryBible validation failed: endingApproach "${String(endingApproachRaw)}" is not one of ${ALLOWED_ENDING_APPROACHES.join(", ")}`,
+    );
+  }
+  const endingApproach = endingApproachRaw as EndingApproach;
+
+  const primaryStoryQuestion = raw.primaryStoryQuestion;
+  if (!nonEmptyString(primaryStoryQuestion)) {
+    throw new Error(
+      "StoryBible validation failed: primaryStoryQuestion missing or empty",
+    );
+  }
+
   if (!Array.isArray(raw.pressureSources)) {
     throw new Error("StoryBible validation failed: pressureSources is not an array");
   }
@@ -353,8 +419,10 @@ export function validateStoryBible(raw: unknown): StoryBible {
     pressureSources,
     importantRelationships,
     unresolvedQuestions,
+    primaryStoryQuestion: primaryStoryQuestion.trim(),
     endingTone,
     trajectoryShape,
+    endingApproach,
   };
 
   const title = maybeString(raw.title);
@@ -492,11 +560,13 @@ export async function buildStoryOutline(input: BuildStoryOutlineInput): Promise<
     "phase=parse.end",
     `trajectory=${bible.trajectoryShape}`,
     `endingTone=${bible.endingTone}`,
+    `endingApproach=${bible.endingApproach}`,
     `support=${bible.supportingCharacterSummary.length}`,
     `pressure=${bible.pressureSources.length}`,
     `relationships=${bible.importantRelationships.length}`,
     `questions=${bible.unresolvedQuestions.length}`,
     `hasTitle=${bible.title ? "yes" : "no"}`,
+    `primaryQ="${bible.primaryStoryQuestion.slice(0, 80).replace(/\s+/g, " ")}"`,
   );
 
   console.log(
@@ -504,6 +574,7 @@ export async function buildStoryOutline(input: BuildStoryOutlineInput): Promise<
     "phase=outline.done",
     `trajectoryShape=${bible.trajectoryShape}`,
     `endingTone=${bible.endingTone}`,
+    `endingApproach=${bible.endingApproach}`,
     `pressureSources=${bible.pressureSources.length}`,
     `unresolvedQuestions=${bible.unresolvedQuestions.length}`,
   );
@@ -537,6 +608,108 @@ const SEGMENT_PROMPT_FORBIDDEN_NOTE = [
   `Continue the same novel. Do not announce structure. Do not signal position.`,
 ].join("\n");
 
+// Pass C3C: principle-based guidance to rebalance stories so progress comes
+// primarily from people DOING things, rather than from observation, atmosphere,
+// introspection or static conversations. Deliberately principle-only — no
+// percentages, act structures, segment formulas, or mandatory beats. Inner
+// thoughts, atmosphere, and symbolism remain welcome; they should SUPPORT the
+// journey, not replace it.
+const NARRATIVE_MOMENTUM_NOTE = [
+  `NARRATIVE MOMENTUM (apply throughout — a principle, not a structural requirement):`,
+  `- Stories generally progress because people DO things. Lean on actions, decisions, discoveries, movement, encounters, consequences, changing situations, physical events, investigations, travel, and new information caused by previous actions to carry the story forward.`,
+  `- Story progress should emerge from: action → consequence → new situation. Do not rely mainly on thought → thought → thought, conversation → conversation → conversation, or observation → observation → observation as the engine of the story.`,
+  `- Vary the situations the listener moves through. The same room, same table, same conversation, same emotional state should not dominate long stretches. New locations, new encounters, fresh discoveries, practical tasks, and shifts in environment are welcome — without requiring any specific structure.`,
+  `- Inner thoughts, atmosphere, and symbolism remain welcome — let them SUPPORT the journey, deepening what happens. They should not become the primary engine that replaces the journey.`,
+  `- Do not insert events for their own sake. Let the story feel lived and unfolding, not merely contemplated.`,
+].join("\n");
+
+// Pass C3D: principle-based guidance to keep the factual chain of events
+// understandable at the center of the story while preserving ambiguity at the
+// edges. Deliberately principle-only — no act structures, no percentages, no
+// mandatory reveals, no beat-sheet language, no formulaic role assignments.
+// Emotional complexity, partial uncertainty, and unresolved secondary
+// mysteries remain welcome. The point is only to prevent stories whose
+// emotional meaning is clear while the actual events remain too vague.
+const CLARITY_AT_THE_CENTER_NOTE = [
+  `CRITICAL — CLARITY AT THE CENTER (Pass C3D — apply throughout; a principle, not a formula):`,
+  `- Emotional meaning matters, but emotional meaning should not replace factual understanding.`,
+  `- By the close, readers should generally be able to explain what actually happened, who made the important decisions, and why those decisions mattered.`,
+  `- Mystery answers do not need to explain every detail, but the core chain of events should become understandable.`,
+  `- Let consequences emerge from human choices — fear, shame, love, pride, loyalty, mistakes, necessity, or other believable motives.`,
+  `- Readers should leave with greater clarity, not merely greater atmosphere.`,
+  `- Secondary uncertainty may remain. Ambiguity at the edges is welcome. Confusion at the center is not.`,
+  `- Allowed: imperfect memories, emotional complexity, partial uncertainty, unresolved secondary mysteries, multiple perspectives.`,
+  `- Avoid: replacing explanation with symbolism, solving emotions while leaving events unclear, endings where readers understand feelings but cannot explain what happened, treating mystery itself as the answer.`,
+].join("\n");
+
+// Gentle stylistic guidance on subtext and implication. Deliberately
+// principle-only — no word limits, percentages, counters, or mandatory
+// behaviors. Pacing and plot progression are preserved; this only nudges the
+// prose toward implication over explanation when emotions are already visible
+// in the scene.
+const SUBTEXT_NOTE = [
+  `WRITING PHILOSOPHY (gentle stylistic guidance — a sensibility, not a rule):`,
+  `- Trust the reader's intelligence. Resist the urge to explain emotions, themes, or meanings that are already visible through the scene. Favor implication over explanation. Emotions should often emerge through behavior, pauses, sensory details, and dialogue rather than explicit interpretation.`,
+  `- Characters do not always answer directly. They may avoid, deflect, answer partially, change the subject, or remain silent. Allow subtext and omission to carry meaning.`,
+].join("\n");
+
+// Gentle word-budget discipline. Principle-only: no counters, no hard caps,
+// no aggressive shortening language. The aim is cleaner scene selection when
+// the segment wants to overrun its target, while preserving slow, literary,
+// atmospheric pacing.
+const WORD_TARGET_DISCIPLINE_NOTE = [
+  `WORD TARGET DISCIPLINE (gentle pacing guidance — preserve literary quality):`,
+  `- Treat the segment wordTarget as a real budget, not a loose suggestion. Lean toward landing AT OR JUST UNDER the target; do not aim for the upper band. Modest overage is acceptable only when a natural scene genuinely requires it.`,
+  `- Do not expand beyond target through extra beats, repeated atmospheric variations, additional sensory passes over the same setting, or further reflective layers once the meaningful movement has been shown.`,
+  `- If the segment wants to grow too large, do not summarize or rush. Instead, choose fewer, stronger scene beats and let each one carry more implication. Prefer one well-shaped interaction, object, gesture, or setting turn over several similar ones.`,
+  `- Preserve the calm, literary, atmospheric voice. This is not a request for faster pacing or thinner prose; it is a request for cleaner scene selection.`,
+].join("\n");
+
+// Continuity guidance for non-opening segments. Aimed at reducing the
+// re-establishing behavior the supervisor sees in mid- and late-segment drafts
+// (re-introducing the room, the atmosphere, the relationship state, or the
+// emotional baseline at the top of each segment). Principle-only — no
+// percentages, no act structures, no role assignments.
+const CONTINUITY_NOTE = [
+  `CONTINUITY (apply to continuation segments — a principle, not a structural rule):`,
+  `- Assume the listener remembers what has already been established. Do not re-introduce the setting, atmosphere, characters, relationships, or current emotional state at the opening of this segment.`,
+  `- Continue the story already in motion. The previous segment's voice, rhythm, location, and emotional register are still in the room — pick them up directly and move forward.`,
+  `- Do not reset the protagonist's emotional baseline. Whatever was already felt is still felt; let the next movement build from it rather than restart from a neutral position.`,
+  `- Do not restate the bible, the central question, prior pressures, or the texture of existing relationships. Prior context is shared truth; trust it.`,
+  `- Avoid opening this segment with a fresh atmospheric pass over the same room, the same weather, the same harbor, the same kitchen — vary the situation or move forward in story-time instead.`,
+  `- Later segments should continue the story, not re-introduce it.`,
+].join("\n");
+
+// Closing-stretch contraction guidance. The ending should land where the
+// prose naturally rests, not extend with afterglow scenes once the central
+// question has been addressed. Principle-only — no word counts, no
+// percentages, no mandatory beats.
+const FINAL_SEGMENT_CONTRACTION_NOTE = [
+  `NATURAL CONTRACTION OF THE CLOSE (apply in the closing stretch — a sensibility, not a counter):`,
+  `- The ending should naturally contract, not expand. Lean toward landing at or just under the segment target — let the close arrive when the prose naturally rests, even if that comes slightly early.`,
+  `- Once the central question has been answered, settled, transformed, or has landed emotionally, do not add new atmosphere, new locations, new ambient passages, or further reflective passes.`,
+  `- Avoid afterglow scenes that linger past the natural close — extended reflections, additional emotional summaries, repeated arrivals of meaning, or further variations on the same final image.`,
+  `- Do not extend with further small movements just to fill space. End where the story naturally ends.`,
+].join("\n");
+
+// Final-segment contraction factor. The closing stretch should land naturally
+// rather than expanding into afterglow scenes; pulling the effective target
+// slightly under the per-segment baseline gives the writer permission to end
+// at the natural rest. Duration-parametric (multiplier, not minute count).
+const FINAL_SEGMENT_TARGET_FACTOR = 0.92;
+
+function computeEffectiveSegmentWordTarget(
+  rawTarget: number | undefined,
+  isFinalSegment: boolean,
+): number {
+  const base =
+    typeof rawTarget === "number" && Number.isFinite(rawTarget)
+      ? Math.max(120, Math.round(rawTarget))
+      : 600;
+  if (!isFinalSegment) return base;
+  return Math.max(120, Math.round(base * FINAL_SEGMENT_TARGET_FACTOR));
+}
+
 function buildBibleBlock(bible: StoryBible): string {
   const lines: string[] = [];
   if (bible.title) lines.push(`Title: ${bible.title}`);
@@ -563,8 +736,12 @@ function buildBibleBlock(bible: StoryBible): string {
     lines.push(`Open questions in the air:`);
     for (const q of bible.unresolvedQuestions) lines.push(`  • ${q}`);
   }
+  lines.push(
+    `Central question this story is fundamentally about (must land by the close): ${bible.primaryStoryQuestion}`,
+  );
   lines.push(`Trajectory shape (emergent, not a template): ${bible.trajectoryShape}`);
   lines.push(`Ending tone the story is moving toward: ${bible.endingTone}`);
+  lines.push(`Ending approach (a gravitational pull for the close, not a template): ${bible.endingApproach}`);
   return lines.join("\n");
 }
 
@@ -591,21 +768,29 @@ export function buildStorySegmentPrompts(input: GenerateStorySegmentInput): {
   system: string;
   user: string;
 } {
-  const wordTarget =
-    typeof input.wordTarget === "number" && Number.isFinite(input.wordTarget)
-      ? Math.max(120, Math.round(input.wordTarget))
-      : 600;
-  const lowerBand = Math.max(80, Math.round(wordTarget * 0.7));
-  const upperBand = Math.round(wordTarget * 1.25);
-
   const priorSummaries = (input.priorSummaries ?? []).filter(
     (s) => typeof s === "string" && s.trim().length > 0,
   );
   const isFirstSegment = priorSummaries.length === 0;
+  const isFinalSegment = !!input.isFinalSegment;
   const previousSegmentText = (input.previousSegmentText ?? "").trim();
 
-  const system = [
-    `You are continuing the writing of a long-form audio story — a single, unbroken novel-quality prose flow read aloud to a listener.`,
+  const wordTarget = computeEffectiveSegmentWordTarget(input.wordTarget, isFinalSegment);
+  // Tighter upper band (~1.05x) reduces upstream overshoot before the
+  // compression stage sees the merged draft. The final segment also receives
+  // a slightly looser lower band so it can land naturally short rather than
+  // expanding into afterglow scenes.
+  const lowerBand = isFinalSegment
+    ? Math.max(80, Math.round(wordTarget * 0.75))
+    : Math.max(80, Math.round(wordTarget * 0.80));
+  const upperBand = Math.round(wordTarget * 1.05);
+
+  const closingGuidanceLine = isFinalSegment
+    ? `- THIS IS THE FINAL STRETCH. Bring the story to a natural close — see the FINAL-SEGMENT CONTRACT below.`
+    : `- Do NOT close the whole story — this is a continuation, not yet the ending. Avoid sequel-energy: do not telegraph that the real story begins afterwards.`;
+
+  const systemLines: string[] = [
+    `You are continuing the writing of a long-form audio story — a single, unbroken novel-quality prose flow read aloud to a listener. This is a self-contained story, not the first installment of a larger novel.`,
     ``,
     `You are NOT outlining, plotting, or labelling structure. You are writing the next stretch of the same novel — picking up exactly where the previous stretch left off, and ending where a natural rhetorical boundary occurs.`,
     ``,
@@ -625,13 +810,68 @@ export function buildStorySegmentPrompts(input: GenerateStorySegmentInput): {
     `- No chapter headings. No section labels. No numbered parts. No bold/italics. No bullet points. No markdown of any kind.`,
     `- No horizontal-rule dividers ("—", "***", "---", or similar).`,
     `- Do NOT recap. Do NOT restate the bible to the reader. Trust the listener to remember.`,
-    `- Do NOT close the whole story unless the story has genuinely run its course — this is a continuation, not necessarily an ending.`,
-    `- Honor the trajectory shape and ending tone in the bible as gravitational pulls, not slots to land on.`,
+    closingGuidanceLine,
+    `- Honor the trajectory shape, ending tone, and ending approach in the bible as gravitational pulls, not slots to land on.`,
     ``,
+    NARRATIVE_MOMENTUM_NOTE,
+    ``,
+    CLARITY_AT_THE_CENTER_NOTE,
+    ``,
+    SUBTEXT_NOTE,
+    ``,
+    WORD_TARGET_DISCIPLINE_NOTE,
+    ``,
+  ];
+
+  if (!isFirstSegment) {
+    systemLines.push(CONTINUITY_NOTE, ``);
+  }
+
+  if (isFinalSegment) {
+    systemLines.push(
+      FINAL_SEGMENT_CONTRACTION_NOTE,
+      ``,
+      `FINAL-SEGMENT CONTRACT (Pass C3A):`,
+      `- This is the close of THIS story, not the close of "book one". The listener should finish feeling that they have lived through a complete story — not that the real story begins afterwards.`,
+      `- The PRIMARY story question stated in the bible should be answered, settled, transformed, or allowed to land emotionally during this segment. The protagonist's central pressure should land or release in some form — even if quietly, even if bittersweet.`,
+      `- Lean toward the bible's ending approach as the SHAPE of closure (mystery answered, emotional shift, quiet settling, bittersweet acceptance, reflective understanding). The approach is an inspiration, not a formula.`,
+      ``,
+      `CRITICAL — DO NOT REPLACE THIS STORY NEAR THE END (Pass C3B):`,
+      `- As the story approaches its close, do not introduce a new central mystery, and do not suddenly reveal a much larger hidden conflict — authorities, conspiracies, old cover-ups, larger systems, secondary mysteries — that overshadows the story already being told.`,
+      `- Do not replace the original story with a bigger one. The emotional weight should stay with the people and the journey the listener has been following all along, not shift onto completely different people, systems, conspiracies, or conflicts.`,
+      `- Late revelations are welcome WHEN they deepen the journey already being told. They are not welcome when they redirect attention onto a story the listener has not been living through.`,
+      `- Secondary questions may remain open. Side characters may keep secrets. Not every historical detail needs an answer. Ambiguity in the periphery is fine; what must remain stable is the emotional center.`,
+      `- A satisfying ending feels like the natural consequence of the existing journey, not the beginning of a larger book. The listener should feel they are finishing the SAME story they have been following.`,
+      ``,
+      `CRITICAL — DO NOT EXPLAIN THE STORY (Pass C3C):`,
+      `- Once the emotional movement has already been shown through action, dialogue, an object, an atmosphere, or a small gesture, do not explain its meaning again. The scene has already done the work. Trust it. Trust the listener.`,
+      `- Let the story finish inside ordinary life. The final beats should remain concrete and scene-based — a hand resting on something, a kettle, a window, footsteps, weather, breath, a small line of dialogue, an everyday action continuing. Closure arrives through what is happening, not through what it means.`,
+      `- Do NOT step back into a narrator's voice that summarizes the journey, names the theme, or tells the listener what the story was about. No essay-mode paragraphs at the ending. No interpretive coda.`,
+      `- Strongly avoid abstract summary lines, thematic explanations, and moral conclusions. Avoid sentences whose job is to tell the listener what changed inside the character, what the silence meant, what the truth was, what was carried, what was released, what was beginning again. Avoid "Now everything had a name." / "She understood, finally, that …" / "It was enough." / "Not X anymore, but Y." constructions — they are the shape of essay endings.`,
+      `- Avoid pronouncements on healing, truth, closure, fear, silence, grief, the past, forgiveness, or "beginning again." If the story has touched these, the scene has already conveyed them; do not name them.`,
+      `- Prefer endings carried by: gestures, objects, sensory detail, atmosphere, weather, a small line of dialogue, an everyday action quietly continuing. The last image should feel lived, not interpreted.`,
+      `- This is NOT a request for abruptness, ambiguity for its own sake, or shallower emotion. Bittersweet, tender, and quietly devastating endings remain welcome — but they must land in scene, not in commentary. Keep the same tone and pacing; only remove the explanatory voice that arrives after the moment has already happened.`,
+      ``,
+      `Allowed:`,
+      `- Bittersweet, ambiguous, or quietly tragic endings.`,
+      `- Secondary threads left open. Not every detail needs explaining.`,
+      `- A small final image, a settled silence, an unresolved emotional residue — closure does not require resolution of every thread.`,
+      `- Late discoveries that DEEPEN the existing journey — adding weight or texture to the people and pressures the listener has already been following.`,
+      `Avoid:`,
+      `- Introducing new main suspects, new central mysteries, or a larger unseen problem in this segment.`,
+      `- Revealing an even larger pressure after the original primary question has been addressed.`,
+      `- Shifting the emotional center onto different people, systems, conspiracies, or conflicts the listener has not been following. The story already has its people; let them carry the close.`,
+      `- Telegraphing that the real story begins afterwards. No final-line cliffhangers. No "to be continued" energy. No setup-for-a-sequel last beats.`,
+      `- A rushed wrap-up. Pacing stays slow and literary; the story closes in its own rhythm.`,
+      ``,
+    );
+  }
+
+  systemLines.push(
     `STRUCTURED OUTPUT:`,
     `Return ONLY valid JSON with three fields:`,
     `  - "text": the prose for this segment. Plain text. No headings, no markdown, no separators.`,
-    `  - "summary": a compact recap (150–300 words) of THIS segment only — important events, emotional changes, relationship shifts, new questions, new information. No beat labels. No chapter labels.`,
+    `  - "summary": a compact recap (100–180 words) of THIS segment only — important events, emotional changes, relationship shifts, new questions, new information. Keep it lean: it will be threaded into later segment calls and should not invite re-establishing of setting, atmosphere, or emotional baseline. No beat labels. No chapter labels.`,
     `  - "stateAfter": the post-segment state with EXACTLY these fields and nothing else:`,
     `      • emotionalState (string)`,
     `      • relationshipChanges (array of short strings — cumulative or new, your judgment)`,
@@ -639,7 +879,9 @@ export function buildStorySegmentPrompts(input: GenerateStorySegmentInput): {
     `      • settingChanges (array of short strings — places/atmospheres entered or left)`,
     `      • elapsedTime (string — how much story-time has accumulated, expressed naturally)`,
     `Do NOT introduce fields like currentBeat, midpointReached, climaxPending, actNumber, chapterRole, phase, or any other structural marker.`,
-  ].join("\n");
+  );
+
+  const system = systemLines.join("\n");
 
   const bibleBlock = buildBibleBlock(input.bible);
   const stateBlock = buildStateBlock(input.priorState);
@@ -647,7 +889,7 @@ export function buildStorySegmentPrompts(input: GenerateStorySegmentInput): {
   const userLines: string[] = [];
   userLines.push(`Output language: ${input.outputLanguage}. Write the segment text and the summary in ${input.outputLanguage}.`);
   userLines.push(``);
-  userLines.push(`Approximate length for THIS segment: ~${wordTarget} words (acceptable band ~${lowerBand}–${upperBand}). End where the prose naturally pauses, even if you land slightly short or slightly long — do not pad and do not amputate.`);
+  userLines.push(`Approximate length for THIS segment: ~${wordTarget} words (acceptable band ~${lowerBand}–${upperBand}). Lean toward landing AT OR JUST UNDER the target rather than at the upper edge of the band. End where the prose naturally pauses — do not pad to reach the band, and do not amputate.`);
   userLines.push(``);
   userLines.push(`=== STORY BIBLE (shared truth, do not restate to the listener) ===`);
   userLines.push(bibleBlock);
@@ -674,13 +916,23 @@ export function buildStorySegmentPrompts(input: GenerateStorySegmentInput): {
     userLines.push(``);
   }
 
-  if (isFirstSegment) {
+  if (isFinalSegment) {
+    if (isFirstSegment) {
+      userLines.push(
+        `Open the story with a natural beginning, and within this single stretch bring it to a complete close. Honor the FINAL-SEGMENT CONTRACT above: the PRIMARY story question stated in the bible should be answered, settled, transformed, or allowed to land emotionally by the end. Do not announce structure. Do not telegraph that this is the close. End the story where the prose naturally rests — not on a cliffhanger, not on a sequel-hook. Let the close land in scene — a gesture, an object, a sensory detail, an everyday action continuing — not in narrator commentary that explains what the story meant.`,
+      );
+    } else {
+      userLines.push(
+        `Continue naturally from where the previous segment ended, and bring the story to a complete close within this stretch. Honor the FINAL-SEGMENT CONTRACT above: the PRIMARY story question stated in the bible should be answered, settled, transformed, or allowed to land emotionally by the end. Do not introduce new main suspects, new central mysteries, or larger unseen problems. End the story where the prose naturally rests — not on a cliffhanger, not on a sequel-hook. Let the close land in scene — a gesture, an object, a sensory detail, an everyday action continuing — not in narrator commentary that explains what the story meant.`,
+      );
+    }
+  } else if (isFirstSegment) {
     userLines.push(
-      `Open the story with a natural beginning. Do not announce that this is the start. Begin in scene, in voice, in motion.`,
+      `Open the story with a natural beginning. Do not announce that this is the start. Begin in scene, in voice, in motion. Do not close the whole story — this is the opening stretch, not the ending.`,
     );
   } else {
     userLines.push(
-      `Continue naturally from where the previous segment ended. Pick up the same voice, the same rhythm, the same emotional register, and let the next meaningful movement unfold. End where a natural rhetorical boundary occurs.`,
+      `Continue naturally from where the previous segment ended. Pick up the same voice, the same rhythm, the same emotional register, and let the next meaningful movement unfold. End where a natural rhetorical boundary occurs. Do not close the whole story — this is a continuation, not yet the ending.`,
     );
   }
   userLines.push(``);
@@ -833,10 +1085,10 @@ export async function generateStorySegment(
       ? input.timeoutMs
       : parseInt(process.env.OPENAI_SEGMENT_TIMEOUT_MS ?? "120000", 10);
 
-  const wordTarget =
-    typeof input.wordTarget === "number" && Number.isFinite(input.wordTarget)
-      ? Math.max(120, Math.round(input.wordTarget))
-      : 600;
+  const wordTarget = computeEffectiveSegmentWordTarget(
+    input.wordTarget,
+    !!input.isFinalSegment,
+  );
   const maxTokens = Math.min(8000, wordTarget * 3 + 512);
 
   console.log(
@@ -848,8 +1100,10 @@ export async function generateStorySegment(
     `wordTarget=${wordTarget}`,
     `priorSummaries=${(input.priorSummaries ?? []).length}`,
     `hasPrevText=${input.previousSegmentText ? "yes" : "no"}`,
+    `isFinalSegment=${input.isFinalSegment ? "yes" : "no"}`,
     `trajectory=${input.bible.trajectoryShape}`,
     `endingTone=${input.bible.endingTone}`,
+    `endingApproach=${input.bible.endingApproach}`,
   );
 
   console.log(
@@ -858,6 +1112,7 @@ export async function generateStorySegment(
     `index=${segmentIndex}`,
     `wordTarget=${wordTarget}`,
     `priorSummaryCount=${segmentIndex - 1}`,
+    `isFinalSegment=${input.isFinalSegment ? "yes" : "no"}`,
   );
 
   const { system, user } = buildStorySegmentPrompts(input);

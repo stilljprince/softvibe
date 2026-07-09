@@ -187,8 +187,12 @@ const EXTREMIST_SUBJECT_RE =
 
 // Words/phrases that signal *praise / glorification* of the subject. If the
 // prompt mentions an extremist subject AND any of these, we block.
+// `held(?:en)?` covers singular "Held" plus plural "Helden" (the previous
+// `helden?` only matched "Helde"/"Helden" — the 4-letter "Held" slipped past).
+// `bewunder\w*` covers verb forms (bewundere/bewundert/bewunderten) plus the
+// adjective "bewundernswert".
 const GLORIFICATION_RE =
-  /\b(heroes?|heroic|hero(?:in)?en?|helden?|brave|mutig|tapfer|celebrat(?:e|ing|ory)|feiern(?:d|de)?|honou?r(?:ing|s)?|ehren(?:d|de)?|tribute|hommage|großartig|grossartig|amazing|brilliant|brillant|wunderbar|glorious|glorreich|saviou?r|retter|inspiring|inspirierend|admirable|bewundernswert|wonderful|fantastic|fantastisch|noble|edel|war\s+(?:richtig|gut)|hatte\s+recht|come(?:s)?\s+back|wieder\s*kommen|wiederkommen|kommt\s+zurück|return\s+to\s+power|zurück\s+an\s+die\s+macht|sieg|victory|heil|hail|long\s+live|es\s+lebe)\b/i;
+  /\b(heroes?|heroic|hero(?:in)?en?|held(?:en)?|brave|mutig|tapfer|celebrat(?:e|ing|ory)|feiern(?:d|de)?|honou?r(?:ing|s)?|ehren(?:d|de)?|tribute|hommage|großartig|grossartig|amazing|brilliant|brillant|wunderbar|glorious|glorreich|saviou?r|retter|inspiring|inspirierend|admirable|bewunder\w*|wonderful|fantastic|fantastisch|noble|edel|idol(?:e|isiert)?|vorbild(?:er)?|war\s+(?:richtig|gut)|hatte\s+recht|come(?:s)?\s+back|wieder\s*kommen|wiederkommen|kommt\s+zurück|return\s+to\s+power|zurück\s+an\s+die\s+macht|sieg|victory|heil|hail|long\s+live|es\s+lebe)\b/i;
 
 // Words that signal *neutral / educational / historical* framing. Pure
 // historical mention is fine, even of dark subjects.
@@ -269,11 +273,76 @@ const STRICT_THRESHOLDS: Record<string, number> = {
   "self-harm/instructions": 0.20,
 };
 
-function exceedsStrictThreshold(scores: Record<string, number> | undefined | null): string | null {
+// Narrative-Story / fictional-context thresholds. Embodied by the
+// "bookstore principle": anything that could reasonably exist in a normal
+// bookstore should generally be generatable. Violence is treated more
+// genre-openly than self-harm / illicit / sexual (per MVP compliance
+// direction) — but even fiction never crosses the hard ceilings on
+// sexual/minors, threatening rhetoric, and real-world procedural
+// instructions for self-harm, weapons, or violence.
+//
+// We are preventing glorification, propaganda, hate speech, procedural
+// harm instructions, and sexualisation of minors — not crime stories,
+// horror, war stories, tragedies, or historical fiction.
+const FICTION_THRESHOLDS: Record<string, number> = {
+  // Genre fiction openness — violence stays bookstore-open
+  "violence": 0.95,
+  "violence/graphic": 0.85,
+  // Modestly relaxed vs strict — genre fiction may include tension/conflict
+  "hate": 0.50,
+  "harassment": 0.60,
+  // Self-harm / illicit / sexual — tightened for MVP safety.
+  // These are the categories most likely to be exploited via fiction
+  // framing, so the gap between fiction and strict thresholds is small.
+  "self-harm": 0.40,
+  "self-harm/intent": 0.35,
+  "illicit": 0.55,
+  "sexual": 0.55,
+  // Strict — even bookstore fiction does not cross these
+  "sexual/minors": 0.05,
+  "hate/threatening": 0.20,
+  "harassment/threatening": 0.50,
+  "self-harm/instructions": 0.30,
+  "illicit/violent": 0.40,
+};
+
+// Fiction-genre markers. Presence indicates the prompt is a creative brief,
+// not advocacy. Kept conservative — must be a real genre/story word.
+//
+// German compounds (mafiageschichte, horrorroman, kriegsgeschichte,
+// schauerroman, liebesroman) are matched via suffix patterns — the leading
+// `\b` is intentionally absent on `geschichten?` and `romane?` so they
+// match the tail of a compound word too.
+const FICTION_FRAMING_RE =
+  /\b(?:krimi|story|stories|novel|novelle|fiction|fiktion|fictional|fiktiv|fantasy|fantasie|sci[-\s]?fi|mystery|whodunit|adventure|abenteuer|thriller|noir|detective|detektiv|m[äa]rchen|fairy[-\s]?tale|saga|legende|legend|horror|mafia|gothic|dystopia|dystopie|tragedy|trag[öo]die|war\s+story|kriegs(?:geschichte|roman)|gangster|western|spionage|spy\s+novel|crime\s+novel|courtroom\s+drama)\b|geschichten?\b|romane?\b/i;
+
+// Historical-year marker (1600–2099). Treated as a fiction signal only when
+// it co-occurs with a fiction-framing word above — a year alone isn't enough
+// to relax thresholds.
+const YEAR_MENTION_RE = /\b(1[6-9][0-9]{2}|20[0-9]{2})\b/;
+
+function looksLikeFictionOrHistorical(text: string): boolean {
+  // Pre-existing neutral/educational framing already qualifies (per the
+  // localSafetyCheck spec: "ruhige Wissenssession über X" is allowed).
+  if (NEUTRAL_FRAMING_RE.test(text)) return true;
+  // Genre marker alone is enough — fiction is the load-bearing signal.
+  if (FICTION_FRAMING_RE.test(text)) return true;
+  // Year alone is too weak; require it to pair with a fiction marker.
+  // (Combined check is redundant with the above, kept for intent clarity.)
+  void YEAR_MENTION_RE;
+  return false;
+}
+
+function exceedsThreshold(
+  scores: Record<string, number> | undefined | null,
+  thresholds: Record<string, number>,
+): { category: string; score: number } | null {
   if (!scores) return null;
-  for (const [cat, threshold] of Object.entries(STRICT_THRESHOLDS)) {
+  for (const [cat, threshold] of Object.entries(thresholds)) {
     const value = scores[cat];
-    if (typeof value === "number" && value >= threshold) return cat;
+    if (typeof value === "number" && value >= threshold) {
+      return { category: cat, score: value };
+    }
   }
   return null;
 }
@@ -296,7 +365,40 @@ export async function moderatePromptContent(input: string): Promise<PromptGateOu
     );
 
     const result = resp.results?.[0];
+    const scores = result?.category_scores as unknown as Record<string, number> | undefined;
+
+    // Context-aware threshold selection. Fictional/historical framing without
+    // any extremist subject switches to the Narrative-Story "bookstore"
+    // thresholds: violence is relaxed for genre fiction, while sexual,
+    // self-harm, illicit, and threatening categories remain tightened. Fiction
+    // framing is only a *context signal* — it is not a safety bypass.
+    const hasExtremistSubject = EXTREMIST_SUBJECT_RE.test(text);
+    const fictionalContext = !hasExtremistSubject && looksLikeFictionOrHistorical(text);
+    const thresholds = fictionalContext ? FICTION_THRESHOLDS : STRICT_THRESHOLDS;
+
+    // OpenAI's own `flagged` verdict is always honoured. Fiction framing is
+    // context, not a bypass — a prompt that OpenAI's moderation model marks
+    // as flagged is blocked regardless of genre framing. Category thresholds
+    // below add a second, stricter layer for borderline scores.
     if (result?.flagged) {
+      // Diagnostic — record which category scores accompanied the flag, so
+      // we can tune thresholds without shipping full prompt content.
+      const s = scores ?? {};
+      console.warn("[promptGate] moderation blocked: flagged=true", {
+        fictionalContext,
+        "hate": s["hate"],
+        "hate/threatening": s["hate/threatening"],
+        "harassment": s["harassment"],
+        "harassment/threatening": s["harassment/threatening"],
+        "violence": s["violence"],
+        "violence/graphic": s["violence/graphic"],
+        "self-harm": s["self-harm"],
+        "self-harm/instructions": s["self-harm/instructions"],
+        "sexual": s["sexual"],
+        "sexual/minors": s["sexual/minors"],
+        "illicit": s["illicit"],
+        "illicit/violent": s["illicit/violent"],
+      });
       return {
         ok: false,
         code: "SAFETY_BLOCKED",
@@ -304,10 +406,13 @@ export async function moderatePromptContent(input: string): Promise<PromptGateOu
         httpStatus: 422,
       };
     }
-    const strictHit = exceedsStrictThreshold(
-      result?.category_scores as unknown as Record<string, number> | undefined
-    );
-    if (strictHit) {
+    const hit = exceedsThreshold(scores, thresholds);
+    if (hit) {
+      console.warn("[promptGate] moderation blocked: threshold hit", {
+        category: hit.category,
+        score: hit.score,
+        fictionalContext,
+      });
       return {
         ok: false,
         code: "SAFETY_BLOCKED",

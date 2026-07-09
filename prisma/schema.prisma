@@ -79,6 +79,10 @@ model Job {
   voiceGender     String  @default("female") // "female" | "male"
   scriptOverride  String?
 
+  // Narrative preset mode. MVP UI submits "story" only; "quiet-knowledge"
+  // remains a valid persisted value for post-MVP reactivation.
+  narrativeMode   String?
+
   // Credit-refund audit fields
   // ttsStartedAt    — persisted immediately before the first ElevenLabs call.
   //                   NULL means TTS was never attempted for this job.
