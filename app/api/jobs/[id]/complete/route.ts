@@ -69,6 +69,13 @@ function settingsForPreset(preset?: string) {
         style: 0.08,            // Warmer than sleep-story but still controlled (was 0.20)
         use_speaker_boost: false,
       };
+    case "narrative":
+      return {
+        stability: 0.55,        // Editorial pace; supports both Story emotion and Quiet Knowledge calm
+        similarity_boost: 0.9,  // Tight voice-locking across chapters
+        style: 0.12,            // A touch warmer than sleep-story; allows mild expressiveness for Story
+        use_speaker_boost: false,
+      };
     default:
       return {
         stability: 0.5,
@@ -262,6 +269,7 @@ export async function POST(
       language: true,
       voiceStyle: true,
       voiceGender: true,
+      narrativeMode: true,
       scriptOverride: true,
     },
   });
@@ -470,7 +478,7 @@ if (!nextResultUrl) {
   const voiceSettings = settingsForPreset(preset);
 
   const safePreset =
-    preset === "classic-asmr" || preset === "sleep-story" || preset === "meditation" || preset === "kids-story"
+    preset === "classic-asmr" || preset === "sleep-story" || preset === "meditation" || preset === "kids-story" || preset === "narrative"
       ? preset
       : "classic-asmr";
 const isSleepStory = safePreset === "sleep-story";
@@ -521,16 +529,64 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
     console.warn("[preferences] fetch failed; continuing without:", msg);
   }
 
-  const out = await buildScriptOpenAI({
-    preset: safePreset,
-    userPrompt: (job.prompt ?? "").trim(),
-    targetDurationSec: typeof job.durationSec === "number" ? job.durationSec : undefined,
-    voiceStyle: job.voiceStyle === "whisper" ? "whisper" : "soft",
-    language,
-    preferenceContext,
-  });
+  const isNarrativePreset = safePreset === "narrative";
+  const completeBuilderT0 = Date.now();
+  if (isNarrativePreset) {
+    console.log(
+      "[NARRATIVE-TIMING]",
+      "route=complete",
+      "phase=builder.start",
+      `jobId=${job.id}`,
+      `mode=${job.narrativeMode ?? "—"}`,
+      `durationSec=${job.durationSec ?? "—"}`,
+    );
+  }
+
+  let out;
+  try {
+    out = await buildScriptOpenAI({
+      preset: safePreset,
+      userPrompt: (job.prompt ?? "").trim(),
+      targetDurationSec: typeof job.durationSec === "number" ? job.durationSec : undefined,
+      voiceStyle: job.voiceStyle === "whisper" ? "whisper" : "soft",
+      narrativeMode:
+        safePreset === "narrative"
+          ? (job.narrativeMode === "quiet-knowledge" ? "quiet-knowledge" : "story")
+          : null,
+      language,
+      preferenceContext,
+    });
+  } catch (err) {
+    if (isNarrativePreset) {
+      const e = err as { name?: string; message?: string; status?: number; code?: string; type?: string };
+      console.error(
+        "[NARRATIVE-TIMING]",
+        "route=complete",
+        "phase=builder.error",
+        `jobId=${job.id}`,
+        `durationMs=${Date.now() - completeBuilderT0}`,
+        `name=${e?.name ?? "—"}`,
+        `status=${e?.status ?? "—"}`,
+        `code=${e?.code ?? "—"}`,
+        `type=${e?.type ?? "—"}`,
+        `message=${(e?.message ?? "—").slice(0, 240)}`,
+      );
+    }
+    throw err;
+  }
 
   finalText = (out?.finalText ?? "").trim();
+
+  if (isNarrativePreset) {
+    console.log(
+      "[NARRATIVE-TIMING]",
+      "route=complete",
+      "phase=builder.end",
+      `jobId=${job.id}`,
+      `durationMs=${Date.now() - completeBuilderT0}`,
+      `outputChars=${finalText.length}`,
+    );
+  }
 }
 
 {

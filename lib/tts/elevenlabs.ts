@@ -28,6 +28,21 @@ function warnKidsStoryOnce(key: string, message: string) {
   console.warn(message);
 }
 
+// Same warn-once pattern for the Narrative preset.
+const narrativeWarned = new Set<string>();
+function warnNarrativeOnce(key: string, message: string) {
+  if (narrativeWarned.has(key)) return;
+  narrativeWarned.add(key);
+  console.warn(message);
+}
+
+// Narrative voice defaults: Atlas V6 (male) / Lumen V2 (female).
+// These are the same well-tested calm narrator voices already used in production,
+// so the preset has a sensible default even before deployment-specific env-vars
+// are configured.
+const NARRATIVE_DEFAULT_MALE_ID = "Atlas V6";
+const NARRATIVE_DEFAULT_FEMALE_ID = "Lumen V2";
+
 
 
 
@@ -144,6 +159,36 @@ export function resolveVoiceId(
       "[TTS] Neither ELEVENLABS_VOICE_KIDS_STORY_FEMALE_ID nor ELEVENLABS_VOICE_KIDS_STORY_MALE_ID is set – falling back to DEFAULT_VOICE for kids-story."
     );
     return DEFAULT_VOICE;
+  }
+
+  // ✅ NARRATIVE: gendered voices (Atlas V6 / Lumen V2) with layered fallbacks.
+  // Mirrors the kids-story dispatch — explicit env-var → cross-gender fallback →
+  // built-in default voice ID (so the preset always resolves to something).
+  if (preset === "narrative") {
+    const femaleVoice = process.env.ELEVENLABS_VOICE_NARRATIVE_FEMALE_ID?.trim();
+    const maleVoice = process.env.ELEVENLABS_VOICE_NARRATIVE_MALE_ID?.trim();
+    const wantMale = voiceGender === "male";
+
+    const primary = wantMale ? maleVoice : femaleVoice;
+    if (primary) return primary;
+
+    const alt = wantMale ? femaleVoice : maleVoice;
+    if (alt) {
+      const missingVar = wantMale
+        ? "ELEVENLABS_VOICE_NARRATIVE_MALE_ID"
+        : "ELEVENLABS_VOICE_NARRATIVE_FEMALE_ID";
+      warnNarrativeOnce(
+        `cross:${missingVar}`,
+        `[TTS] ${missingVar} is not set – falling back to the other narrative voice.`
+      );
+      return alt;
+    }
+
+    warnNarrativeOnce(
+      "default",
+      "[TTS] Neither ELEVENLABS_VOICE_NARRATIVE_FEMALE_ID nor ELEVENLABS_VOICE_NARRATIVE_MALE_ID is set – falling back to built-in narrative voice defaults."
+    );
+    return wantMale ? NARRATIVE_DEFAULT_MALE_ID : NARRATIVE_DEFAULT_FEMALE_ID;
   }
 
   return DEFAULT_VOICE;

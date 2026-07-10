@@ -23,6 +23,17 @@ export type EndingTone =
   | "settled"
   | "unresolved";
 
+// The KIND of closure the story is aiming at — distinct from `EndingTone`,
+// which is the emotional color. `EndingApproach` is the shape of completion:
+// what mechanism brings the story to rest. These are inspirations the writer
+// leans into; they are not rigid templates and do not prescribe plot beats.
+export type EndingApproach =
+  | "resolved-mystery"
+  | "emotional-closure"
+  | "quiet-ending"
+  | "bittersweet-ending"
+  | "reflective-ending";
+
 export type CharacterSketch = {
   name?: string;
   role?: string;
@@ -46,8 +57,16 @@ export type StoryBible = {
   pressureSources: string[];
   importantRelationships: RelationshipSketch[];
   unresolvedQuestions: string[];
+  // The single central question / tension the listener should feel the
+  // story is fundamentally about. Anchors the final segment so the story
+  // closes as a self-contained experience rather than as chapter one of a
+  // larger novel. Secondary threads may remain open; this one should land.
+  primaryStoryQuestion: string;
   endingTone: EndingTone;
   trajectoryShape: TrajectoryShape;
+  // The kind of closure the story is aiming at — an inspiration the writer
+  // leans into, not a rigid template.
+  endingApproach: EndingApproach;
 };
 
 // Evolving state threaded across future segment generation calls. Each

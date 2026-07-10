@@ -25,6 +25,7 @@ type RawCreateJob = {
   language?: unknown;
   voiceStyle?: unknown;
   voiceGender?: unknown;
+  narrativeMode?: unknown;
   scriptOverride?: unknown;
 };
 
@@ -272,6 +273,18 @@ export async function POST(req: Request) {
         }
         return requested;
       })(),
+      narrativeMode: ((): "story" | "quiet-knowledge" | null => {
+        // narrativeMode is only meaningful for the narrative preset.
+        // For any other preset we persist null so downstream consumers
+        // can't accidentally branch on a stale submode.
+        const presetStr =
+          typeof raw.preset === "string" ? raw.preset.trim() : "";
+        if (presetStr !== "narrative") return null;
+        if (raw.narrativeMode === "story" || raw.narrativeMode === "quiet-knowledge") {
+          return raw.narrativeMode;
+        }
+        return "story";
+      })(),
       scriptOverride:
         typeof raw.scriptOverride === "string" && raw.scriptOverride.trim() !== ""
           ? raw.scriptOverride.trim()
@@ -424,6 +437,7 @@ export async function POST(req: Request) {
         language: normalized.language,
         voiceGender: normalized.voiceGender,
         voiceStyle: normalized.voiceStyle,
+        narrativeMode: normalized.narrativeMode,
         scriptOverride: normalized.scriptOverride ?? null,
       },
       select: { id: true, status: true, title: true, prompt: true },

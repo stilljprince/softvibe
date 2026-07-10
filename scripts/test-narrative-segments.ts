@@ -191,8 +191,11 @@ const sampleBible: StoryBible = {
     { between: ["Mara", "Yusuf"], nature: "old kindness, never quite acknowledged" },
   ],
   unresolvedQuestions: ["Whether Mara will return her brother's call."],
+  primaryStoryQuestion:
+    "Will Mara return her brother's call before she leaves the city?",
   endingTone: "bittersweet",
   trajectoryShape: "fracture-and-settle",
+  endingApproach: "bittersweet-ending",
 };
 
 const sampleState: SegmentState = {
@@ -243,6 +246,20 @@ const promptCases: Array<{ label: string; input: GenerateStorySegmentInput }> = 
       ],
       outputLanguage: "German",
       wordTarget: 500,
+    },
+  },
+  {
+    label: "final segment, English, with two prior summaries",
+    input: {
+      bible: sampleBible,
+      priorState: sampleState,
+      priorSummaries: [
+        "Mara arrives.",
+        "She walks the harbor at dawn and the bakery sign comes down.",
+      ],
+      outputLanguage: "English",
+      wordTarget: 600,
+      isFinalSegment: true,
     },
   },
 ];
@@ -336,6 +353,248 @@ assert(
 assert(
   "German segment prompt requests German output language",
   /German/.test(buildStorySegmentPrompts(promptCases[2].input).user),
+);
+
+// Pass C3A: bible block surfaces the new self-containment anchors.
+const midHaystack = `${midPrompts.system}\n${midPrompts.user}`;
+assert(
+  "mid segment prompt surfaces primaryStoryQuestion from bible",
+  /Will Mara return her brother's call/.test(midHaystack),
+);
+assert(
+  "mid segment prompt surfaces endingApproach from bible",
+  /bittersweet-ending/.test(midHaystack),
+);
+
+// Pass C3A: final-segment contract only appears for the final segment.
+const finalPrompts = buildStorySegmentPrompts(promptCases[3].input);
+const finalHaystack = `${finalPrompts.system}\n${finalPrompts.user}`;
+const nonFinalHaystack = `${midPrompts.system}\n${midPrompts.user}`;
+
+assert(
+  "final segment prompt carries the FINAL-SEGMENT CONTRACT",
+  /FINAL-SEGMENT CONTRACT/.test(finalHaystack),
+);
+assert(
+  "non-final segment prompt does NOT carry the FINAL-SEGMENT CONTRACT",
+  !/FINAL-SEGMENT CONTRACT/.test(nonFinalHaystack),
+);
+assert(
+  "final segment prompt instructs the story to reach a complete close",
+  /complete close|complete story/i.test(finalHaystack),
+);
+assert(
+  "final segment prompt forbids sequel-energy / to-be-continued",
+  /sequel|to be continued|cliffhanger/i.test(finalHaystack),
+);
+assert(
+  "non-final segment prompt forbids closing the whole story",
+  /not (?:yet )?the ending|continuation, not (?:an? )?ending/i.test(nonFinalHaystack),
+);
+
+// Pass C3B: final segment must carry the "do not replace this story" principle
+// — keeping the emotional center on the journey already being followed rather
+// than shifting onto authorities/conspiracies/larger systems.
+assert(
+  "final segment prompt carries the DO NOT REPLACE THIS STORY principle",
+  /DO NOT REPLACE THIS STORY NEAR THE END/.test(finalHaystack),
+);
+assert(
+  "final segment prompt warns against new central mysteries / larger hidden conflicts",
+  /new central mystery/i.test(finalHaystack) &&
+    /larger hidden conflict/i.test(finalHaystack),
+);
+assert(
+  "final segment prompt names the kinds of emotional-center shifts to avoid",
+  /authorities/i.test(finalHaystack) &&
+    /conspiracies/i.test(finalHaystack) &&
+    /larger systems/i.test(finalHaystack),
+);
+assert(
+  "final segment prompt allows late revelations that deepen the existing journey",
+  /deepen the journey already being told|deepen the existing journey|deepen the journey already being followed/i.test(
+    finalHaystack,
+  ),
+);
+assert(
+  "final segment prompt preserves the right of side characters to keep secrets",
+  /side characters may keep secrets/i.test(finalHaystack),
+);
+assert(
+  "non-final segment prompt does NOT carry the DO NOT REPLACE THIS STORY principle",
+  !/DO NOT REPLACE THIS STORY NEAR THE END/.test(nonFinalHaystack),
+);
+
+// -----------------------------------------------------------------------------
+// Pass C3C: NARRATIVE MOMENTUM principles must travel into every segment prompt
+// (first, mid, final). Progress should generally come from people DOING things —
+// actions, decisions, discoveries, movement, consequences — and not mainly from
+// chains of thought, conversation, or observation. Inner thoughts, atmosphere,
+// and symbolism remain welcome as SUPPORT. No formulas, no act structures, no
+// percentages, no segment-N-does-X templates.
+// -----------------------------------------------------------------------------
+
+const C3C_REQUIRED_PATTERNS: RegExp[] = [
+  /NARRATIVE MOMENTUM/,
+  /\bactions?\b/i,
+  /\bdecisions?\b/i,
+  /\bdiscoveries\b/i,
+  /\bmovement\b/i,
+  /\bencounters\b/i,
+  /\bconsequences\b/i,
+  /action\s*→\s*consequence\s*→\s*new situation/i,
+  /thought\s*→\s*thought\s*→\s*thought/i,
+  /conversation\s*→\s*conversation\s*→\s*conversation/i,
+  /observation\s*→\s*observation\s*→\s*observation/i,
+  /SUPPORT the journey/,
+  /lived and unfolding/i,
+];
+
+// C3C must NOT introduce any of these structural / formulaic constructs.
+// Each pattern is checked against the WHOLE haystack — these are
+// principle-violating tokens and should not appear at all.
+//
+// Note: "Segment N recap:" appears legitimately in the prior-summaries block
+// of the user prompt to label context for the model. That is pure indexing,
+// not a formula like "segment 1 does X, segment 2 does Y", so we look for the
+// formulaic *role-assignment* shape rather than bare "segment N" labels.
+const C3C_FORBIDDEN_FORMULA_PATTERNS: RegExp[] = [
+  /\b\d{1,3}\s*%/, // percentages, e.g. "30%"
+  /\b(?:first|second|third)\s+act\b/i,
+  /\bact\s+(?:one|two|three|1|2|3|i|ii|iii)\b/i,
+  /\baction\s+quota\b/i,
+  /\bmandatory\s+(?:twist|climax|reveal)\b/i,
+  /\brequired\s+(?:twist|climax|reveal)\b/i,
+  /\bsegment\s+\d+\s+(?:does|provides|delivers|introduces|sets\s+up|establishes|covers)\b/i,
+];
+
+for (const c of promptCases) {
+  const { system, user } = buildStorySegmentPrompts(c.input);
+  const haystack = `${system}\n${user}`;
+
+  let caseFails = 0;
+  for (const pat of C3C_REQUIRED_PATTERNS) {
+    if (!pat.test(haystack)) {
+      caseFails++;
+      fail(`[${c.label}] C3C — segment prompt missing required pattern ${pat}`);
+    }
+  }
+  for (const pat of C3C_FORBIDDEN_FORMULA_PATTERNS) {
+    if (pat.test(haystack)) {
+      caseFails++;
+      fail(`[${c.label}] C3C — segment prompt contains forbidden formula pattern ${pat}`);
+    }
+  }
+  if (caseFails === 0) {
+    ok(`[${c.label}] C3C narrative-momentum principles present and no formulas leaked`);
+  }
+}
+
+// C3C principle list explicitly preserves inner thoughts / atmosphere / symbolism
+// as welcome supporting elements — they must not be banned, only re-cast as
+// supporting rather than the primary engine.
+const c3cMidHaystack = `${midPrompts.system}\n${midPrompts.user}`;
+assert(
+  "C3C — segment prompt explicitly keeps inner thoughts / atmosphere / symbolism welcome",
+  /Inner thoughts, atmosphere,? and symbolism remain welcome/i.test(c3cMidHaystack),
+);
+assert(
+  "C3C — segment prompt explicitly invites varied situations / new locations / new encounters",
+  /vary the situations/i.test(c3cMidHaystack) &&
+    /new locations/i.test(c3cMidHaystack) &&
+    /new encounters/i.test(c3cMidHaystack),
+);
+assert(
+  "C3C — segment prompt explicitly warns against same-room/same-table/same-conversation dominance",
+  /same room[\s\S]*same table[\s\S]*same conversation/i.test(c3cMidHaystack),
+);
+assert(
+  "C3C — momentum is framed as a principle, not a structural requirement",
+  /principle, not a structural requirement/i.test(c3cMidHaystack),
+);
+
+// -----------------------------------------------------------------------------
+// Pass C3D: CLARITY AT THE CENTER principles must travel into every segment
+// prompt. By the close, readers should be able to explain what actually
+// happened, who made the important decisions, and why — without sacrificing
+// atmosphere or ambiguity at the edges. Principle-only: no act structures,
+// no percentages, no mandatory reveals, no beat-sheet language, no formulaic
+// role assignments.
+// -----------------------------------------------------------------------------
+
+const C3D_REQUIRED_PATTERNS: RegExp[] = [
+  /CLARITY AT THE CENTER/,
+  /\(Pass C3D/,
+  /core chain of events/i,
+  /\bfear\b/i,
+  /\bshame\b/i,
+  /\bpride\b/i,
+  /\bloyalty\b/i,
+  /Ambiguity at the edges is welcome/i,
+  /Confusion at the center is not/i,
+  /greater clarity/i,
+  /emotional meaning should not replace factual understanding/i,
+];
+
+// C3D must NOT introduce: percentages, act structures, mandatory reveal
+// wording, beat-sheet vocabulary, or formulaic "segment N does X" role
+// assignments. These are blanket prohibitions — patterns are checked across
+// the entire haystack with no exemptions.
+const C3D_FORBIDDEN_FORMULA_PATTERNS: RegExp[] = [
+  /\b\d{1,3}\s*%/, // percentages, e.g. "50%"
+  /\b(?:first|second|third)\s+act\b/i,
+  /\bact\s+(?:one|two|three|1|2|3|i|ii|iii)\b/i,
+  /\bmandatory\s+(?:twist|climax|reveal|mystery|answer)\b/i,
+  /\brequired\s+(?:twist|climax|reveal|mystery|answer)\b/i,
+  /\bmust\s+(?:twist|reveal|explain\s+every)\b/i,
+  /\bsegment\s+\d+\s+(?:does|provides|delivers|introduces|sets\s+up|establishes|covers|reveals)\b/i,
+];
+
+for (const c of promptCases) {
+  const { system, user } = buildStorySegmentPrompts(c.input);
+  const haystack = `${system}\n${user}`;
+
+  let caseFails = 0;
+  for (const pat of C3D_REQUIRED_PATTERNS) {
+    if (!pat.test(haystack)) {
+      caseFails++;
+      fail(`[${c.label}] C3D — segment prompt missing required pattern ${pat}`);
+    }
+  }
+  for (const pat of C3D_FORBIDDEN_FORMULA_PATTERNS) {
+    if (pat.test(haystack)) {
+      caseFails++;
+      fail(`[${c.label}] C3D — segment prompt contains forbidden formula pattern ${pat}`);
+    }
+  }
+  if (caseFails === 0) {
+    ok(`[${c.label}] C3D clarity-at-the-center principles present and no formulas leaked`);
+  }
+}
+
+// C3D explicitly preserves the allowed list — imperfect memories, emotional
+// complexity, partial uncertainty, unresolved secondary mysteries, multiple
+// perspectives — so the principle does not collapse into rigid explanation.
+const c3dMidHaystack = `${midPrompts.system}\n${midPrompts.user}`;
+assert(
+  "C3D — segment prompt preserves imperfect memories / emotional complexity / multiple perspectives as allowed",
+  /imperfect memories/i.test(c3dMidHaystack) &&
+    /emotional complexity/i.test(c3dMidHaystack) &&
+    /partial uncertainty/i.test(c3dMidHaystack) &&
+    /unresolved secondary mysteries/i.test(c3dMidHaystack) &&
+    /multiple perspectives/i.test(c3dMidHaystack),
+);
+assert(
+  "C3D — segment prompt explicitly warns against solving emotions while leaving events unclear",
+  /solving emotions while leaving events unclear/i.test(c3dMidHaystack),
+);
+assert(
+  "C3D — segment prompt explicitly warns against treating mystery itself as the answer",
+  /treating mystery itself as the answer/i.test(c3dMidHaystack),
+);
+assert(
+  "C3D — clarity is framed as a principle, not a formula",
+  /a principle, not a formula/i.test(c3dMidHaystack),
 );
 
 // -----------------------------------------------------------------------------
