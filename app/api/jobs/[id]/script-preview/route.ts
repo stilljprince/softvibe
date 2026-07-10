@@ -20,11 +20,13 @@ export const dynamic = "force-dynamic";
 
 // Mirrors wordTargetFor() wps constants from lib/script-builder-openai.ts.
 // classic-asmr depends on voiceStyle; other presets ignore it.
+// narrative shares the meditation-style 1.8 wps (matches buildScriptOpenAI's
+// `else` branch, which both meditation and narrative resolve through).
 function wpsForPreset(preset: string, voiceStyle?: "soft" | "whisper"): number {
   if (preset === "sleep-story") return 1.95;
   if (preset === "kids-story") return 1.85;
   if (preset === "classic-asmr") return voiceStyle === "whisper" ? 1.18 : 1.25;
-  return 1.8; // meditation
+  return 1.8; // meditation, narrative
 }
 
 // Mirrors stripTtsDirectives() from app/api/jobs/[id]/complete/route.ts
@@ -73,6 +75,7 @@ export async function POST(
       language: true,
       voiceStyle: true,
       voiceGender: true,
+      narrativeMode: true,
     },
   });
 
@@ -91,13 +94,15 @@ export async function POST(
     job.preset === "classic-asmr" ||
     job.preset === "sleep-story" ||
     job.preset === "meditation" ||
-    job.preset === "kids-story"
+    job.preset === "kids-story" ||
+    job.preset === "narrative"
       ? job.preset
       : "classic-asmr";
 
   const language: "de" | "en" = job.language === "en" ? "en" : "de";
   const isSleepStory = safePreset === "sleep-story";
   const isKidsStory = safePreset === "kids-story";
+  const isNarrative = safePreset === "narrative";
 
   // sleep-story and kids-story always use "soft" delivery regardless of the
   // stored job.voiceStyle, so the WPS target must match that effective style.
@@ -108,19 +113,89 @@ export async function POST(
       ? "whisper"
       : "soft";
 
+  // Narrative submode: only meaningful when preset === "narrative". Mirrors
+  // the resolution done in /complete so preview output matches final render.
+  const narrativeMode: "story" | "quiet-knowledge" | null = isNarrative
+    ? job.narrativeMode === "quiet-knowledge"
+      ? "quiet-knowledge"
+      : "story"
+    : null;
+
+  console.log(
+    "[SCRIPT-PREVIEW INPUT]",
+    "jobId=", job.id,
+    "preset=", job.preset,
+    "safePreset=", safePreset,
+    "narrativeMode=", narrativeMode ?? "—",
+    "voiceStyle=", effectiveStyle,
+    "voiceGender=", job.voiceGender,
+  );
+
+  // Narrative-only structured timing markers. These complement the existing
+  // [DURATION-DEBUG]/[NARRATIVE]/[SCRIPT-DEBUG] logs and let us pin down which
+  // phase a 500/timeout came from (route entry → builder call → response).
+  const routeT0 = Date.now();
+  if (isNarrative) {
+    console.log(
+      "[NARRATIVE-TIMING]",
+      "route=script-preview",
+      "phase=route.start",
+      `jobId=${job.id}`,
+      `preset=${safePreset}`,
+      `mode=${narrativeMode ?? "—"}`,
+      `durationSec=${job.durationSec ?? "—"}`,
+    );
+  }
+
   let finalText: string;
   try {
+    if (isNarrative) {
+      console.log(
+        "[NARRATIVE-TIMING]",
+        "route=script-preview",
+        "phase=builder.start",
+        `jobId=${job.id}`,
+        `elapsedMs=${Date.now() - routeT0}`,
+      );
+    }
+    const builderT0 = Date.now();
     const out = await buildScriptOpenAI({
       preset: safePreset,
       userPrompt: (job.prompt ?? "").trim(),
       targetDurationSec:
         typeof job.durationSec === "number" ? job.durationSec : undefined,
       voiceStyle: effectiveStyle,
+      narrativeMode,
       language,
     });
     finalText = (out?.finalText ?? "").trim();
+    if (isNarrative) {
+      console.log(
+        "[NARRATIVE-TIMING]",
+        "route=script-preview",
+        "phase=builder.end",
+        `jobId=${job.id}`,
+        `durationMs=${Date.now() - builderT0}`,
+        `outputChars=${finalText.length}`,
+      );
+    }
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Script generation failed";
+    if (isNarrative) {
+      const err = e as { name?: string; message?: string; status?: number; code?: string; type?: string };
+      console.error(
+        "[NARRATIVE-TIMING]",
+        "route=script-preview",
+        "phase=builder.error",
+        `jobId=${job.id}`,
+        `durationMs=${Date.now() - routeT0}`,
+        `name=${err?.name ?? "—"}`,
+        `status=${err?.status ?? "—"}`,
+        `code=${err?.code ?? "—"}`,
+        `type=${err?.type ?? "—"}`,
+        `message=${(err?.message ?? "—").slice(0, 240)}`,
+      );
+    }
     return jsonError(msg, 500);
   }
 
@@ -177,6 +252,18 @@ export async function POST(
         ? "Softly, everything lay still and warm."
         : "Leise lag die Nacht um sie."
       : null;
+
+  if (isNarrative) {
+    console.log(
+      "[NARRATIVE-TIMING]",
+      "route=script-preview",
+      "phase=route.response",
+      `jobId=${job.id}`,
+      `durationMs=${Date.now() - routeT0}`,
+      `wordCount=${wordCount}`,
+      `chunkCount=${chunkCount}`,
+    );
+  }
 
   return jsonOk({
     script: finalText,

@@ -27,6 +27,7 @@
 //      shape, no fixed beats, concrete pressure, trajectory + tone enums).
 
 import {
+  ALLOWED_ENDING_APPROACHES,
   ALLOWED_ENDING_TONES,
   ALLOWED_TRAJECTORY_SHAPES,
   STORY_BIBLE_JSON_SCHEMA,
@@ -35,7 +36,12 @@ import {
   validateStoryBible,
   type BuildStoryOutlineInput,
 } from "../lib/narrative/outline-and-segments";
-import type { EndingTone, StoryBible, TrajectoryShape } from "../lib/narrative/types";
+import type {
+  EndingApproach,
+  EndingTone,
+  StoryBible,
+  TrajectoryShape,
+} from "../lib/narrative/types";
 
 let passed = 0;
 let failed = 0;
@@ -89,6 +95,13 @@ const EXPECTED_TONE: EndingTone[] = [
   "settled",
   "unresolved",
 ];
+const EXPECTED_APPROACH: EndingApproach[] = [
+  "resolved-mystery",
+  "emotional-closure",
+  "quiet-ending",
+  "bittersweet-ending",
+  "reflective-ending",
+];
 
 assert(
   "ALLOWED_TRAJECTORY_SHAPES matches documented set",
@@ -102,6 +115,13 @@ assert(
   EXPECTED_TONE.length === ALLOWED_ENDING_TONES.length &&
     EXPECTED_TONE.every((v) => (ALLOWED_ENDING_TONES as readonly string[]).includes(v)),
   `got: ${ALLOWED_ENDING_TONES.join(", ")}`,
+);
+
+assert(
+  "ALLOWED_ENDING_APPROACHES matches documented set",
+  EXPECTED_APPROACH.length === ALLOWED_ENDING_APPROACHES.length &&
+    EXPECTED_APPROACH.every((v) => (ALLOWED_ENDING_APPROACHES as readonly string[]).includes(v)),
+  `got: ${ALLOWED_ENDING_APPROACHES.join(", ")}`,
 );
 
 // -----------------------------------------------------------------------------
@@ -127,8 +147,11 @@ const goodRaw = {
     "Whether Mara will return to her brother's call.",
     "What her mother kept in the locked drawer of the desk.",
   ],
+  primaryStoryQuestion:
+    "Will Mara open the locked drawer her mother left behind before she leaves the city?",
   endingTone: "bittersweet",
   trajectoryShape: "fracture-and-settle",
+  endingApproach: "bittersweet-ending",
 };
 
 let validated: StoryBible | null = null;
@@ -155,6 +178,15 @@ if (validated) {
     validated.trajectoryShape === "fracture-and-settle",
   );
   assert("validated endingTone preserved", validated.endingTone === "bittersweet");
+  assert(
+    "validated endingApproach preserved",
+    validated.endingApproach === "bittersweet-ending",
+  );
+  assert(
+    "validated primaryStoryQuestion preserved",
+    typeof validated.primaryStoryQuestion === "string" &&
+      validated.primaryStoryQuestion.length > 0,
+  );
 }
 
 // -----------------------------------------------------------------------------
@@ -171,6 +203,18 @@ assertThrows(
   "validateStoryBible rejects unknown endingTone",
   () => validateStoryBible({ ...goodRaw, endingTone: "epic-victory" }),
   "endingTone",
+);
+
+assertThrows(
+  "validateStoryBible rejects unknown endingApproach",
+  () => validateStoryBible({ ...goodRaw, endingApproach: "happy-ending" }),
+  "endingApproach",
+);
+
+assertThrows(
+  "validateStoryBible rejects missing primaryStoryQuestion",
+  () => validateStoryBible({ ...goodRaw, primaryStoryQuestion: "" }),
+  "primaryStoryQuestion",
 );
 
 assertThrows(
@@ -246,8 +290,10 @@ const EXPECTED_REQUIRED = [
   "pressureSources",
   "importantRelationships",
   "unresolvedQuestions",
+  "primaryStoryQuestion",
   "endingTone",
   "trajectoryShape",
+  "endingApproach",
 ];
 assert(
   "schema required-fields list is exactly the documented set",
@@ -306,6 +352,9 @@ const REQUIRED_PROMPT_PATTERNS: RegExp[] = [
   /story bible/i,
   /trajectoryShape/i,
   /endingTone/i,
+  /endingApproach/i,
+  /primaryStoryQuestion/i,
+  /self-contained/i,
   /emergent|not assigned/i,
   /gradual-rise/,
   /rise-and-fall/,
@@ -315,6 +364,10 @@ const REQUIRED_PROMPT_PATTERNS: RegExp[] = [
   /\bopen\b/,
   /quietly-tragic/,
   /bittersweet/,
+  /resolved-mystery/,
+  /emotional-closure/,
+  /quiet-ending/,
+  /reflective-ending/,
 ];
 
 for (const c of promptCases) {
