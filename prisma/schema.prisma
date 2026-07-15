@@ -21,6 +21,15 @@ model User {
   credits              Int     @default(0)
   isAdmin              Boolean @default(false)
 
+  // 🔹 Entitlements (RP-010 Phase 1)
+  // Schema-only foundation for the Plan / Custom Minutes / Free Probe model.
+  // No runtime code reads or writes these fields yet — enforcement lands in
+  // later phases (Entitlement Resolver, Stripe lifecycle, Probe logic).
+  plan                 Plan      @default(FREE)
+  planPeriodStart      DateTime?
+  planPeriodEnd        DateTime?
+  probeGenerationsUsed Int       @default(0)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -30,6 +39,7 @@ model User {
   playlists Playlist[]
 
   preferenceProfile UserPreferenceProfile?
+  periodUsages      PeriodUsage[]
 }
 
 model UserPreferenceProfile {
@@ -95,6 +105,14 @@ model Job {
   //                   or function retries.
   ttsStartedAt     DateTime?
   creditRefundedAt DateTime?
+
+  // Entitlement usage audit (RP-010 Phase 1)
+  // Written by later-phase runtime code (reservation / finalize / release).
+  // Nullable so all existing Jobs remain valid; no backfill in this phase.
+  entitlementKind  EntitlementKind?
+  reservedMinutes  Int?
+  usageFinalizedAt DateTime?
+  usageReleasedAt  DateTime?
 
   user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   tracks Track[]
@@ -198,4 +216,40 @@ enum JobStatus {
   PROCESSING
   DONE
   FAILED
+}
+
+// Entitlement plan tier (RP-010 Phase 1).
+// FREE users receive lifetime probe generations and daily Library unlocks only.
+// STARTER / PREMIUM users receive Custom Minutes per billing period.
+enum Plan {
+  FREE
+  STARTER
+  PREMIUM
+}
+
+// Which entitlement bucket a Job draws from (RP-010 Phase 1).
+// PLAN_MINUTES → paid Custom Minutes (STARTER / PREMIUM).
+// PROBE        → one of the two lifetime Free probe generations.
+enum EntitlementKind {
+  PLAN_MINUTES
+  PROBE
+}
+
+// Per-billing-period usage accumulator for STARTER / PREMIUM users.
+// One row per (user, periodStart). Written by later-phase runtime logic
+// (reservation and finalization); nothing reads or writes it in this phase.
+model PeriodUsage {
+  id              String   @id @default(cuid())
+  userId          String
+  periodStart     DateTime
+  periodEnd       DateTime
+  minutesUsed     Int      @default(0)
+  minutesReserved Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, periodStart])
+  @@index([userId, periodEnd])
 }
