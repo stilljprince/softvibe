@@ -40,6 +40,7 @@ model User {
 
   preferenceProfile UserPreferenceProfile?
   periodUsages      PeriodUsage[]
+  libraryUnlocks    LibraryUnlock[]
 }
 
 model UserPreferenceProfile {
@@ -252,4 +253,78 @@ model PeriodUsage {
 
   @@unique([userId, periodStart])
   @@index([userId, periodEnd])
+}
+
+// Source of a LibraryUnlock row (RP-010 Phase 2A).
+// Only SPONSORED is defined: FREE users obtain per-session Library access by
+// completing a Sponsored Unlock. Paid plans (STARTER / PREMIUM) never create
+// LibraryUnlock rows — their access is resolved directly from User.plan by
+// later-phase runtime logic.
+enum LibraryUnlockSource {
+  SPONSORED
+}
+
+// Curated Library Session (RP-010 Phase 2A).
+// An independent root entity: not owned by a User and unrelated to Job,
+// Track, Story or Playlist. Represents an editorially curated multi-chapter
+// audio session that FREE users unlock per-session and paid users access
+// directly via their plan. Schema-only in this phase — no catalog API,
+// no player wiring, no seed data.
+model LibrarySession {
+  id              String   @id @default(cuid())
+  slug            String   @unique
+  title           String
+  description     String?
+  preset          String
+  durationSeconds Int?
+  isActive        Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  chapters LibrarySessionChapter[]
+  unlocks  LibraryUnlock[]
+
+  @@index([isActive])
+}
+
+// Ordered chapter belonging to exactly one LibrarySession (RP-010 Phase 2A).
+// audioKey is persisted metadata only in this phase — no S3 access is
+// implemented and chapters are intentionally not linked to existing Track,
+// Job or Story rows.
+model LibrarySessionChapter {
+  id               String   @id @default(cuid())
+  librarySessionId String
+  partIndex        Int
+  title            String?
+  audioKey         String
+  durationSeconds  Int?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  librarySession LibrarySession @relation(fields: [librarySessionId], references: [id], onDelete: Cascade)
+
+  @@unique([librarySessionId, partIndex])
+}
+
+// Per-user, per-session unlock record (RP-010 Phase 2A).
+// One row per successful Sponsored Unlock. A single user may unlock the same
+// LibrarySession multiple times over its lifetime (once each expiry lapses);
+// active-unlock reuse is enforced later in runtime logic, not by a unique
+// constraint. Intentionally does NOT reference Probe Generations, Credits,
+// Jobs, Tracks, Stories, Purchases or paid Plan access.
+model LibraryUnlock {
+  id               String              @id @default(cuid())
+  userId           String
+  librarySessionId String
+  unlockedAt       DateTime            @default(now())
+  expiresAt        DateTime
+  source           LibraryUnlockSource
+  providerEventId  String?             @unique
+  createdAt        DateTime            @default(now())
+
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  librarySession LibrarySession @relation(fields: [librarySessionId], references: [id], onDelete: Cascade)
+
+  @@index([userId, unlockedAt])
+  @@index([userId, librarySessionId, expiresAt])
 }
