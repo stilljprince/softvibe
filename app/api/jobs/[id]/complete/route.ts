@@ -23,6 +23,7 @@ console.log("[prosody] typeof applyV3Prosody =", typeof applyV3Prosody);
 
 // 🔹 ElevenLabs-Adapter & Voice-Resolver
 import { elevenlabs, resolveVoiceId } from "@/lib/tts/elevenlabs";
+import { finalizePlanMinuteUsage } from "@/lib/entitlement/finalization";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -1011,24 +1012,32 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
   // (per-chapter for multi-chunk, total for single-chunk) — see the writes
   // immediately below — so no information is lost and no Prisma migration is
   // required.
-  const updated = await prisma.job.update({
-    where: { id },
-    data: {
-      status: $Enums.JobStatus.DONE,
-      resultUrl: nextResultUrl ?? localRel,
-      error: null,
-    },
-    select: {
-      id: true,
-      status: true,
-      resultUrl: true,
-      durationSec: true,
-      title: true,
-      prompt: true,
-      preset: true,
-      createdAt: true,
-    },
+  //
+  // For PLAN_MINUTES Jobs the DONE write is atomically coupled with the
+  // Custom-Minute usage transfer (RP-010 Phase 3B): reserved minutes on the
+  // originally reserved PeriodUsage row move into used minutes, and
+  // usageFinalizedAt is set exactly once. Non-PLAN_MINUTES Jobs flow through
+  // the same helper for a single terminal write path but do not touch
+  // PeriodUsage. A consistency error inside finalization rolls the whole
+  // atomic bundle back and this handler exits without marking the Job DONE —
+  // Release / stale-recovery are Phase 3C.
+  const finalizeResult = await finalizePlanMinuteUsage({
+    jobId: id,
+    finalJobData: { resultUrl: nextResultUrl ?? localRel },
   });
+  if (!finalizeResult.ok) {
+    addDebugLog({
+      ts: new Date().toISOString(),
+      level: "error",
+      route: "/api/jobs/[id]/complete POST",
+      userId: session.user.id as string,
+      message: "Usage finalization failed",
+      data: { id, error: finalizeResult.error },
+      reqId,
+    });
+    return jsonError(finalizeResult.error, 500);
+  }
+  const updated = finalizeResult.job;
 
   // Only update track durations in bulk for single-chunk jobs.
   // Multi-chunk jobs store per-chapter durations during TTS; overwriting with the job's total would corrupt them.

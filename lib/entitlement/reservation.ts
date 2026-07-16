@@ -346,8 +346,11 @@ async function runReservationTx(
       );
       const allowance = getMonthlyMinuteAllowance(effectivePlan);
 
-      // Snapshot minutesUsed for the WHERE bound. Safe in Phase 3A because no
-      // write path in this phase mutates minutesUsed; finalize is out of scope.
+      // Snapshot minutesUsed for the WHERE bound. Also captures the row id
+      // for the stable Job → PeriodUsage mapping written below (Phase 3B).
+      // Safe to read outside a lock: the actual allowance gate lives in the
+      // updateMany() below and re-evaluates the invariant on the current
+      // committed row under READ COMMITTED.
       const snapshot = await tx.periodUsage.findUnique({
         where: {
           userId_periodStart: {
@@ -355,7 +358,7 @@ async function runReservationTx(
             periodStart: decision.periodStart,
           },
         },
-        select: { minutesUsed: true },
+        select: { id: true, minutesUsed: true },
       });
       const usedSnapshot = snapshot?.minutesUsed ?? 0;
 
@@ -382,6 +385,12 @@ async function runReservationTx(
         },
       });
 
+      // Stable id of the PeriodUsage row this reservation debited against.
+      // Persisted on the Job below so Phase-3B finalization moves minutes back
+      // against the *original* period even if the user's billing period has
+      // rolled over in the meantime (Do not finalize against whichever billing
+      // period happens to be current later).
+      let periodUsageId: string;
       if (claim.count === 0) {
         // Two cases:
         //   (a) row exists but its minutesReserved would push past the allowance
@@ -404,7 +413,7 @@ async function runReservationTx(
         // Fresh create. If a concurrent transaction wins the create race,
         // P2002 propagates and the outer layer retries the whole transaction
         // exactly once — the retry then takes the atomic-increment path.
-        await tx.periodUsage.create({
+        const created = await tx.periodUsage.create({
           data: {
             userId: params.userId,
             periodStart: decision.periodStart,
@@ -412,7 +421,33 @@ async function runReservationTx(
             minutesReserved: decision.minutes,
             minutesUsed: 0,
           },
+          select: { id: true },
         });
+        periodUsageId = created.id;
+      } else if (snapshot) {
+        // Increment path — row already existed when we snapshotted. Its id is
+        // stable across the transaction.
+        periodUsageId = snapshot.id;
+      } else {
+        // updateMany reported count > 0 but findUnique returned no row above.
+        // This can only happen if a concurrent writer created the row between
+        // the two calls (which is exactly the case that would have raced our
+        // create branch). Re-read to obtain the id; if still missing, surface
+        // a controlled CONCURRENCY_CONFLICT via the outer retry-then-abort
+        // machinery.
+        const reread = await tx.periodUsage.findUnique({
+          where: {
+            userId_periodStart: {
+              userId: params.userId,
+              periodStart: decision.periodStart,
+            },
+          },
+          select: { id: true },
+        });
+        if (!reread) {
+          throw new ReservationRejectError("CONCURRENCY_CONFLICT");
+        }
+        periodUsageId = reread.id;
       }
 
       // Job creation, atomic with the credit debit and reservation write above.
@@ -431,6 +466,7 @@ async function runReservationTx(
           scriptOverride: params.jobData.scriptOverride,
           entitlementKind: EntitlementKind.PLAN_MINUTES,
           reservedMinutes: decision.minutes,
+          periodUsageId,
         },
         select: { id: true, status: true, title: true, prompt: true },
       });

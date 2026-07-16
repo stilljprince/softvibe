@@ -259,6 +259,7 @@ type StoreJob = {
   reservedMinutes: number | null;
   usageFinalizedAt: Date | null;
   usageReleasedAt: Date | null;
+  periodUsageId: string | null;
   prompt: string;
   title: string;
   status: string;
@@ -366,6 +367,7 @@ function buildTxOps(store: Store, writes: WriteOp[]) {
           reservedMinutes: data.reservedMinutes ?? null,
           usageFinalizedAt: null,
           usageReleasedAt: null,
+          periodUsageId: data.periodUsageId ?? null,
           prompt: data.prompt,
           title: data.title,
           status: data.status,
@@ -426,7 +428,7 @@ function buildTxOps(store: Store, writes: WriteOp[]) {
         return { count: 1 };
       },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      create: async ({ data }: any) => {
+      create: async ({ data, select }: any) => {
         const key = pukey(data.userId, data.periodStart);
         // Persistent injection wins: every create throws P2002 until cleared.
         if (store.injectPeriodUsageCreateP2002Always) {
@@ -462,6 +464,10 @@ function buildTxOps(store: Store, writes: WriteOp[]) {
           minutesUsed: data.minutesUsed,
         });
         writes.push({ kind: "periodUsage.create", key });
+        if (select) {
+          return { id: key };
+        }
+        return { id: key };
       },
     },
   };
@@ -644,6 +650,11 @@ async function runReservationTests(): Promise<void> {
   check("STARTER: Job.reservedMinutes=12", job.reservedMinutes, 12);
   check("STARTER: Job.usageFinalizedAt still null", job.usageFinalizedAt, null);
   check("STARTER: Job.usageReleasedAt still null", job.usageReleasedAt, null);
+  check(
+    "STARTER: Job.periodUsageId points at reserved row",
+    job.periodUsageId,
+    pukey("u-starter", periodStart)
+  );
 }
 
 // (4) PREMIUM — first reservation creates PeriodUsage AND Job
@@ -679,6 +690,11 @@ async function runReservationTests(): Promise<void> {
     "PLAN_MINUTES"
   );
   check("PREMIUM: Job.reservedMinutes=45", job.reservedMinutes, 45);
+  check(
+    "PREMIUM: Job.periodUsageId points at reserved row",
+    job.periodUsageId,
+    pukey("u-premium", periodStart)
+  );
 }
 
 // (5) Existing PeriodUsage row is reused; second Job increments
@@ -726,6 +742,12 @@ async function runReservationTests(): Promise<void> {
   check(
     "Reuse: both jobs tagged PLAN_MINUTES",
     jobs.every((j) => j.entitlementKind === "PLAN_MINUTES"),
+    true
+  );
+  const reuseKey = pukey("u-reuse", periodStart);
+  check(
+    "Reuse: both jobs share the same periodUsageId",
+    jobs.every((j) => j.periodUsageId === reuseKey),
     true
   );
 }
@@ -1682,6 +1704,12 @@ async function runReservationTests(): Promise<void> {
     "Retry: injection hook consumed",
     store.injectPeriodUsageCreateP2002Once,
     false
+  );
+  const retryJob = Array.from(store.jobs.values())[0];
+  check(
+    "Retry: Job.periodUsageId points at reserved row after retry",
+    retryJob.periodUsageId,
+    pukey("u-p2002", periodStart)
   );
 }
 

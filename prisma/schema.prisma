@@ -115,12 +115,22 @@ model Job {
   usageFinalizedAt DateTime?
   usageReleasedAt  DateTime?
 
-  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tracks Track[]
+  // Stable mapping to the PeriodUsage row a PLAN_MINUTES reservation was
+  // debited against (RP-010 Phase 3B). Set at reservation time so finalize
+  // can move minutes back against the *original* period even after the
+  // user's billing period has rolled over. Nullable — pre-Phase-3B Jobs and
+  // all non-PLAN_MINUTES Jobs leave it null. onDelete: SetNull because the
+  // Job row must outlive any accidental PeriodUsage deletion.
+  periodUsageId    String?
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tracks      Track[]
+  periodUsage PeriodUsage? @relation(fields: [periodUsageId], references: [id], onDelete: SetNull)
 
   @@index([userId, createdAt])
   @@index([userId, status])
   @@index([status])
+  @@index([periodUsageId])
 }
 
 model Story {
@@ -249,7 +259,8 @@ model PeriodUsage {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobs Job[]
 
   @@unique([userId, periodStart])
   @@index([userId, periodEnd])
