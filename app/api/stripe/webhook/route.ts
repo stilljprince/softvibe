@@ -4,21 +4,193 @@ import Stripe from "stripe";
 import { stripe } from "@/lib/stripe";
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
+import {
+  classifySubscriptionStatus,
+  derivePlanFromSubscription,
+  extractBillingPeriod,
+} from "@/lib/entitlement/stripe-plan-mapping";
 
 export const runtime = "nodejs";
 
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
 
-type PlanId = "starter" | "pro" | "ultra";
+type LegacyPlanId = "starter" | "pro" | "ultra";
 
 function creditsForPlan(rawPlan: string | null | undefined): number {
-  const plan = (rawPlan ?? "").toLowerCase() as PlanId | "";
+  const plan = (rawPlan ?? "").toLowerCase() as LegacyPlanId | "";
   if (plan === "starter") return 5000;
   if (plan === "pro") return 20000;
   if (plan === "ultra") return 100000;
   // Fallback, falls metadata.plan komisch ist
   return 5000;
 }
+
+// ---------- helpers (RP-010 Phase 2B-2) -----------------------------------
+
+function extractSubscriptionId(raw: unknown): string | null {
+  if (typeof raw === "string") return raw;
+  if (raw && typeof (raw as { id?: unknown }).id === "string") {
+    return (raw as { id: string }).id;
+  }
+  return null;
+}
+
+function extractCustomerId(raw: unknown): string | null {
+  if (typeof raw === "string") return raw;
+  if (raw && typeof (raw as { id?: unknown }).id === "string") {
+    return (raw as { id: string }).id;
+  }
+  return null;
+}
+
+/**
+ * Locate the local user for a Stripe subscription. Prefers an explicit
+ * hint (session.metadata.userId), falls back to stripeCustomerId, then
+ * stripeSubscriptionId. Returns the user id or null.
+ */
+async function findUserId(hints: {
+  userIdHint?: string | null;
+  customerId?: string | null;
+  subscriptionId?: string | null;
+}): Promise<string | null> {
+  const { userIdHint, customerId, subscriptionId } = hints;
+
+  if (userIdHint) {
+    const existing = await prisma.user.findUnique({
+      where: { id: userIdHint },
+      select: { id: true },
+    });
+    if (existing) return existing.id;
+  }
+
+  if (customerId) {
+    const byCustomer = await prisma.user.findFirst({
+      where: { stripeCustomerId: customerId },
+      select: { id: true },
+    });
+    if (byCustomer) return byCustomer.id;
+  }
+
+  if (subscriptionId) {
+    const bySub = await prisma.user.findFirst({
+      where: { stripeSubscriptionId: subscriptionId },
+      select: { id: true },
+    });
+    if (bySub) return bySub.id;
+  }
+
+  return null;
+}
+
+/**
+ * Sync a Stripe subscription onto the local user, honoring the CEO's
+ * Option-C status policy (see classifySubscriptionStatus for details):
+ *
+ *   SYNC_PAID
+ *     Adopt / refresh the paid plan and the current billing period.
+ *
+ *   KEEP_PAID_UPDATE_PERIOD  (past_due)
+ *     Do NOT touch the persisted plan — the user keeps their existing
+ *     paid entitlement until planPeriodEnd. Refresh the period boundaries
+ *     if Stripe provides valid values.
+ *
+ *   DOWNGRADE_FREE  (unpaid, incomplete_expired, canceled)
+ *     Reset the user to FREE, clear the billing period and drop the
+ *     subscription reference.
+ *
+ *   NO_CHANGE  (incomplete, paused, unknown)
+ *     Log a warning and leave the persisted plan untouched. Never
+ *     activate paid speculatively, never extend paid artificially.
+ *
+ * Never touches credits, probe counters, PeriodUsage, LibraryUnlock, or
+ * any job/enforcement state — all out of scope for RP-010 Phase 2B-2.
+ */
+async function syncSubscriptionToUser(params: {
+  userId: string;
+  subscription: Stripe.Subscription;
+  extraCustomerId?: string | null;
+}): Promise<void> {
+  const { userId, subscription, extraCustomerId } = params;
+
+  const action = classifySubscriptionStatus(subscription.status);
+  const { start, end } = extractBillingPeriod(subscription);
+
+  if (action === "DOWNGRADE_FREE") {
+    console.log("[billing/webhook] downgrading user to FREE", {
+      userId,
+      subscriptionId: subscription.id,
+      status: subscription.status,
+    });
+    await resetUserToFree(userId);
+    return;
+  }
+
+  if (action === "NO_CHANGE") {
+    console.warn(
+      "[billing/webhook] non-actionable subscription status — leaving persisted plan untouched",
+      {
+        userId,
+        subscriptionId: subscription.id,
+        status: subscription.status,
+      }
+    );
+    return;
+  }
+
+  // From here on: SYNC_PAID or KEEP_PAID_UPDATE_PERIOD. Both refresh the
+  // Stripe reference and the billing period if valid. Only SYNC_PAID also
+  // adopts a new plan value.
+  const data: Prisma.UserUpdateInput = {
+    stripeSubscriptionId: subscription.id,
+  };
+
+  if (start !== null) data.planPeriodStart = start;
+  if (end !== null) data.planPeriodEnd = end;
+
+  if (action === "SYNC_PAID") {
+    const plan = derivePlanFromSubscription(subscription);
+    if (plan) {
+      data.plan = plan;
+    } else {
+      console.warn(
+        "[billing/webhook] no plan mapping resolved for subscription",
+        {
+          subscriptionId: subscription.id,
+          priceId: subscription.items?.data?.[0]?.price?.id ?? null,
+          metadataPlan: subscription.metadata?.plan ?? null,
+        }
+      );
+    }
+  }
+
+  if (extraCustomerId) {
+    data.stripeCustomerId = extraCustomerId;
+  }
+
+  await prisma.user.update({
+    where: { id: userId },
+    data,
+  });
+}
+
+/**
+ * Reset a local user's paid-plan state after a subscription is fully
+ * cancelled. Drops Plan back to FREE and clears the billing period.
+ * Credits are intentionally preserved.
+ */
+async function resetUserToFree(userId: string): Promise<void> {
+  await prisma.user.update({
+    where: { id: userId },
+    data: {
+      plan: "FREE",
+      planPeriodStart: null,
+      planPeriodEnd: null,
+      stripeSubscriptionId: null,
+    },
+  });
+}
+
+// ---------- route ---------------------------------------------------------
 
 export async function POST(req: Request) {
   // 1) Secret vorhanden?
@@ -48,39 +220,38 @@ export async function POST(req: Request) {
   try {
     switch (event.type) {
       // ✅ Checkout abgeschlossen → Stripe-Customer + Subscription + Credits
+      //    + (RP-010 2B-2) Plan & Billing-Period synchronisieren
       case "checkout.session.completed": {
         const session = event.data.object as Stripe.Checkout.Session;
 
-        const customerId =
-          typeof session.customer === "string"
-            ? session.customer
-            : session.customer?.id ?? null;
+        const customerId = extractCustomerId(
+          (session as { customer?: unknown }).customer
+        );
+        const subscriptionId = extractSubscriptionId(
+          (session as { subscription?: unknown }).subscription
+        );
 
-        const rawSub = (session as { subscription?: unknown }).subscription;
-        let subscriptionId: string | null = null;
-        if (typeof rawSub === "string") {
-          subscriptionId = rawSub;
-        } else if (rawSub && typeof (rawSub as { id?: unknown }).id === "string") {
-          subscriptionId = (rawSub as { id: string }).id;
-        }
-
-        const userId = session.metadata?.userId ?? null;
+        const userIdHint = session.metadata?.userId ?? null;
         const planMeta = session.metadata?.plan ?? null;
 
         console.log("[billing/webhook] checkout.session.completed:", {
-          userId,
+          userId: userIdHint,
           customerId,
           subscriptionId,
           planMeta,
+          mode: session.mode,
         });
 
-        if (!userId) {
+        if (!userIdHint) {
           console.warn(
             "[billing/webhook] checkout.session.completed ohne userId in metadata"
           );
           break;
         }
 
+        // 🔸 Bestehendes Verhalten: Credits gutschreiben + Stripe-Refs sichern.
+        //    Wird UNVERÄNDERT beibehalten (Change-Budget-Regel, keine Credits-
+        //    Migration in dieser Phase).
         const creditsToAdd = creditsForPlan(planMeta);
 
         const data: Prisma.UserUpdateInput = {
@@ -95,29 +266,82 @@ export async function POST(req: Request) {
         }
 
         await prisma.user.update({
-          where: { id: userId },
+          where: { id: userIdHint },
           data,
+        });
+
+        // 🔸 RP-010 2B-2: nur bei echten Subscription-Checkouts Plan/Periode
+        //    aus Stripe holen. One-time Payments (mode=payment) lassen Plan
+        //    unangetastet — dort werden ausschließlich Credits gutgeschrieben.
+        if (subscriptionId) {
+          try {
+            const subscription = await stripe.subscriptions.retrieve(
+              subscriptionId
+            );
+            await syncSubscriptionToUser({
+              userId: userIdHint,
+              subscription,
+              extraCustomerId: customerId ?? null,
+            });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : "Unknown error";
+            console.error(
+              "[billing/webhook] failed to sync subscription after checkout:",
+              { subscriptionId, msg }
+            );
+          }
+        }
+
+        break;
+      }
+
+      // ✅ Subscription geändert (Upgrade / Downgrade / Renewal-Anchor / etc.)
+      //    → Plan & Billing-Periode aktuell halten
+      case "customer.subscription.updated": {
+        const sub = event.data.object as Stripe.Subscription;
+
+        const customerId = extractCustomerId(sub.customer);
+        const userId = await findUserId({
+          customerId,
+          subscriptionId: sub.id,
+        });
+
+        if (!userId) {
+          console.warn(
+            "[billing/webhook] customer.subscription.updated: kein User zu Stripe-Referenz gefunden",
+            { subscriptionId: sub.id, customerId }
+          );
+          break;
+        }
+
+        await syncSubscriptionToUser({
+          userId,
+          subscription: sub,
+          extraCustomerId: customerId ?? null,
         });
 
         break;
       }
 
-      // 🔎 Optional: nur Logging, keine Credits mehr hier
+      // 🔎 Renewal-Zahlung erfolgreich → aktuelle Periode aus Stripe holen
+      //    (Credits werden hier weiterhin NICHT verändert — siehe unten).
       case "invoice.payment_succeeded": {
         const invoice = event.data.object as Stripe.Invoice;
-        const invWithSub = invoice as { subscription?: unknown };
-        const rawSub = invWithSub.subscription;
-        let subscriptionId: string | null = null;
-        if (typeof rawSub === "string") {
-          subscriptionId = rawSub;
-        } else if (rawSub && typeof (rawSub as { id?: unknown }).id === "string") {
-          subscriptionId = (rawSub as { id: string }).id;
-        }
 
-        const customerId =
-          typeof invoice.customer === "string"
-            ? invoice.customer
-            : invoice.customer?.id ?? null;
+        const parent = (invoice as { parent?: Stripe.Invoice.Parent | null })
+          .parent;
+        const parentSubId =
+          parent?.subscription_details?.subscription != null
+            ? extractSubscriptionId(parent.subscription_details.subscription)
+            : null;
+
+        const legacySubId = extractSubscriptionId(
+          (invoice as { subscription?: unknown }).subscription
+        );
+
+        const subscriptionId = parentSubId ?? legacySubId;
+
+        const customerId = extractCustomerId(invoice.customer);
 
         console.log("[billing/webhook] invoice.payment_succeeded:", {
           subscriptionId,
@@ -127,41 +351,62 @@ export async function POST(req: Request) {
         });
 
         // ⚠️ Wichtige Info:
-        // Credits werden jetzt NUR bei checkout.session.completed gutgeschrieben.
-        // Hier machen wir nichts mehr, um Doppelbuchungen zu vermeiden.
+        // Credits werden NUR bei checkout.session.completed gutgeschrieben.
+        // Hier machen wir bewusst nichts an den Credits, um Doppelbuchungen
+        // zu vermeiden.
+        //
+        // 🔸 RP-010 2B-2: bei Subscription-Rechnungen aktuelle Periode +
+        //    Plan aus Stripe frisch übernehmen. Ohne Subscription-Referenz
+        //    ist die Rechnung eine One-off → wir tun nichts.
+        if (!subscriptionId) break;
+
+        const userId = await findUserId({
+          customerId,
+          subscriptionId,
+        });
+
+        if (!userId) {
+          console.warn(
+            "[billing/webhook] invoice.payment_succeeded: kein User zu Stripe-Referenz gefunden",
+            { subscriptionId, customerId }
+          );
+          break;
+        }
+
+        try {
+          const subscription = await stripe.subscriptions.retrieve(
+            subscriptionId
+          );
+          await syncSubscriptionToUser({
+            userId,
+            subscription,
+            extraCustomerId: customerId ?? null,
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Unknown error";
+          console.error(
+            "[billing/webhook] failed to sync subscription after invoice.payment_succeeded:",
+            { subscriptionId, msg }
+          );
+        }
+
         break;
       }
 
-      // ✅ Subscription gekündigt → Subscription-ID beim User leeren
+      // ✅ Subscription endgültig gekündigt → Plan zurück auf FREE, Periode
+      //    leeren, Subscription-Referenz beim User entfernen.
       case "customer.subscription.deleted": {
         const sub = event.data.object as Stripe.Subscription;
 
-        const customerId =
-          typeof sub.customer === "string"
-            ? sub.customer
-            : (sub.customer as
-                | Stripe.Customer
-                | Stripe.DeletedCustomer
-                | null
-                | undefined)?.id ?? null;
-
-        if (!customerId) break;
-
-        const user = await prisma.user.findFirst({
-          where: { stripeCustomerId: customerId },
-          select: { id: true },
+        const customerId = extractCustomerId(sub.customer);
+        const userId = await findUserId({
+          customerId,
+          subscriptionId: sub.id,
         });
 
-        if (!user) break;
+        if (!userId) break;
 
-        const clearSubData: Prisma.UserUpdateInput = {
-          stripeSubscriptionId: null,
-        };
-
-        await prisma.user.update({
-          where: { id: user.id },
-          data: clearSubData,
-        });
+        await resetUserToFree(userId);
 
         break;
       }

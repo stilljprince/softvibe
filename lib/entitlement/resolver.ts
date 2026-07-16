@@ -1,11 +1,17 @@
 // lib/entitlement/resolver.ts
 //
-// Central read-only Entitlement Resolver (RP-010 Phase 2B-1).
+// Central read-only Entitlement Resolver (RP-010 Phase 2B-1 / 2B-2).
 //
 // Given a userId, produces a stable typed snapshot of the user's active plan,
 // Custom-Minute usage against the current billing period, remaining lifetime
 // Probe Generations, and whether the current plan grants direct curated
 // Library access.
+//
+// The resolver reports an **effective** plan (Phase 2B-2, CEO Option C):
+// a persisted paid plan whose billing period has already ended is treated
+// as FREE for all read-side calculations. No database write is performed —
+// the persisted User.plan value is not modified here. See resolveEffectivePlan
+// for the exact rules.
 //
 // This module MUST remain strictly read-only:
 //   - no Prisma create / update / upsert / delete
@@ -75,30 +81,68 @@ function clampNonNegative(n: number): number {
 }
 
 /**
+ * Determine the effective plan given the persisted plan and the current
+ * billing-period end. Pure and read-only — never writes to the database.
+ *
+ * Rules (RP-010 Phase 2B-2, CEO Option C):
+ *
+ *   - FREE always resolves to FREE, regardless of any period data.
+ *   - A paid plan (STARTER / PREMIUM) whose planPeriodEnd is still in the
+ *     future keeps the paid plan.
+ *   - A paid plan whose planPeriodEnd has already elapsed (planPeriodEnd
+ *     <= now) is downgraded to FREE for read-side calculations only. The
+ *     persisted User.plan value is NOT modified — enforcement of the
+ *     downgrade happens purely on the read side.
+ *   - A paid plan with planPeriodEnd === null is kept as the paid plan.
+ *     The Stripe → DB synchronization is new; legacy demo / test accounts
+ *     may still be missing period boundaries. Downgrading them here would
+ *     silently break existing users, so we leave the plan intact until a
+ *     later phase reconciles those rows.
+ */
+export function resolveEffectivePlan(
+  plan: Plan,
+  planPeriodEnd: Date | null,
+  now: Date
+): Plan {
+  if (plan === "FREE") return "FREE";
+  if (planPeriodEnd === null) return plan;
+  return planPeriodEnd.getTime() > now.getTime() ? plan : "FREE";
+}
+
+/**
  * Pure calculation. Given persisted user + period-usage state, produce the
  * stable resolved snapshot. No I/O, no side effects — safe to unit-test.
+ *
+ * `now` may be passed explicitly for deterministic tests. When omitted the
+ * current wall clock is used. Only the effective-plan decision depends on
+ * `now`; all other numeric fields are derived from persisted state.
  */
 export function calculateResolvedEntitlements(
-  input: ResolverInput
+  input: ResolverInput,
+  now: Date = new Date()
 ): ResolvedEntitlements {
   const { plan, planPeriodStart, planPeriodEnd, probeGenerationsUsed, periodUsage } = input;
 
-  const config = getPlanConfig(plan);
+  const effectivePlan = resolveEffectivePlan(plan, planPeriodEnd, now);
+
+  const config = getPlanConfig(effectivePlan);
   const allowance = config.monthlyMinutes;
 
-  // FREE plans must always resolve to zero monthly usage regardless of any
-  // stale PeriodUsage rows that may exist from a prior paid subscription.
-  const used = plan === "FREE" ? 0 : clampNonNegative(periodUsage?.minutesUsed ?? 0);
+  // FREE (effective) plans must always resolve to zero monthly usage
+  // regardless of any stale PeriodUsage rows that may exist from a prior
+  // paid subscription — this also covers paid plans that have expired.
+  const used =
+    effectivePlan === "FREE" ? 0 : clampNonNegative(periodUsage?.minutesUsed ?? 0);
   const reserved =
-    plan === "FREE" ? 0 : clampNonNegative(periodUsage?.minutesReserved ?? 0);
+    effectivePlan === "FREE" ? 0 : clampNonNegative(periodUsage?.minutesReserved ?? 0);
   const remaining = clampNonNegative(allowance - used - reserved);
 
   const probeUsed = clampNonNegative(probeGenerationsUsed);
   const probeRemaining = clampNonNegative(PROBE_LIFETIME_LIMIT - probeUsed);
-  const canUseProbe = plan === "FREE" && probeRemaining > 0;
+  const canUseProbe = effectivePlan === "FREE" && probeRemaining > 0;
 
   return {
-    plan,
+    plan: effectivePlan,
     monthlyMinutes: {
       allowance,
       used,
@@ -116,7 +160,7 @@ export function calculateResolvedEntitlements(
       canUse: canUseProbe,
     },
     library: {
-      hasDirectAccess: hasDirectLibraryAccess(plan),
+      hasDirectAccess: hasDirectLibraryAccess(effectivePlan),
     },
   };
 }
