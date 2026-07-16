@@ -15,6 +15,10 @@ import {
   reserveAndCreateJob,
   minutesFromDurationSec,
 } from "@/lib/entitlement/reservation";
+import {
+  claimProbeAndCreateJob,
+  isOnProbePath,
+} from "@/lib/entitlement/probe";
 console.log("[BOOT] jobs route loaded from:", __filename);
 export const runtime = "nodejs";
 
@@ -320,7 +324,10 @@ export async function POST(req: Request) {
         ? normalized.title.trim()
         : makeTitleFromPrompt(prompt);
 
-    // User inkl. Credits/Admin-Flag holen
+    // User inkl. Credits/Admin-Flag holen. plan+planPeriodEnd are used only to
+    // pick the admission path (probe vs. reservation). The probe transaction
+    // re-reads its own authoritative snapshot; the paid reservation path does
+    // too — this fetch is a routing hint, not a decision commit.
     const dbUser = await prisma.user.findFirst({
       where: {
         OR: [
@@ -334,6 +341,8 @@ export async function POST(req: Request) {
         id: true,
         isAdmin: true,
         credits: true,
+        plan: true,
+        planPeriodEnd: true,
       },
     });
 
@@ -350,10 +359,22 @@ export async function POST(req: Request) {
       return Response.json({ error: "USER_NOT_FOUND" }, { status: 401 });
     }
 
+    // RP-010 Phase 4A — Free Probe path.
+    // Non-admin users whose *effective* plan is FREE (persisted FREE, or a
+    // paid plan whose billing period has already elapsed) are routed to the
+    // lifetime probe path. Credits and Custom-Minute reservation are
+    // deliberately bypassed here — Free admission is now governed solely by
+    // probeGenerationsUsed. Admin users retain their pre-Phase-4A behaviour
+    // and always flow through reserveAndCreateJob below.
+    const now = new Date();
+    const onProbePath =
+      !dbUser.isAdmin && isOnProbePath(dbUser.plan, dbUser.planPeriodEnd, now);
+
     // Fast-path credits check using already-fetched value.
     // The authoritative atomic decrement happens below, after the rate-limit check.
     // This early exit avoids the rate-limit DB query for users definitively at 0.
-    if (!dbUser.isAdmin && (dbUser.credits ?? 0) < 1) {
+    // Probe callers skip the credit gate — probes never debit credits.
+    if (!onProbePath && !dbUser.isAdmin && (dbUser.credits ?? 0) < 1) {
       addDebugLog({
         ts: new Date().toISOString(),
         level: "warn",
@@ -403,6 +424,94 @@ export async function POST(req: Request) {
           headers: { "Retry-After": String(retryAfter) },
         }
       );
+    }
+
+    // RP-010 Phase 4A — Free Probe admission.
+    // For effective FREE (non-admin) users the counter claim and Job.create
+    // run atomically inside claimProbeAndCreateJob. No credit debit, no
+    // PeriodUsage write, no LibraryUnlock interaction. The two-lifetime cap
+    // is enforced with a conditional updateMany against the current
+    // committed row — concurrent claimers cannot exceed the limit.
+    if (onProbePath) {
+      const probeResult = await claimProbeAndCreateJob({
+        userId: dbUser.id,
+        durationSec: typeof durationSec === "number" ? durationSec : null,
+        jobData: {
+          userId: dbUser.id,
+          prompt,
+          preset: preset ?? null,
+          status: $Enums.JobStatus.QUEUED,
+          durationSec: typeof durationSec === "number" ? durationSec : null,
+          title: effectiveTitle,
+          language: normalized.language,
+          voiceGender: normalized.voiceGender,
+          voiceStyle: normalized.voiceStyle,
+          narrativeMode: normalized.narrativeMode,
+          scriptOverride: normalized.scriptOverride ?? null,
+        },
+        now,
+      });
+
+      if (!probeResult.ok) {
+        log.warn(h, "jobs:create:probe_rejected", {
+          error: probeResult.error,
+        });
+        addDebugLog({
+          ts: new Date().toISOString(),
+          level: "warn",
+          route: "/api/jobs POST",
+          userId: dbUser.id,
+          message: "Probe claim rejected",
+          data: { error: probeResult.error },
+          reqId: h.get("x-request-id") ?? undefined,
+        });
+        if (probeResult.error === "PROBE_LIMIT_REACHED") {
+          return jsonError("PROBE_LIMIT_REACHED", 402, {
+            message:
+              "Du hast deine zwei kostenlosen Probe-Generierungen bereits genutzt.",
+          });
+        }
+        if (probeResult.error === "INVALID_PROBE_DURATION") {
+          return jsonError("INVALID_PROBE_DURATION", 400, {
+            message: "Probe-Dauer muss zwischen 5 und 8 Minuten liegen.",
+          });
+        }
+        if (probeResult.error === "NOT_FREE_PLAN") {
+          // Effective plan flipped between the routing snapshot and the
+          // authoritative in-transaction read. Surface a controlled 409 so
+          // the client can retry rather than see a generic 500.
+          return jsonError("NOT_FREE_PLAN", 409, {
+            message: "Bitte kurz erneut versuchen.",
+          });
+        }
+        if (probeResult.error === "USER_NOT_FOUND") {
+          return jsonError("USER_NOT_FOUND", 401);
+        }
+        if (probeResult.error === "CONCURRENCY_CONFLICT") {
+          return jsonError("CONCURRENCY_CONFLICT", 409, {
+            message: "Bitte kurz erneut versuchen.",
+          });
+        }
+        return jsonError(probeResult.error, 400);
+      }
+
+      log.info(h, "jobs:create:probe_ok", {
+        jobId: probeResult.job.id,
+        probeGenerationsUsed: probeResult.probeGenerationsUsed,
+      });
+      addDebugLog({
+        ts: new Date().toISOString(),
+        level: "info",
+        route: "/api/jobs POST",
+        userId: dbUser.id,
+        message: "Probe claim OK",
+        data: {
+          jobId: probeResult.job.id,
+          probeGenerationsUsed: probeResult.probeGenerationsUsed,
+        },
+        reqId: h.get("x-request-id") ?? undefined,
+      });
+      return Response.json(probeResult.job, { status: 201 });
     }
 
     // RP-010 Phase 3A — Credit debit, Custom-Minute reservation and
