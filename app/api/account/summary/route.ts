@@ -1,6 +1,7 @@
 // app/api/account/summary/route.ts
 import { prisma } from "@/lib/prisma";
 import { requireAuth, jsonOk, jsonError } from "@/lib/api";
+import { resolveEntitlements } from "@/lib/entitlement/resolver";
 
 export async function GET(): Promise<Response> {
   const auth = await requireAuth();
@@ -21,11 +22,17 @@ export async function GET(): Promise<Response> {
     return jsonError("USER_NOT_FOUND", 404, { message: "User nicht gefunden." });
   }
 
+  const entitlements = await resolveEntitlements(auth.userId);
+  if (!entitlements.ok) {
+    return jsonError("USER_NOT_FOUND", 404, { message: "User nicht gefunden." });
+  }
+
   return jsonOk(
     {
       credits: user.credits,
       isAdmin: user.isAdmin,
       hasSubscription: !!user.stripeSubscriptionId,
+      entitlements: entitlements.data,
     },
     200
   );

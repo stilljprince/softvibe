@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { jsonOk, jsonError } from "@/lib/api";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/config";
+import { resolveEntitlements } from "@/lib/entitlement/resolver";
 
 export const runtime = "nodejs";
 
@@ -32,6 +33,11 @@ export async function GET(): Promise<Response> {
     return jsonError("USER_NOT_FOUND", 404, { message: "User nicht gefunden." });
   }
 
+  const entitlements = await resolveEntitlements(session.user.id);
+  if (!entitlements.ok) {
+    return jsonError("USER_NOT_FOUND", 404, { message: "User nicht gefunden." });
+  }
+
   return jsonOk(
     {
       id: user.id,
@@ -43,6 +49,7 @@ export async function GET(): Promise<Response> {
       hasSubscription: !!user.stripeSubscriptionId,
       stripeCustomerId: user.stripeCustomerId,
       createdAt: user.createdAt,
+      entitlements: entitlements.data,
     },
     200
   );
