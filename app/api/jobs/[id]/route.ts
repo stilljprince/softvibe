@@ -9,6 +9,7 @@ import {
   s3KeyFromUrl,
   s3KeyForJob,
 } from "@/lib/s3";
+import { releasePlanMinuteReservation } from "@/lib/entitlement/release";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -64,62 +65,38 @@ export async function GET(
   // the catch block could write FAILED. Detect this lazily on the next poll
   // and transition to FAILED so the client can surface a clean error.
   //
-  // Credit refund: if the function was killed before TTS started (ttsStartedAt IS NULL)
-  // and no refund was issued yet (creditRefundedAt IS NULL), we issue the refund here
-  // using the same atomic transaction pattern used in /complete — so there is no risk
-  // of double-refunding even if this stale-recovery path and a concurrent /complete
-  // somehow race.
+  // Atomicity (RP-010 Phase 3C): the FAILED write, the PLAN_MINUTES minute
+  // release AND the credit refund must all commit in the same transaction —
+  // otherwise a mid-recovery crash could leave a FAILED job with blocked
+  // minutes (status ≠ PROCESSING then hides the row from the next stale
+  // poll), or a refunded credit paired with an untouched reservation.
+  // releasePlanMinuteReservation({ refundCreditIfEligible }) fuses all three
+  // writes into one atomic bundle: on PLAN_MINUTES it takes the released
+  // branch, on legacy / FREE / admin-untagged jobs the no_reservation
+  // branch. In both branches the helper's DB-level refund guard
+  // (creditRefundedAt IS NULL AND ttsStartedAt IS NULL) is authoritative —
+  // if TTS had already started, no credit is returned even when
+  // refundCreditIfEligible is true.
+  //
+  // Admins bypass the credit debit at job creation, so refundCreditIfEligible
+  // is false for them. We fetch isAdmin from the DB (not the JWT).
   if (job.status === "PROCESSING") {
     const staleMs = parseInt(process.env.PROCESSING_STALE_MS ?? String(15 * 60 * 1000), 10);
     const staleCutoff = new Date(Date.now() - staleMs);
     if (job.updatedAt < staleCutoff) {
       const staleError = "Generation timed out. Please try again.";
 
-      const canRefund = !job.ttsStartedAt && !job.creditRefundedAt;
+      const owner = await prisma.user.findFirst({
+        where: { id: job.userId },
+        select: { isAdmin: true },
+      });
+      const ownerIsAdmin = owner?.isAdmin ?? false;
 
-      if (canRefund) {
-        // Check isAdmin before crediting (isAdmin is not in the JWT; re-fetch from DB).
-        const owner = await prisma.user.findFirst({
-          where: { id: job.userId },
-          select: { isAdmin: true },
-        });
-        const ownerIsAdmin = owner?.isAdmin ?? false;
-
-        if (!ownerIsAdmin) {
-          // Atomic: claim the refund slot and increment credits in one transaction.
-          // The WHERE guard (creditRefundedAt IS NULL AND ttsStartedAt IS NULL) ensures
-          // no double-refund even if this executes concurrently with /complete.
-          await prisma.$transaction(async (tx) => {
-            const claim = await tx.job.updateMany({
-              where: {
-                id: jobId,
-                status: "PROCESSING",
-                creditRefundedAt: null,
-                ttsStartedAt: null,
-              },
-              data: { status: "FAILED", error: staleError, creditRefundedAt: new Date() },
-            });
-            if (claim.count > 0) {
-              await tx.user.update({
-                where: { id: job.userId },
-                data: { credits: { increment: 1 } },
-              });
-            }
-          });
-        } else {
-          // Admin: just mark FAILED, no credit change.
-          await prisma.job.update({
-            where: { id: jobId },
-            data: { status: "FAILED", error: staleError },
-          });
-        }
-      } else {
-        // TTS had started or refund already issued; just set FAILED.
-        await prisma.job.update({
-          where: { id: jobId },
-          data: { status: "FAILED", error: staleError },
-        });
-      }
+      await releasePlanMinuteReservation({
+        jobId,
+        error: staleError,
+        refundCreditIfEligible: !ownerIsAdmin,
+      });
 
       const { userId, ttsStartedAt, creditRefundedAt, ...safe } = job;
       return jsonOk({ ...safe, status: "FAILED", error: staleError }, 200);

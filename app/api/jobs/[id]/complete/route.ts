@@ -24,6 +24,7 @@ console.log("[prosody] typeof applyV3Prosody =", typeof applyV3Prosody);
 // 🔹 ElevenLabs-Adapter & Voice-Resolver
 import { elevenlabs, resolveVoiceId } from "@/lib/tts/elevenlabs";
 import { finalizePlanMinuteUsage } from "@/lib/entitlement/finalization";
+import { releasePlanMinuteReservation } from "@/lib/entitlement/release";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -302,13 +303,43 @@ console.log("COMPLETE language:", job?.id, job?.language);
   }
 
   if (body.error && body.error.trim() !== "") {
-    const failed = await prisma.job.update({
-      where: { id },
-      data: {
-        status: $Enums.JobStatus.FAILED,
-        error: body.error,
-        resultUrl: job.resultUrl ?? null,
-      },
+    // Route the FAILED persist through the central release helper so
+    // PLAN_MINUTES Jobs get their reserved minutes returned AND (when
+    // eligible) their credit refunded atomically with the FAILED write.
+    // Non-PLAN_MINUTES Jobs take the helper's no_reservation branch —
+    // a plain FAILED update plus the same in-tx credit refund. The
+    // helper writes error text but not resultUrl; when present, the
+    // pre-existing resultUrl is preserved by the Job row untouched.
+    //
+    // Admins are never debited at job creation, so refundCreditIfEligible
+    // is false for them; the DB-level guard (ttsStartedAt IS NULL AND
+    // creditRefundedAt IS NULL) prevents double-refund for everyone else.
+    // Client-reported failures at this endpoint arrive before TTS starts,
+    // so the guard normally passes for non-admin callers.
+    const clientErrDbUser = await prisma.user.findFirst({
+      where: { id: session.user.id as string },
+      select: { isAdmin: true },
+    });
+    const clientErrIsAdmin = clientErrDbUser?.isAdmin ?? false;
+    const releaseResult = await releasePlanMinuteReservation({
+      jobId: id,
+      error: body.error,
+      refundCreditIfEligible: !clientErrIsAdmin,
+    });
+    if (!releaseResult.ok) {
+      addDebugLog({
+        ts: new Date().toISOString(),
+        level: "error",
+        route: "/api/jobs/[id]/complete POST",
+        userId: session.user.id as string,
+        message: "Client-failure release failed",
+        data: { id, error: releaseResult.error },
+        reqId,
+      });
+      return jsonError(releaseResult.error, 500);
+    }
+    const failed = await prisma.job.findFirst({
+      where: { id, userId: session.user.id as string },
       select: {
         id: true,
         status: true,
@@ -326,7 +357,7 @@ console.log("COMPLETE language:", job?.id, job?.language);
       route: "/api/jobs/[id]/complete POST",
       userId: session.user.id as string,
       message: "Client failed job",
-      data: { id, error: body.error },
+      data: { id, error: body.error, creditRefunded: releaseResult.creditRefunded },
       reqId,
     });
     return jsonOk(failed, 200);
@@ -365,7 +396,7 @@ console.log("COMPLETE language:", job?.id, job?.language);
     }
   }
 
-  // ─── Credit refund state ──────────────────────────────────────────────────
+  // ─── Credit refund policy ────────────────────────────────────────────────
   //
   // Business rule: 1 credit was debited atomically at POST /api/jobs creation.
   // We refund it when /complete fails BEFORE ElevenLabs TTS has been called —
@@ -373,78 +404,22 @@ console.log("COMPLETE language:", job?.id, job?.language);
   // partially fails), no automatic refund is issued because compute cost was
   // already incurred.
   //
-  // Idempotency mechanism:
-  //   • Job.ttsStartedAt is written to the DB immediately before the first
-  //     elevenlabs.speak() call (not an in-memory flag — survives crashes).
-  //   • Job.creditRefundedAt is set atomically inside a prisma.$transaction
-  //     guarded by WHERE creditRefundedAt IS NULL AND ttsStartedAt IS NULL.
-  //     Only one execution ever wins that gate, even across concurrent calls.
-  //   • The QUEUED→PROCESSING lock above ensures only one /complete call per
-  //     job reaches this code section. The DB gate is an additional belt-and-
-  //     suspenders guard that survives function restarts and future code changes.
+  // Enforcement: releasePlanMinuteReservation({ refundCreditIfEligible })
+  // performs the FAILED write, the PLAN_MINUTES minute release AND the
+  // credit refund inside one Prisma transaction. The idempotency guard
+  // (WHERE creditRefundedAt IS NULL AND ttsStartedAt IS NULL) is the
+  // authoritative "TTS never started" gate — after ttsStartedAt is set
+  // (line ~800 for multi-chunk, line ~940 for single-chunk) the guard
+  // fails and no refund is issued even when refundCreditIfEligible is true.
   //
-  // Admins bypass the credit debit at job creation; they are excluded entirely.
+  // Admins bypass the credit debit at job creation, so we pass
+  // refundCreditIfEligible = !callerIsAdmin and let the helper's DB-level
+  // guards handle the rest.
   const dbUser = await prisma.user.findFirst({
     where: { id: session.user.id as string },
     select: { isAdmin: true },
   });
   const callerIsAdmin = dbUser?.isAdmin ?? false;
-
-  /**
-   * Attempt to refund 1 credit for a pre-TTS failure.
-   *
-   * Uses an atomic DB transaction:
-   *   1. Claim the refund slot by setting Job.creditRefundedAt (only succeeds
-   *      if both creditRefundedAt IS NULL and ttsStartedAt IS NULL).
-   *   2. If the claim succeeds, increment User.credits by 1.
-   *
-   * This ensures at most one refund per job, regardless of concurrency or retries.
-   * Admin calls are short-circuited before the DB round-trip.
-   */
-  const tryRefundCredit = async (reason: string): Promise<void> => {
-    if (callerIsAdmin) return; // admins are never debited
-    try {
-      const refunded = await prisma.$transaction(async (tx) => {
-        // Atomically claim the refund slot. The WHERE guard is the idempotency key:
-        //   creditRefundedAt IS NULL → not already refunded
-        //   ttsStartedAt IS NULL     → TTS was never started (no audio rendered)
-        const claim = await tx.job.updateMany({
-          where: { id, creditRefundedAt: null, ttsStartedAt: null },
-          data: { creditRefundedAt: new Date() },
-        });
-        if (claim.count === 0) return false; // already refunded, or TTS had started
-
-        await tx.user.update({
-          where: { id: session.user.id as string },
-          data: { credits: { increment: 1 } },
-        });
-        return true;
-      });
-
-      addDebugLog({
-        ts: new Date().toISOString(),
-        level: "info",
-        route: "/api/jobs/[id]/complete POST",
-        userId: session.user.id as string,
-        message: refunded
-          ? `Credit refunded: ${reason}`
-          : `Credit refund skipped — already refunded or TTS had started (${reason})`,
-        data: { id },
-        reqId,
-      });
-    } catch (refundErr) {
-      // Never let a refund failure block the error response returned to the client.
-      addDebugLog({
-        ts: new Date().toISOString(),
-        level: "error",
-        route: "/api/jobs/[id]/complete POST",
-        userId: session.user.id as string,
-        message: "Credit refund transaction failed",
-        data: { id, error: String(refundErr) },
-        reqId,
-      });
-    }
-  };
   // ─────────────────────────────────────────────────────────────────────────
 
   let nextResultUrl = body.resultUrl ?? null;
@@ -599,12 +574,16 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
 
   if (!finalText) {
     const msg = "Script generation returned empty text";
-    await prisma.job.update({
-      where: { id },
-      data: { status: $Enums.JobStatus.FAILED, error: msg },
+    // Central release helper: PLAN_MINUTES → returns reserved minutes,
+    // sets FAILED, AND refunds the credit atomically in one tx.
+    // Non-PLAN_MINUTES → plain FAILED write with the same in-tx refund.
+    // TTS has not started yet at this point, so the refund guard passes
+    // for non-admin callers.
+    await releasePlanMinuteReservation({
+      jobId: id,
+      error: msg,
+      refundCreditIfEligible: !callerIsAdmin,
     });
-    // TTS never started — refund the credit
-    await tryRefundCredit("empty script text");
     return jsonError(msg, 500);
   }
 
@@ -618,12 +597,14 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
       const safetyMsg = isUserEditedScript
         ? "Dein Script enthält Inhalte, die für Kindergeschichten nicht erlaubt sind. Bitte überarbeite den Text."
         : "Story content did not pass safety check after repair attempt.";
-      await prisma.job.update({
-        where: { id },
-        data: { status: $Enums.JobStatus.FAILED, error: safetyMsg },
+      // Atomic FAILED + minute-release + credit refund. TTS has not started
+      // yet, so the refund guard passes for non-admin callers and the user
+      // can correct their script and retry without losing a credit.
+      await releasePlanMinuteReservation({
+        jobId: id,
+        error: safetyMsg,
+        refundCreditIfEligible: !callerIsAdmin,
       });
-      // TTS never started — refund the credit so the user can correct and retry
-      await tryRefundCredit("content safety rejection (pre-TTS)");
       return jsonError("CONTENT_SAFETY", 422, { message: safetyMsg });
     }
     kidsSafetyApplied = safeResult.text !== finalText;
@@ -824,10 +805,10 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
             }
           } catch (e) {
             const msg = e instanceof Error ? e.message : "Store audio failed";
-            await prisma.job.update({
-              where: { id },
-              data: { status: $Enums.JobStatus.FAILED, error: msg },
-            });
+            // Release the PLAN_MINUTES reservation — TTS produced audio but
+            // storage failed, and Custom Minutes bill only on successful
+            // generation (no partial-consumption accounting).
+            await releasePlanMinuteReservation({ jobId: id, error: msg });
             return jsonError(msg, 500);
           }
         }
@@ -896,12 +877,12 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
       const maxChars = getMaxCharsPerRequest();
       if (baseText.length > maxChars) {
         const msg = `Der generierte Text ist zu lang für eine einzelne Audio-Datei (${baseText.length} Zeichen, Maximum ${maxChars}). Bitte kürze deinen Prompt oder wähle einen kürzeren Inhalt.`;
-        await prisma.job.update({
-          where: { id },
-          data: { status: $Enums.JobStatus.FAILED, error: msg },
+        // TTS has not started yet — atomic FAILED + minute release + refund.
+        await releasePlanMinuteReservation({
+          jobId: id,
+          error: msg,
+          refundCreditIfEligible: !callerIsAdmin,
         });
-        // TTS never started — refund the credit
-        await tryRefundCredit("script too long for single-chunk TTS");
         return jsonError(msg, 422);
       }
 
@@ -971,22 +952,24 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
         }
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Store audio failed";
-        await prisma.job.update({
-          where: { id },
-          data: { status: $Enums.JobStatus.FAILED, error: msg },
-        });
+        // Release the PLAN_MINUTES reservation — audio rendered but
+        // storage failed; no partial-consumption accounting.
+        await releasePlanMinuteReservation({ jobId: id, error: msg });
         return jsonError(msg, 500);
       }
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : "TTS failed";
-    await prisma.job.update({
-      where: { id },
-      data: { status: $Enums.JobStatus.FAILED, error: msg },
+    // Atomic FAILED + minute release + refund. The DB-level guard inside
+    // the helper (WHERE ttsStartedAt IS NULL) is authoritative: if the
+    // exception happened after ttsStartedAt was persisted, no refund
+    // fires; if before, the credit is returned atomically with the
+    // FAILED and minute-release writes.
+    await releasePlanMinuteReservation({
+      jobId: id,
+      error: msg,
+      refundCreditIfEligible: !callerIsAdmin,
     });
-    // Only refund if TTS had not started yet (e.g. OpenAI failure, voiceId error,
-    // or exception thrown before the first elevenlabs.speak() call)
-    await tryRefundCredit("exception before or during pre-TTS setup");
     return jsonError(msg, 500);
   }
 }

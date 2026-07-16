@@ -4,6 +4,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/config";
 import { prisma } from "@/lib/prisma";
 import { jsonOk, jsonError } from "@/lib/api";
+import { releasePlanMinuteReservation } from "@/lib/entitlement/release";
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
@@ -44,12 +45,24 @@ export async function POST(req: Request) {
     return jsonError("Forbidden", 403);
   }
 
-  const updated = await prisma.job.update({
+  const errorText = "Vom System / User manuell auf FAILED gesetzt.";
+
+  // RP-010 Phase 3C — route the FAILED persist through the central release
+  // helper so PLAN_MINUTES reservations return their reserved minutes
+  // atomically with the FAILED write. Non-PLAN_MINUTES Jobs take the
+  // helper's no_reservation branch — a plain FAILED update, preserving
+  // pre-Phase-3C behaviour for legacy / FREE / admin Jobs. Auth and
+  // system-secret handling above is unchanged.
+  const releaseResult = await releasePlanMinuteReservation({
+    jobId,
+    error: errorText,
+  });
+  if (!releaseResult.ok) {
+    return jsonError(releaseResult.error, 500);
+  }
+
+  const updated = await prisma.job.findUnique({
     where: { id: jobId },
-    data: {
-      status: "FAILED",
-      error: "Vom System / User manuell auf FAILED gesetzt.",
-    },
     select: {
       id: true,
       status: true,
