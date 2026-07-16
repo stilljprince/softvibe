@@ -11,6 +11,10 @@ import { toErrData } from "@/lib/error";
 import { jsonOk, jsonError } from "@/lib/api";
 import { makeTitleFromPrompt } from "@/lib/title";
 import { runPromptGate } from "@/lib/validation/promptGate";
+import {
+  reserveAndCreateJob,
+  minutesFromDurationSec,
+} from "@/lib/entitlement/reservation";
 console.log("[BOOT] jobs route loaded from:", __filename);
 export const runtime = "nodejs";
 
@@ -401,33 +405,21 @@ export async function POST(req: Request) {
       );
     }
 
-    // Atomic credits decrement — authoritative gate.
-    // Single UPDATE WHERE credits >= 1 prevents any race between concurrent
-    // requests from the same user. No prior read, no separate decrement later.
-    if (!dbUser.isAdmin) {
-      const creditRes = await prisma.user.updateMany({
-        where: { id: dbUser.id, credits: { gte: 1 } },
-        data: { credits: { decrement: 1 } },
-      });
-
-      if (creditRes.count === 0) {
-        addDebugLog({
-          ts: new Date().toISOString(),
-          level: "warn",
-          route: "/api/jobs POST",
-          userId: dbUser.id,
-          message: "No credits left (atomic gate)",
-          reqId: h.get("x-request-id"),
-        });
-        return Response.json(
-          { error: "NO_CREDITS", message: "Du hast aktuell keine Credits mehr. Bitte lade dein Guthaben auf." },
-          { status: 402 }
-        );
-      }
-    }
-
-    const job = await prisma.job.create({
-      data: {
+    // RP-010 Phase 3A — Credit debit, Custom-Minute reservation and
+    // Job.create all run inside the same Prisma transaction. If any step
+    // fails the whole transaction rolls back, so a decremented credit can
+    // never remain without its matching Job, and a PLAN_MINUTES Job can
+    // never exist without a matching PeriodUsage increment. FREE / no-period
+    // / zero-duration cases short-circuit to an untagged Job through the
+    // same call. No separate credit refund path exists any more.
+    const requestedMinutes = minutesFromDurationSec(
+      typeof durationSec === "number" ? durationSec : null
+    );
+    const reservation = await reserveAndCreateJob({
+      userId: dbUser.id,
+      isAdmin: dbUser.isAdmin,
+      requestedMinutes,
+      jobData: {
         userId: dbUser.id,
         prompt,
         preset: preset ?? null,
@@ -440,7 +432,56 @@ export async function POST(req: Request) {
         narrativeMode: normalized.narrativeMode,
         scriptOverride: normalized.scriptOverride ?? null,
       },
-      select: { id: true, status: true, title: true, prompt: true },
+    });
+
+    if (!reservation.ok) {
+      log.warn(h, "jobs:create:reservation_rejected", {
+        error: reservation.error,
+      });
+      addDebugLog({
+        ts: new Date().toISOString(),
+        level: "warn",
+        route: "/api/jobs POST",
+        userId: dbUser.id,
+        message: "Reservation rejected",
+        data: { error: reservation.error },
+        reqId: h.get("x-request-id") ?? undefined,
+      });
+      if (reservation.error === "NO_CREDITS") {
+        return jsonError("NO_CREDITS", 402, {
+          message:
+            "Du hast aktuell keine Credits mehr. Bitte lade dein Guthaben auf.",
+        });
+      }
+      if (reservation.error === "INSUFFICIENT_MINUTES") {
+        return jsonError("INSUFFICIENT_MINUTES", 402, {
+          message:
+            "Du hast dein monatliches Custom-Minuten-Kontingent aufgebraucht.",
+        });
+      }
+      if (reservation.error === "USER_NOT_FOUND") {
+        return jsonError("USER_NOT_FOUND", 401);
+      }
+      if (reservation.error === "CONCURRENCY_CONFLICT") {
+        // Two writers raced for the same period's first PeriodUsage row and
+        // both retries collided. Nothing is committed — surface a controlled
+        // 409 so clients can retry rather than see a generic 500.
+        return jsonError("CONCURRENCY_CONFLICT", 409, {
+          message: "Bitte kurz erneut versuchen.",
+        });
+      }
+      return jsonError(reservation.error, 400);
+    }
+
+    const job = reservation.job;
+    addDebugLog({
+      ts: new Date().toISOString(),
+      level: "info",
+      route: "/api/jobs POST",
+      userId: dbUser.id,
+      message: "Reservation result",
+      data: { jobId: job.id, kind: reservation.reservation },
+      reqId: h.get("x-request-id") ?? undefined,
     });
 
     log.info(h, "jobs:create:ok", { jobId: job.id });
