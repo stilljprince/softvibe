@@ -5,6 +5,8 @@ import { authOptions } from "@/lib/auth/config";
 import { prisma } from "@/lib/prisma";
 import { jsonOk, jsonError } from "@/lib/api";
 import { releasePlanMinuteReservation } from "@/lib/entitlement/release";
+import { restoreProbeOnTerminalFailure } from "@/lib/entitlement/probe-restoration";
+import { $Enums } from "@prisma/client";
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
@@ -34,6 +36,9 @@ export async function POST(req: Request) {
     select: {
       id: true,
       userId: true,
+      // Phase 4A-2: PROBE-tagged Jobs must return their lifetime slot on
+      // manual /fail via restoreProbeOnTerminalFailure, not release.ts.
+      entitlementKind: true,
     },
   });
 
@@ -47,18 +52,36 @@ export async function POST(req: Request) {
 
   const errorText = "Vom System / User manuell auf FAILED gesetzt.";
 
-  // RP-010 Phase 3C — route the FAILED persist through the central release
-  // helper so PLAN_MINUTES reservations return their reserved minutes
-  // atomically with the FAILED write. Non-PLAN_MINUTES Jobs take the
-  // helper's no_reservation branch — a plain FAILED update, preserving
-  // pre-Phase-3C behaviour for legacy / FREE / admin Jobs. Auth and
-  // system-secret handling above is unchanged.
-  const releaseResult = await releasePlanMinuteReservation({
-    jobId,
-    error: errorText,
-  });
-  if (!releaseResult.ok) {
-    return jsonError(releaseResult.error, 500);
+  // Phase 4A-2 dispatcher:
+  //   * PROBE-tagged Jobs route through restoreProbeOnTerminalFailure —
+  //     the lifetime probe slot is returned atomically with the FAILED
+  //     write. Credits and PeriodUsage are never touched for PROBE. A
+  //     repeated /fail is a no-op (already_restored) via the CAS on
+  //     Job.probeRestoredAt.
+  //   * Non-PROBE Jobs continue through releasePlanMinuteReservation
+  //     (Phase 3C behaviour): PLAN_MINUTES reservations return their
+  //     reserved minutes atomically with the FAILED write; legacy / FREE
+  //     / admin Jobs take the no_reservation branch (plain FAILED).
+  // Auth and system-secret handling above is unchanged. refundCreditIfEligible
+  // is intentionally not passed here — manual /fail must not introduce a
+  // new credit-refund policy on top of the pre-Phase-4A-2 behaviour.
+  if (job.entitlementKind === $Enums.EntitlementKind.PROBE) {
+    const restoreResult = await restoreProbeOnTerminalFailure({
+      jobId,
+      error: errorText,
+      persistFailedStatus: true,
+    });
+    if (!restoreResult.ok) {
+      return jsonError(restoreResult.error, 500);
+    }
+  } else {
+    const releaseResult = await releasePlanMinuteReservation({
+      jobId,
+      error: errorText,
+    });
+    if (!releaseResult.ok) {
+      return jsonError(releaseResult.error, 500);
+    }
   }
 
   const updated = await prisma.job.findUnique({

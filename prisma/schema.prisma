@@ -115,6 +115,14 @@ model Job {
   usageFinalizedAt DateTime?
   usageReleasedAt  DateTime?
 
+  // Probe restoration audit (RP-010 Phase 4A-2).
+  // Set exactly once when a terminal PROBE-job failure returns its lifetime
+  // slot to User.probeGenerationsUsed. Acts as an idempotency gate so a
+  // repeated Failure/Recovery call cannot double-restore. Deliberately
+  // separate from creditRefundedAt / usageReleasedAt / usageFinalizedAt:
+  // the probe-slot system is not credits and not plan-minutes.
+  probeRestoredAt  DateTime?
+
   // Stable mapping to the PeriodUsage row a PLAN_MINUTES reservation was
   // debited against (RP-010 Phase 3B). Set at reservation time so finalize
   // can move minutes back against the *original* period even after the

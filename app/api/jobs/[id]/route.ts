@@ -10,6 +10,8 @@ import {
   s3KeyForJob,
 } from "@/lib/s3";
 import { releasePlanMinuteReservation } from "@/lib/entitlement/release";
+import { restoreProbeOnTerminalFailure } from "@/lib/entitlement/probe-restoration";
+import { $Enums } from "@prisma/client";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -49,6 +51,10 @@ export async function GET(
       durationSec: true,
       ttsStartedAt: true,     // needed for stale-recovery credit refund logic
       creditRefundedAt: true, // needed to guard against duplicate refunds on stale-recovery
+      // Phase 4A-2: PROBE-tagged Jobs must return their lifetime slot on
+      // stale terminal failure via restoreProbeOnTerminalFailure, not
+      // release.ts (which owns credits / plan-minutes only).
+      entitlementKind: true,
     },
   });
 
@@ -65,18 +71,24 @@ export async function GET(
   // the catch block could write FAILED. Detect this lazily on the next poll
   // and transition to FAILED so the client can surface a clean error.
   //
-  // Atomicity (RP-010 Phase 3C): the FAILED write, the PLAN_MINUTES minute
-  // release AND the credit refund must all commit in the same transaction —
-  // otherwise a mid-recovery crash could leave a FAILED job with blocked
-  // minutes (status ≠ PROCESSING then hides the row from the next stale
-  // poll), or a refunded credit paired with an untouched reservation.
-  // releasePlanMinuteReservation({ refundCreditIfEligible }) fuses all three
-  // writes into one atomic bundle: on PLAN_MINUTES it takes the released
-  // branch, on legacy / FREE / admin-untagged jobs the no_reservation
-  // branch. In both branches the helper's DB-level refund guard
-  // (creditRefundedAt IS NULL AND ttsStartedAt IS NULL) is authoritative —
-  // if TTS had already started, no credit is returned even when
-  // refundCreditIfEligible is true.
+  // Atomicity (RP-010 Phase 3C / 4A-2): the FAILED write plus the appropriate
+  // usage-return must all commit in the same transaction — otherwise a
+  // mid-recovery crash could leave a FAILED job with blocked resources.
+  //
+  //   * PROBE-tagged Jobs route through restoreProbeOnTerminalFailure —
+  //     the lifetime probe slot is returned atomically with the FAILED
+  //     write. Credits, PeriodUsage and reservedMinutes are never touched
+  //     for PROBE. A repeated stale-recovery poll is a no-op
+  //     (already_restored) because the CAS on Job.probeRestoredAt is the
+  //     idempotency gate.
+  //
+  //   * Non-PROBE Jobs go through releasePlanMinuteReservation. On
+  //     PLAN_MINUTES it takes the released branch; on legacy / FREE / admin
+  //     untagged jobs the no_reservation branch. In both branches the
+  //     helper's DB-level refund guard (creditRefundedAt IS NULL AND
+  //     ttsStartedAt IS NULL) is authoritative — if TTS had already
+  //     started, no credit is returned even when refundCreditIfEligible
+  //     is true.
   //
   // Admins bypass the credit debit at job creation, so refundCreditIfEligible
   // is false for them. We fetch isAdmin from the DB (not the JWT).
@@ -86,24 +98,35 @@ export async function GET(
     if (job.updatedAt < staleCutoff) {
       const staleError = "Generation timed out. Please try again.";
 
-      const owner = await prisma.user.findFirst({
-        where: { id: job.userId },
-        select: { isAdmin: true },
-      });
-      const ownerIsAdmin = owner?.isAdmin ?? false;
+      if (job.entitlementKind === $Enums.EntitlementKind.PROBE) {
+        // Probe restoration: FAILED + counter decrement in a single tx.
+        // Credits and PeriodUsage are irrelevant for PROBE — probe slots
+        // are their own bucket.
+        await restoreProbeOnTerminalFailure({
+          jobId,
+          error: staleError,
+          persistFailedStatus: true,
+        });
+      } else {
+        const owner = await prisma.user.findFirst({
+          where: { id: job.userId },
+          select: { isAdmin: true },
+        });
+        const ownerIsAdmin = owner?.isAdmin ?? false;
 
-      await releasePlanMinuteReservation({
-        jobId,
-        error: staleError,
-        refundCreditIfEligible: !ownerIsAdmin,
-      });
+        await releasePlanMinuteReservation({
+          jobId,
+          error: staleError,
+          refundCreditIfEligible: !ownerIsAdmin,
+        });
+      }
 
-      const { userId, ttsStartedAt, creditRefundedAt, ...safe } = job;
+      const { userId, ttsStartedAt, creditRefundedAt, entitlementKind, ...safe } = job;
       return jsonOk({ ...safe, status: "FAILED", error: staleError }, 200);
     }
   }
 
-  const { userId, ttsStartedAt, creditRefundedAt, ...safe } = job;
+  const { userId, ttsStartedAt, creditRefundedAt, entitlementKind, ...safe } = job;
   return jsonOk(safe, 200);
 }
 

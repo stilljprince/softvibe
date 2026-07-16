@@ -25,6 +25,7 @@ console.log("[prosody] typeof applyV3Prosody =", typeof applyV3Prosody);
 import { elevenlabs, resolveVoiceId } from "@/lib/tts/elevenlabs";
 import { finalizePlanMinuteUsage } from "@/lib/entitlement/finalization";
 import { releasePlanMinuteReservation } from "@/lib/entitlement/release";
+import { restoreProbeOnTerminalFailure } from "@/lib/entitlement/probe-restoration";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -211,6 +212,44 @@ function localAbsForJobPart(baseDirAbs: string, jobId: string, partIndex: number
   return `${baseDirAbs}/${jobId}/part-${n}.mp3`;
 }
 
+/**
+ * RP-010 Phase 4A-2 dispatcher for terminal Job failures.
+ *
+ * PROBE-tagged Jobs must NOT flow through releasePlanMinuteReservation
+ * (which owns credits + plan-minutes lifecycles); they instead route to
+ * restoreProbeOnTerminalFailure, which atomically writes FAILED + returns
+ * the lifetime probe slot to User.probeGenerationsUsed. Non-PROBE Jobs
+ * (PLAN_MINUTES, legacy, admin) continue through release.ts as before —
+ * PROBE never touches credits and release never touches probe counters.
+ *
+ * Returns a normalized { ok, error? } shape so all failure branches in the
+ * handler can call this uniformly regardless of which underlying helper
+ * ran.
+ */
+async function persistTerminalFailure(
+  jobId: string,
+  entitlementKind: $Enums.EntitlementKind | null | undefined,
+  errorText: string,
+  opts: { refundCreditIfEligible?: boolean } = {}
+): Promise<{ ok: true; kind: "probe" | "release" } | { ok: false; error: string }> {
+  if (entitlementKind === $Enums.EntitlementKind.PROBE) {
+    const r = await restoreProbeOnTerminalFailure({
+      jobId,
+      error: errorText,
+      persistFailedStatus: true,
+    });
+    if (!r.ok) return { ok: false, error: r.error };
+    return { ok: true, kind: "probe" };
+  }
+  const r = await releasePlanMinuteReservation({
+    jobId,
+    error: errorText,
+    refundCreditIfEligible: opts.refundCreditIfEligible,
+  });
+  if (!r.ok) return { ok: false, error: r.error };
+  return { ok: true, kind: "release" };
+}
+
 export async function POST(
   req: Request,
   ctx: { params: Promise<{ id: string }> }
@@ -273,6 +312,10 @@ export async function POST(
       voiceGender: true,
       narrativeMode: true,
       scriptOverride: true,
+      // Required by the terminal-failure dispatcher (Phase 4A-2). PROBE-tagged
+      // Jobs must return their lifetime slot via restoreProbeOnTerminalFailure
+      // instead of the PLAN_MINUTES/legacy release helper.
+      entitlementKind: true,
     },
   });
   if (!job) {
@@ -303,40 +346,47 @@ console.log("COMPLETE language:", job?.id, job?.language);
   }
 
   if (body.error && body.error.trim() !== "") {
-    // Route the FAILED persist through the central release helper so
-    // PLAN_MINUTES Jobs get their reserved minutes returned AND (when
-    // eligible) their credit refunded atomically with the FAILED write.
-    // Non-PLAN_MINUTES Jobs take the helper's no_reservation branch —
-    // a plain FAILED update plus the same in-tx credit refund. The
-    // helper writes error text but not resultUrl; when present, the
+    // Route the FAILED persist through the Phase 4A-2 dispatcher so:
+    //   * PROBE-tagged Jobs return their lifetime slot atomically with
+    //     the FAILED write (restoreProbeOnTerminalFailure). Credits and
+    //     PeriodUsage are never touched for PROBE.
+    //   * PLAN_MINUTES Jobs get their reserved minutes returned AND
+    //     (when eligible) their credit refunded atomically with the
+    //     FAILED write (releasePlanMinuteReservation, released branch).
+    //   * Legacy / admin / untagged Jobs take the release helper's
+    //     no_reservation branch — a plain FAILED update plus the same
+    //     in-tx credit refund.
+    // The helper writes error text but not resultUrl; when present, the
     // pre-existing resultUrl is preserved by the Job row untouched.
     //
     // Admins are never debited at job creation, so refundCreditIfEligible
-    // is false for them; the DB-level guard (ttsStartedAt IS NULL AND
-    // creditRefundedAt IS NULL) prevents double-refund for everyone else.
-    // Client-reported failures at this endpoint arrive before TTS starts,
-    // so the guard normally passes for non-admin callers.
+    // is false for them; the release helper's DB-level guard (ttsStartedAt
+    // IS NULL AND creditRefundedAt IS NULL) prevents double-refund for
+    // everyone else. Client-reported failures at this endpoint arrive
+    // before TTS starts, so the guard normally passes for non-admin
+    // callers.
     const clientErrDbUser = await prisma.user.findFirst({
       where: { id: session.user.id as string },
       select: { isAdmin: true },
     });
     const clientErrIsAdmin = clientErrDbUser?.isAdmin ?? false;
-    const releaseResult = await releasePlanMinuteReservation({
-      jobId: id,
-      error: body.error,
-      refundCreditIfEligible: !clientErrIsAdmin,
-    });
-    if (!releaseResult.ok) {
+    const failResult = await persistTerminalFailure(
+      id,
+      job.entitlementKind,
+      body.error,
+      { refundCreditIfEligible: !clientErrIsAdmin }
+    );
+    if (!failResult.ok) {
       addDebugLog({
         ts: new Date().toISOString(),
         level: "error",
         route: "/api/jobs/[id]/complete POST",
         userId: session.user.id as string,
-        message: "Client-failure release failed",
-        data: { id, error: releaseResult.error },
+        message: "Client-failure persist failed",
+        data: { id, error: failResult.error },
         reqId,
       });
-      return jsonError(releaseResult.error, 500);
+      return jsonError(failResult.error, 500);
     }
     const failed = await prisma.job.findFirst({
       where: { id, userId: session.user.id as string },
@@ -357,7 +407,7 @@ console.log("COMPLETE language:", job?.id, job?.language);
       route: "/api/jobs/[id]/complete POST",
       userId: session.user.id as string,
       message: "Client failed job",
-      data: { id, error: body.error, creditRefunded: releaseResult.creditRefunded },
+      data: { id, error: body.error, failureKind: failResult.kind },
       reqId,
     });
     return jsonOk(failed, 200);
@@ -574,14 +624,11 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
 
   if (!finalText) {
     const msg = "Script generation returned empty text";
-    // Central release helper: PLAN_MINUTES → returns reserved minutes,
-    // sets FAILED, AND refunds the credit atomically in one tx.
-    // Non-PLAN_MINUTES → plain FAILED write with the same in-tx refund.
-    // TTS has not started yet at this point, so the refund guard passes
-    // for non-admin callers.
-    await releasePlanMinuteReservation({
-      jobId: id,
-      error: msg,
+    // Phase 4A-2 dispatcher: PROBE → restore lifetime slot; PLAN_MINUTES →
+    // release reserved minutes + credit refund; legacy → plain FAILED +
+    // refund. TTS has not started yet, so the refund guard passes for
+    // non-admin non-PROBE callers.
+    await persistTerminalFailure(id, job.entitlementKind, msg, {
       refundCreditIfEligible: !callerIsAdmin,
     });
     return jsonError(msg, 500);
@@ -597,12 +644,12 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
       const safetyMsg = isUserEditedScript
         ? "Dein Script enthält Inhalte, die für Kindergeschichten nicht erlaubt sind. Bitte überarbeite den Text."
         : "Story content did not pass safety check after repair attempt.";
-      // Atomic FAILED + minute-release + credit refund. TTS has not started
-      // yet, so the refund guard passes for non-admin callers and the user
-      // can correct their script and retry without losing a credit.
-      await releasePlanMinuteReservation({
-        jobId: id,
-        error: safetyMsg,
+      // Phase 4A-2 dispatcher: PROBE → restore lifetime slot + FAILED;
+      // otherwise FAILED + minute release + credit refund. TTS has not
+      // started yet, so the refund guard passes for non-admin non-PROBE
+      // callers and the user can correct their script and retry without
+      // losing a credit.
+      await persistTerminalFailure(id, job.entitlementKind, safetyMsg, {
         refundCreditIfEligible: !callerIsAdmin,
       });
       return jsonError("CONTENT_SAFETY", 422, { message: safetyMsg });
@@ -805,10 +852,14 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
             }
           } catch (e) {
             const msg = e instanceof Error ? e.message : "Store audio failed";
-            // Release the PLAN_MINUTES reservation — TTS produced audio but
-            // storage failed, and Custom Minutes bill only on successful
-            // generation (no partial-consumption accounting).
-            await releasePlanMinuteReservation({ jobId: id, error: msg });
+            // Phase 4A-2 dispatcher: PROBE → restore lifetime slot + FAILED
+            // (probe restoration is independent of ttsStartedAt — a probe
+            // slot is only spent on DONE, never on partial rendering).
+            // Otherwise release the PLAN_MINUTES reservation — Custom Minutes
+            // bill only on successful generation (no partial-consumption
+            // accounting). refundCreditIfEligible is omitted here (post-TTS
+            // storage failure — matches pre-Phase-4A-2 behaviour).
+            await persistTerminalFailure(id, job.entitlementKind, msg);
             return jsonError(msg, 500);
           }
         }
@@ -877,10 +928,11 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
       const maxChars = getMaxCharsPerRequest();
       if (baseText.length > maxChars) {
         const msg = `Der generierte Text ist zu lang für eine einzelne Audio-Datei (${baseText.length} Zeichen, Maximum ${maxChars}). Bitte kürze deinen Prompt oder wähle einen kürzeren Inhalt.`;
-        // TTS has not started yet — atomic FAILED + minute release + refund.
-        await releasePlanMinuteReservation({
-          jobId: id,
-          error: msg,
+        // Phase 4A-2 dispatcher: PROBE → restore lifetime slot + FAILED;
+        // otherwise atomic FAILED + minute release + refund. TTS has not
+        // started yet, so the release helper's refund guard passes for
+        // non-admin non-PROBE callers.
+        await persistTerminalFailure(id, job.entitlementKind, msg, {
           refundCreditIfEligible: !callerIsAdmin,
         });
         return jsonError(msg, 422);
@@ -952,22 +1004,26 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
         }
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Store audio failed";
-        // Release the PLAN_MINUTES reservation — audio rendered but
-        // storage failed; no partial-consumption accounting.
-        await releasePlanMinuteReservation({ jobId: id, error: msg });
+        // Phase 4A-2 dispatcher: PROBE → restore lifetime slot + FAILED
+        // (independent of ttsStartedAt — probe slots are only spent on
+        // DONE). Otherwise release the PLAN_MINUTES reservation — audio
+        // rendered but storage failed; no partial-consumption accounting
+        // and refundCreditIfEligible is intentionally omitted (post-TTS).
+        await persistTerminalFailure(id, job.entitlementKind, msg);
         return jsonError(msg, 500);
       }
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : "TTS failed";
-    // Atomic FAILED + minute release + refund. The DB-level guard inside
-    // the helper (WHERE ttsStartedAt IS NULL) is authoritative: if the
-    // exception happened after ttsStartedAt was persisted, no refund
+    // Phase 4A-2 dispatcher: PROBE → restore lifetime slot + FAILED,
+    // atomically. Probe slots are only spent on DONE, so restoration
+    // fires regardless of whether ttsStartedAt was already persisted.
+    // For non-PROBE Jobs the release helper's DB-level guard
+    // (WHERE ttsStartedAt IS NULL) is authoritative: if the exception
+    // happened after ttsStartedAt was persisted, no credit refund
     // fires; if before, the credit is returned atomically with the
     // FAILED and minute-release writes.
-    await releasePlanMinuteReservation({
-      jobId: id,
-      error: msg,
+    await persistTerminalFailure(id, job.entitlementKind, msg, {
       refundCreditIfEligible: !callerIsAdmin,
     });
     return jsonError(msg, 500);
