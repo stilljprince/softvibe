@@ -14,15 +14,19 @@ export const runtime = "nodejs";
 
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
 
-type LegacyPlanId = "starter" | "pro" | "ultra";
-
-function creditsForPlan(rawPlan: string | null | undefined): number {
-  const plan = (rawPlan ?? "").toLowerCase() as LegacyPlanId | "";
-  if (plan === "starter") return 5000;
+// Legacy Credits-Gutschrift (Pre-RP-010) — nur noch für Alt-Metadata "pro"
+// bzw. "ultra" relevant, falls Stripe einen alten Checkout-Event wiederholt.
+// Für die aktuellen MVP-Pläne "starter" und "premium" ist die Entitlement-
+// Aktivierung ausschließlich über User.plan / PeriodUsage autoritativ; ein
+// Credits-Increment wird deshalb bewusst nicht mehr vorgenommen. Kein neuer
+// arbitrarier Premium-Credits-Wert wird eingeführt.
+function legacyCreditsForPlan(
+  rawPlan: string | null | undefined
+): number | null {
+  const plan = (rawPlan ?? "").toLowerCase();
   if (plan === "pro") return 20000;
   if (plan === "ultra") return 100000;
-  // Fallback, falls metadata.plan komisch ist
-  return 5000;
+  return null;
 }
 
 // ---------- helpers (RP-010 Phase 2B-2) -----------------------------------
@@ -219,8 +223,9 @@ export async function POST(req: Request) {
 
   try {
     switch (event.type) {
-      // ✅ Checkout abgeschlossen → Stripe-Customer + Subscription + Credits
-      //    + (RP-010 2B-2) Plan & Billing-Period synchronisieren
+      // ✅ Checkout abgeschlossen → Stripe-Refs sichern und (bei Subscription)
+      //    Plan & Billing-Period synchronisieren. Legacy-Credits werden für
+      //    Starter/Premium bewusst nicht mehr gutgeschrieben (siehe unten).
       case "checkout.session.completed": {
         const session = event.data.object as Stripe.Checkout.Session;
 
@@ -249,14 +254,18 @@ export async function POST(req: Request) {
           break;
         }
 
-        // 🔸 Bestehendes Verhalten: Credits gutschreiben + Stripe-Refs sichern.
-        //    Wird UNVERÄNDERT beibehalten (Change-Budget-Regel, keine Credits-
-        //    Migration in dieser Phase).
-        const creditsToAdd = creditsForPlan(planMeta);
+        // 🔸 Stripe-Referenzen sichern. Für Starter/Premium (MVP) wird die
+        //    Entitlement-Aktivierung ausschließlich über syncSubscriptionToUser
+        //    → User.plan / planPeriod{Start,End} getragen. Legacy-Credits
+        //    werden für den neuen Plan-Flow nicht mehr gutgeschrieben; nur
+        //    replizierte Alt-Events mit metadata.plan "pro"/"ultra" behalten
+        //    ihr ursprüngliches Verhalten.
+        const data: Prisma.UserUpdateInput = {};
 
-        const data: Prisma.UserUpdateInput = {
-          credits: { increment: creditsToAdd },
-        };
+        const legacyCredits = legacyCreditsForPlan(planMeta);
+        if (legacyCredits !== null) {
+          data.credits = { increment: legacyCredits };
+        }
 
         if (customerId) {
           data.stripeCustomerId = customerId;
@@ -265,10 +274,12 @@ export async function POST(req: Request) {
           data.stripeSubscriptionId = subscriptionId;
         }
 
-        await prisma.user.update({
-          where: { id: userIdHint },
-          data,
-        });
+        if (Object.keys(data).length > 0) {
+          await prisma.user.update({
+            where: { id: userIdHint },
+            data,
+          });
+        }
 
         // 🔸 RP-010 2B-2: nur bei echten Subscription-Checkouts Plan/Periode
         //    aus Stripe holen. One-time Payments (mode=payment) lassen Plan

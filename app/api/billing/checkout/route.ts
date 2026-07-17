@@ -5,13 +5,24 @@ import { jsonOk, jsonError, readJsonSafe, requireAuth } from "@/lib/api";
 
 export const runtime = "nodejs";
 
-type PlanId = "starter" | "pro" | "ultra";
+// Only the two MVP plans are purchasable. The server — never the client —
+// resolves the Stripe Price ID.
+type PlanId = "starter" | "premium";
 
 type CheckoutBody = {
-  plan?: PlanId;
-  priceId?: string;
-  mode?: "payment" | "subscription";
+  plan?: unknown;
 };
+
+// Canonical server-side mapping. Any purchasable plan added here must have a
+// matching STRIPE_PRICE_<PLAN> env var configured in the deployment target.
+const PLAN_ENV_KEY: Record<PlanId, string> = {
+  starter: "STRIPE_PRICE_STARTER",
+  premium: "STRIPE_PRICE_PREMIUM",
+};
+
+function isPurchasablePlan(value: unknown): value is PlanId {
+  return value === "starter" || value === "premium";
+}
 
 function getBaseUrl(): string {
   // In Dev bevorzugt localhost/NEXTAUTH_URL
@@ -26,27 +37,6 @@ function getBaseUrl(): string {
   if (process.env.NEXTAUTH_URL) return process.env.NEXTAUTH_URL;
   return "http://localhost:3000";
 }
-function resolvePriceId(body: CheckoutBody): { priceId: string; plan: PlanId | null } | null {
-  // 1) explizit vom Client geschickt?
-  if (body.priceId && body.priceId.trim() !== "") {
-    return { priceId: body.priceId.trim(), plan: body.plan ?? null };
-  }
-
-  // 2) Plan → env
-  const plan: PlanId = body.plan ?? "starter";
-
-  const envKey =
-    plan === "starter"
-      ? "STRIPE_PRICE_STARTER"
-      : plan === "pro"
-      ? "STRIPE_PRICE_PRO"
-      : "STRIPE_PRICE_ULTRA";
-
-  const fromEnv = process.env[envKey];
-  if (!fromEnv) return null;
-
-  return { priceId: fromEnv, plan };
-}
 
 export async function POST(req: Request): Promise<Response> {
   // 🔐 Auth
@@ -58,18 +48,26 @@ export async function POST(req: Request): Promise<Response> {
   const userId = auth.userId;
   const body = (await readJsonSafe<CheckoutBody>(req)) ?? {};
 
-  // 🎯 Price bestimmen
-  const resolved = resolvePriceId(body);
-  if (!resolved) {
-    return jsonError("MISSING_PRICE", 400, {
-      message: "Kein gültiger Plan/Price konfiguriert.",
+  // 🎯 Plan validieren — Server bestimmt den Stripe-Price ausschließlich
+  //    selbst. Client-Preis-IDs oder abweichende Modi werden nicht akzeptiert.
+  if (!isPurchasablePlan(body.plan)) {
+    return jsonError("INVALID_PLAN", 400, {
+      message:
+        "Ungültiger Plan. Es können ausschließlich Starter oder Premium gewählt werden.",
     });
   }
-  const { priceId, plan } = resolved;
+  const plan: PlanId = body.plan;
 
-  // 💳 Mode (Zahlart): default payment
-  const mode: "payment" | "subscription" =
-    body.mode === "subscription" ? "subscription" : "payment";
+  const priceId = process.env[PLAN_ENV_KEY[plan]];
+  if (!priceId || priceId.trim() === "") {
+    console.error(
+      "[billing/checkout] Serverseitige Stripe-Price-Konfiguration fehlt",
+      { plan, envKey: PLAN_ENV_KEY[plan] }
+    );
+    return jsonError("PLAN_NOT_CONFIGURED", 500, {
+      message: "Der gewählte Plan ist momentan nicht verfügbar.",
+    });
+  }
 
   // 👤 User laden
   const user = await prisma.user.findUnique({
@@ -91,12 +89,12 @@ export async function POST(req: Request): Promise<Response> {
   // Admins brauchen keinen Checkout
   if (user.isAdmin) {
     return jsonError("ADMIN_NO_CHECKOUT", 400, {
-      message: "Admin-Accounts benötigen keinen Kauf von Credits.",
+      message: "Admin-Accounts benötigen kein kostenpflichtiges Abonnement.",
     });
   }
 
-// 🚫 Doppeltes Abo verhindern
-  if (mode === "subscription" && user.stripeSubscriptionId) {
+  // 🚫 Doppeltes Abo verhindern — Starter/Premium sind reine Subscriptions.
+  if (user.stripeSubscriptionId) {
     return jsonError("ALREADY_SUBSCRIBED", 400, {
       message:
         "Du hast bereits ein aktives Abonnement. Bitte verwalte es im Account- oder Billing-Bereich.",
@@ -123,11 +121,9 @@ export async function POST(req: Request): Promise<Response> {
 
   const baseUrl = getBaseUrl();
 
-  // 💳 Checkout-Session erstellen
-  const isSubscription = mode === "subscription";
-
+  // 💳 Checkout-Session erstellen — immer als Subscription.
   const session = await stripe.checkout.sessions.create({
-    mode,
+    mode: "subscription",
     customer: customerId,
     line_items: [
       {
@@ -137,19 +133,15 @@ export async function POST(req: Request): Promise<Response> {
     ],
     metadata: {
       userId: user.id,
-      plan: plan ?? "",
+      plan,
     },
-    ...(isSubscription
-      ? {
-          subscription_data: {
-            metadata: {
-              userId: user.id,
-              plan: plan ?? "",
-            },
-          },
-        }
-      : {}),
-    success_url: `${baseUrl}/billing/success?session_id={CHECKOUT_SESSION_ID}&plan=${plan ?? ""}`,
+    subscription_data: {
+      metadata: {
+        userId: user.id,
+        plan,
+      },
+    },
+    success_url: `${baseUrl}/billing/success?session_id={CHECKOUT_SESSION_ID}&plan=${plan}`,
     cancel_url: `${baseUrl}/billing?canceled=1`,
   });
 
@@ -164,8 +156,8 @@ export async function POST(req: Request): Promise<Response> {
     {
       url: session.url,
       sessionId: session.id,
-      plan: plan ?? null,
-      mode,
+      plan,
+      mode: "subscription" as const,
     },
     200
   );

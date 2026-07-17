@@ -11,8 +11,7 @@ import AccountClient from "./ui";
 function mapPriceToPlan(priceId: string | null): string | null {
   if (!priceId) return null;
   if (priceId === process.env.STRIPE_PRICE_STARTER) return "Starter";
-  if (priceId === process.env.STRIPE_PRICE_PRO) return "Pro";
-  if (priceId === process.env.STRIPE_PRICE_ULTRA) return "Ultra";
+  if (priceId === process.env.STRIPE_PRICE_PREMIUM) return "Premium";
   return "Unbekannter Plan";
 }
 

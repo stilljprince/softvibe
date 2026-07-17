@@ -72,7 +72,7 @@ export default function BillingSuccessClient({
               margin: "0 0 10px",
             }}
           >
-            Zahlung erfolgreich
+            Danke für deine Bestellung
           </h1>
           <p
             style={{
@@ -82,8 +82,8 @@ export default function BillingSuccessClient({
               margin: "0 0 24px",
             }}
           >
-            Deine Zahlung wurde verarbeitet. Die Credits werden in Kürze deinem
-            Konto gutgeschrieben.
+            Dein Abonnement wird aktiviert. Die Aktivierung kann einen kurzen
+            Moment dauern.
           </p>
 
           {/* Plan confirmation */}
@@ -106,7 +106,7 @@ export default function BillingSuccessClient({
                   fontSize: "0.9rem",
                 }}
               >
-                {planLabel}-Abo aktiviert
+                {planLabel}-Abo wird aktiviert
               </div>
               <div
                 style={{
@@ -115,9 +115,9 @@ export default function BillingSuccessClient({
                   lineHeight: 1.55,
                 }}
               >
-                Dein Abo erneuert sich automatisch und schreibt dir monatlich
-                neue Credits gut. Verwaltung und Kündigung jederzeit über dein
-                Konto.
+                Deine monatlichen Custom Minutes stehen zur Verfügung, sobald
+                Stripe die Zahlung bestätigt hat. Verwaltung und Kündigung
+                jederzeit über dein Konto.
               </div>
             </div>
           )}

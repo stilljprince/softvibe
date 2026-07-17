@@ -6,15 +6,14 @@ import Link from "next/link";
 import SVScene from "@/app/components/sv-scene";
 import { useSVTheme, SVHeader } from "@/app/components/sv-kit";
 
-type PlanId = "starter" | "pro" | "ultra";
+type PlanId = "starter" | "premium";
 
 type Plan = {
   id: PlanId;
   label: string;
   tagline: string;
-  priceId: string;
   price: string;
-  credits: number;
+  minutes: number;
   recommended?: boolean;
 };
 
@@ -22,27 +21,17 @@ const PLANS: Plan[] = [
   {
     id: "starter",
     label: "Starter",
-    tagline: "Zum Kennenlernen",
-    priceId: process.env.NEXT_PUBLIC_STRIPE_PRICE_STARTER ?? "",
-    price: "5 €",
-    credits: 5_000,
+    tagline: "Zum Einstieg",
+    price: "18,99 €",
+    minutes: 80,
   },
   {
-    id: "pro",
-    label: "Pro",
+    id: "premium",
+    label: "Premium",
     tagline: "Für regelmäßige Nutzung",
-    priceId: process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO ?? "",
-    price: "15 €",
-    credits: 20_000,
+    price: "34,99 €",
+    minutes: 200,
     recommended: true,
-  },
-  {
-    id: "ultra",
-    label: "Ultra",
-    tagline: "Für intensive Nutzung",
-    priceId: process.env.NEXT_PUBLIC_STRIPE_PRICE_ULTRA ?? "",
-    price: "60 €",
-    credits: 100_000,
   },
 ];
 
@@ -51,14 +40,14 @@ export default function BillingPage() {
   const [loadingId, setLoadingId] = useState<PlanId | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function startCheckout(planId: PlanId, priceId: string) {
+  async function startCheckout(planId: PlanId) {
     setError(null);
     setLoadingId(planId);
     try {
       const res = await fetch("/api/billing/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plan: planId, priceId, mode: "subscription" }),
+        body: JSON.stringify({ plan: planId }),
       });
 
       if (!res.ok) {
@@ -133,7 +122,7 @@ export default function BillingPage() {
               marginBottom: 10,
             }}
           >
-            SoftVibe Credits
+            SoftVibe Abonnement
           </p>
           <h1
             style={{
@@ -144,10 +133,10 @@ export default function BillingPage() {
               lineHeight: 1.15,
             }}
           >
-            Wähle dein Paket
+            Wähle deinen Plan
           </h1>
           <p style={{ color: themeCfg.uiSoftText, fontSize: "0.95rem", lineHeight: 1.65 }}>
-            Erhalte monatliche Credits für personalisierte Entspannungs-Audios —
+            Monatliche Custom Minutes für persönlich generierte Entspannungs-Audios —
             Sleep Stories, Meditationen, ASMR und Kids Stories.
           </p>
         </div>
@@ -166,7 +155,7 @@ export default function BillingPage() {
           </p>
         )}
 
-        {/* Plan cards — flex-wrap creates responsive 3 → 1 column layout */}
+        {/* Plan cards — flex-wrap creates responsive 2 → 1 column layout */}
         <div
           style={{
             display: "flex",
@@ -174,12 +163,11 @@ export default function BillingPage() {
             gap: 16,
             justifyContent: "center",
             width: "100%",
-            maxWidth: 940,
+            maxWidth: 720,
             alignItems: "stretch",
           }}
         >
           {PLANS.map((plan) => {
-            const envMissing = !plan.priceId;
             const isLoading = loadingId === plan.id;
             const isRec = plan.recommended === true;
 
@@ -187,8 +175,8 @@ export default function BillingPage() {
               <section
                 key={plan.id}
                 style={{
-                  flex: "1 1 260px",
-                  maxWidth: 300,
+                  flex: "1 1 280px",
+                  maxWidth: 340,
                   borderRadius: 24,
                   padding: "24px 22px",
                   background: themeCfg.cardBg,
@@ -271,7 +259,7 @@ export default function BillingPage() {
                   </span>
                 </div>
 
-                {/* Credits */}
+                {/* Included Custom Minutes */}
                 <div
                   style={{
                     fontSize: "0.85rem",
@@ -282,28 +270,16 @@ export default function BillingPage() {
                   }}
                 >
                   <span style={{ fontWeight: 700, color: themeCfg.uiText }}>
-                    {plan.credits.toLocaleString("de-DE")}
+                    {plan.minutes}
                   </span>{" "}
-                  Credits pro Monat
+                  Custom Minutes pro Monat
                 </div>
-
-                {envMissing && (
-                  <p
-                    style={{
-                      fontSize: "0.78rem",
-                      color: themeCfg.uiSoftText,
-                      marginBottom: 10,
-                    }}
-                  >
-                    Aktuell nicht verfügbar
-                  </p>
-                )}
 
                 {/* CTA — primary style for recommended plan */}
                 <button
                   type="button"
-                  onClick={() => void startCheckout(plan.id, plan.priceId)}
-                  disabled={envMissing || isLoading}
+                  onClick={() => void startCheckout(plan.id)}
+                  disabled={isLoading}
                   style={{
                     marginTop: "auto",
                     width: "100%",
@@ -320,8 +296,8 @@ export default function BillingPage() {
                     padding: "0.6rem 1.2rem",
                     fontWeight: 700,
                     fontSize: "0.88rem",
-                    cursor: envMissing || isLoading ? "default" : "pointer",
-                    opacity: envMissing || isLoading ? 0.6 : 1,
+                    cursor: isLoading ? "default" : "pointer",
+                    opacity: isLoading ? 0.6 : 1,
                     transition: "opacity .15s ease",
                   }}
                 >

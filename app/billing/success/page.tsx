@@ -9,8 +9,7 @@ function mapPlanLabel(raw: string | undefined): string | null {
   if (!raw) return null;
   const plan = raw.toLowerCase();
   if (plan === "starter") return "Starter";
-  if (plan === "pro") return "Pro";
-  if (plan === "ultra") return "Ultra";
+  if (plan === "premium") return "Premium";
   return null;
 }
 
