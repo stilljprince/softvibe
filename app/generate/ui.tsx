@@ -9,6 +9,7 @@ import type React from "react";
 import { useSVTheme, SVCard, type ThemeConfig } from "@/app/components/sv-kit";
 import SVScene from "@/app/components/sv-scene";
 import { usePlayer, type Chapter } from "@/app/components/player-context";
+import type { EntitlementsView } from "@/lib/entitlement-view";
 
 const PRESETS = [
   { id: "sleep-story",  label: "Sleep Story",  desc: "Calm · Slow" },
@@ -75,13 +76,10 @@ type AccountSummary = {
   credits: number;
   isAdmin: boolean;
   hasSubscription: boolean;
+  entitlements: EntitlementsView | null;
 };
 
 const PAGE_SIZE = 10;
-
-type CreditsResponse =
-  | { credits: number }
-  | { ok: true; data: { credits: number } };
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
@@ -186,7 +184,6 @@ export default function GenerateClient({
   // Quiet Knowledge is deferred post-MVP. Narrative jobs use "story" only.
   // The QK code path (server + builders) stays intact for later reactivation.
   const narrativeMode: "story" | "quiet-knowledge" = "story";
-  const [credits, setCredits] = useState<number | null>(null);
 
   // Admin script preview state
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -374,15 +371,18 @@ export default function GenerateClient({
     }
     if (!accountSummary) return true;
     if (accountSummary.isAdmin) return true;
+    const ent = accountSummary.entitlements;
+    if (ent) {
+      if (ent.plan === "FREE") return ent.probes.remaining > 0;
+      return ent.monthlyMinutes.remaining > 0;
+    }
+    // Fallback if the server did not return an entitlement snapshot: rely on
+    // the legacy credits value (server remains the definitive authority).
     return accountSummary.credits > 0;
   }, [title, rawPrompt, scriptEditMode, editedScript, accountSummary]);
 
   useEffect(() => {
     void loadJobs(0);
-  }, []);
-
-  useEffect(() => {
-    void refreshCredits();
   }, []);
 
   // Load reference data for variation flow
@@ -410,53 +410,73 @@ export default function GenerateClient({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function refreshCredits() {
+  async function refreshAccountSummary() {
+    setLoadingSummary(true);
     try {
-      const res = await fetch("/api/account/credits");
-      if (!res.ok) return;
+      const res = await fetch("/api/account/summary");
+      if (!res.ok) throw new Error(String(res.status));
       const raw: unknown = await res.json();
-
-      let value: number | null = null;
-
-      if (isRecord(raw) && typeof raw.credits === "number") {
-        value = raw.credits;
-      } else if (
-        isRecord(raw) &&
-        "data" in raw &&
-        isRecord((raw as { data?: unknown }).data) &&
-        typeof (raw as { data: { credits?: unknown } }).data.credits === "number"
-      ) {
-        value = (raw as { data: { credits: number } }).data.credits;
+      const payload: Record<string, unknown> =
+        isRecord(raw) && isRecord((raw as { data?: unknown }).data)
+          ? ((raw as { data: Record<string, unknown> }).data)
+          : isRecord(raw)
+          ? raw
+          : {};
+      const entRaw = payload.entitlements;
+      let entitlements: EntitlementsView | null = null;
+      if (isRecord(entRaw)) {
+        const plan = entRaw.plan;
+        const mm = entRaw.monthlyMinutes;
+        const pr = entRaw.probes;
+        const lib = entRaw.library;
+        if (
+          (plan === "FREE" || plan === "STARTER" || plan === "PREMIUM") &&
+          isRecord(mm) &&
+          typeof mm.allowance === "number" &&
+          typeof mm.used === "number" &&
+          typeof mm.reserved === "number" &&
+          typeof mm.remaining === "number" &&
+          isRecord(pr) &&
+          typeof pr.lifetimeLimit === "number" &&
+          typeof pr.used === "number" &&
+          typeof pr.remaining === "number" &&
+          typeof pr.canUse === "boolean" &&
+          isRecord(lib) &&
+          typeof lib.hasDirectAccess === "boolean"
+        ) {
+          entitlements = {
+            plan,
+            monthlyMinutes: {
+              allowance: mm.allowance,
+              used: mm.used,
+              reserved: mm.reserved,
+              remaining: mm.remaining,
+            },
+            probes: {
+              lifetimeLimit: pr.lifetimeLimit,
+              used: pr.used,
+              remaining: pr.remaining,
+              canUse: pr.canUse,
+            },
+            library: { hasDirectAccess: lib.hasDirectAccess },
+          };
+        }
       }
-
-      if (typeof value === "number") {
-        setCredits(value);
-      }
+      setAccountSummary({
+        credits: typeof payload.credits === "number" ? payload.credits : 0,
+        isAdmin: !!payload.isAdmin,
+        hasSubscription: !!payload.hasSubscription,
+        entitlements,
+      });
     } catch {
-      // ignore
+      setAccountSummary(null);
+    } finally {
+      setLoadingSummary(false);
     }
   }
 
   useEffect(() => {
-    const loadSummary = async () => {
-      setLoadingSummary(true);
-      try {
-        const res = await fetch("/api/account/summary");
-        if (!res.ok) throw new Error(String(res.status));
-        const data = await res.json();
-        const payload = (data && data.data) || data;
-        setAccountSummary({
-          credits: typeof payload.credits === "number" ? payload.credits : 0,
-          isAdmin: !!payload.isAdmin,
-          hasSubscription: !!payload.hasSubscription,
-        });
-      } catch {
-        setAccountSummary(null);
-      } finally {
-        setLoadingSummary(false);
-      }
-    };
-    void loadSummary();
+    void refreshAccountSummary();
   }, []);
 
   function extractList<T>(json: unknown): T[] {
@@ -563,18 +583,32 @@ export default function GenerateClient({
     }
 
     if (res.status === 402) {
-      let msg = "Du hast keine Credits mehr. Bitte lade Credits nach.";
+      let code: string | null = null;
+      let serverMsg: string | null = null;
       try {
-        const data = (await res.json()) as { message?: string };
-        if (data?.message) msg = data.message;
+        const data = (await res.json()) as { error?: string; message?: string };
+        if (typeof data?.error === "string") code = data.error;
+        if (typeof data?.message === "string") serverMsg = data.message;
       } catch {
         /* ignore */
       }
+      let msg: string;
+      if (code === "PROBE_LIMIT_REACHED") {
+        msg = "Du hast deine 2 kostenlosen Generierungen bereits verwendet.";
+      } else if (code === "INSUFFICIENT_MINUTES") {
+        msg =
+          "Für die gewählte Dauer stehen nicht genug Custom Minutes zur Verfügung.";
+      } else if (code === "NO_CREDITS") {
+        // Legacy admission path — keep a safe generic fallback that does not
+        // expose internal accounting details to the user.
+        msg = serverMsg ?? "Diese Generierung ist derzeit nicht verfügbar.";
+      } else {
+        msg = serverMsg ?? "Diese Generierung ist derzeit nicht verfügbar.";
+      }
       showToast(msg, "err");
-      setAccountSummary((prev) =>
-        prev && !prev.isAdmin ? { ...prev, credits: 0 } : prev
-      );
-      setCredits(0);
+      // Refresh the authoritative account snapshot instead of locally
+      // mutating the visible entitlement balance.
+      void refreshAccountSummary();
       return;
     }
 
@@ -589,13 +623,10 @@ export default function GenerateClient({
     // Non-admins: polling starts immediately so the UI tracks the auto-complete call.
     if (!accountSummary?.isAdmin) setPolling(true);
     void loadJobs(0);
-    void refreshCredits();
-
-    setAccountSummary((prev) => {
-      if (!prev || prev.isAdmin) return prev;
-      const nextCredits = Math.max(0, prev.credits - 1);
-      return { ...prev, credits: nextCredits };
-    });
+    // Server-authoritative refresh — do not compute the new visible balance
+    // client-side. refreshAccountSummary() re-reads the resolved entitlement
+    // snapshot (probes / Custom Minutes).
+    void refreshAccountSummary();
 
     showToast("Job erstellt.", "ok");
 
@@ -777,25 +808,33 @@ export default function GenerateClient({
     };
   }, []);
 
-  const effectiveCredits =
-    accountSummary?.isAdmin
-      ? null
-      : credits !== null
-      ? credits
-      : accountSummary
-      ? accountSummary.credits
-      : null;
-
-  const creditsLabel =
-    accountSummary?.isAdmin
-      ? "∞"
-      : effectiveCredits !== null
-      ? String(effectiveCredits)
-      : loadingSummary
-      ? "…"
-      : "–";
-
   const isAdmin = accountSummary?.isAdmin === true;
+
+  // Plan-aware, human-readable entitlement label for the visible pill. Uses
+  // the server-resolved snapshot as the display source of truth. Falls back
+  // to a neutral placeholder while the summary is still loading.
+  const entitlementPillLabel: string = (() => {
+    if (isAdmin) return "∞ Custom Minutes";
+    const ent = accountSummary?.entitlements ?? null;
+    if (!ent) return loadingSummary ? "…" : "–";
+    if (ent.plan === "FREE") {
+      return `${ent.probes.remaining} von ${ent.probes.lifetimeLimit} freien Generierungen`;
+    }
+    return `${ent.monthlyMinutes.remaining} von ${ent.monthlyMinutes.allowance} Custom Minutes`;
+  })();
+
+  // Clear "exhausted" state used to render the depleted message under the
+  // duration input. Only surfaces when the server-resolved snapshot itself
+  // shows zero remaining — the server remains the definitive authority for
+  // duration-fit decisions (see task section H).
+  const entitlementExhausted: null | "free" | "paid" = (() => {
+    if (isAdmin) return null;
+    const ent = accountSummary?.entitlements ?? null;
+    if (!ent) return null;
+    if (ent.plan === "FREE" && ent.probes.remaining <= 0) return "free";
+    if (ent.plan !== "FREE" && ent.monthlyMinutes.remaining <= 0) return "paid";
+    return null;
+  })();
 
   const displayJobTitle = (j: Job): string => {
     const anyJob = j as unknown as { title?: string | null };
@@ -924,9 +963,10 @@ export default function GenerateClient({
                     Menü
                   </div>
 
-                  {/* Credits */}
+                  {/* Entitlements — plan-aware. Free: probes remaining.
+                      Starter / Premium: Custom Minutes remaining. Admin: ∞. */}
                   <div style={{ fontSize: "0.78rem", color: themeCfg.uiSoftText, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
-                    {accountSummary?.isAdmin ? "∞ Credits" : `${creditsLabel} Credits`}
+                    {entitlementPillLabel}
                   </div>
 
                   <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 14 }}>
@@ -1534,15 +1574,28 @@ export default function GenerateClient({
                 </p>
               </div>}
 
-              {/* Credits warning — only when depleted */}
-              {accountSummary && !accountSummary.isAdmin && accountSummary.credits <= 0 && (
+              {/* Entitlement-depleted warning — plan-aware. The server is the
+                  final authority for duration-fit; this block only fires when
+                  the resolved snapshot itself reports zero remaining. */}
+              {entitlementExhausted === "free" && (
                 <p style={{ fontSize: "0.85rem", color: themeCfg.uiSoftText, margin: 0 }}>
-                  Keine Credits verfügbar.{" "}
+                  Du hast deine 2 kostenlosen Generierungen bereits verwendet.{" "}
                   <Link
                     href="/billing"
                     style={{ color: themeCfg.uiText, textDecoration: "underline", fontWeight: 600 }}
                   >
-                    Credits aufladen
+                    Plan wählen
+                  </Link>
+                </p>
+              )}
+              {entitlementExhausted === "paid" && (
+                <p style={{ fontSize: "0.85rem", color: themeCfg.uiSoftText, margin: 0 }}>
+                  Deine Custom Minutes für diesen Abrechnungszeitraum sind aufgebraucht.{" "}
+                  <Link
+                    href="/account"
+                    style={{ color: themeCfg.uiText, textDecoration: "underline", fontWeight: 600 }}
+                  >
+                    Plan ansehen
                   </Link>
                 </p>
               )}

@@ -4,6 +4,8 @@ import { authOptions } from "@/lib/auth/config";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { stripe } from "@/lib/stripe";
+import { resolveEntitlements } from "@/lib/entitlement/resolver";
+import type { EntitlementsView } from "@/lib/entitlement-view";
 import AccountClient from "./ui";
 
 function mapPriceToPlan(priceId: string | null): string | null {
@@ -82,6 +84,32 @@ export default async function AccountPage() {
     }
   }
 
+  // Resolve the server-side entitlement snapshot. This is the display source
+  // of truth for probes and Custom Minutes — Stripe labels are kept as an
+  // orthogonal subscription-status indicator (their consolidation belongs to
+  // a later RP-004 task and is intentionally out of scope here).
+  let entitlements: EntitlementsView | null = null;
+  const resolved = await resolveEntitlements(userId);
+  if (resolved.ok) {
+    const d = resolved.data;
+    entitlements = {
+      plan: d.plan,
+      monthlyMinutes: {
+        allowance: d.monthlyMinutes.allowance,
+        used: d.monthlyMinutes.used,
+        reserved: d.monthlyMinutes.reserved,
+        remaining: d.monthlyMinutes.remaining,
+      },
+      probes: {
+        lifetimeLimit: d.probes.lifetimeLimit,
+        used: d.probes.used,
+        remaining: d.probes.remaining,
+        canUse: d.probes.canUse,
+      },
+      library: { hasDirectAccess: d.library.hasDirectAccess },
+    };
+  }
+
   return (
     <AccountClient
       user={{
@@ -97,6 +125,7 @@ export default async function AccountPage() {
         createdAt: dbUser.createdAt.toISOString(),
         planLabel,
         planStatus,
+        entitlements,
       }}
     />
   );

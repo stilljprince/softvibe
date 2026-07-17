@@ -10,6 +10,7 @@ import SVScene from "@/app/components/sv-scene";
 import { useSVTheme, type ThemeConfig } from "@/app/components/sv-kit";
 import { usePlayer } from "@/app/components/player-context";
 import { AVATAR_PRESETS, getAvatarPreset } from "@/lib/avatars";
+import type { EntitlementsView } from "@/lib/entitlement-view";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -25,6 +26,7 @@ type AccountUser = {
   createdAt: string;
   planLabel: string | null;
   planStatus: string | null;
+  entitlements: EntitlementsView | null;
 };
 
 type JobStatus = "QUEUED" | "PROCESSING" | "DONE" | "FAILED";
@@ -410,7 +412,7 @@ export default function AccountClient({ user }: { user: AccountUser }) {
             style={{ display: "flex", flexDirection: "column", gap: 32 }}
           >
 
-            {/* ── Left column: Identity + Credits + Quick Actions ── */}
+            {/* ── Left column: Identity + Entitlements + Quick Actions ── */}
             <div style={{ display: "flex", flexDirection: "column", gap: 28 }}>
 
               {/* Identity */}
@@ -500,16 +502,73 @@ export default function AccountClient({ user }: { user: AccountUser }) {
               {/* Divider */}
               <div style={{ borderTop: divider }} />
 
-              {/* Credits + plan */}
+              {/* Entitlements + plan — plan-aware. Admin: unlimited. Free:
+                  remaining Free-Generations (probes). Starter / Premium:
+                  remaining Custom Minutes. Uses the server-resolved snapshot
+                  as the authority for the usage unit (not the Stripe label). */}
               <div>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
-                  <span style={{ fontSize: "2.2rem", fontWeight: 850, color: themeCfg.uiText, lineHeight: 1 }}>
-                    {user.isAdmin ? "∞" : user.credits.toLocaleString("de-DE")}
-                  </span>
-                  <span style={{ fontSize: "0.8rem", color: themeCfg.uiSoftText, fontWeight: 500 }}>
-                    Credits
-                  </span>
-                </div>
+                {(() => {
+                  if (user.isAdmin) {
+                    return (
+                      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
+                        <span style={{ fontSize: "2.2rem", fontWeight: 850, color: themeCfg.uiText, lineHeight: 1 }}>
+                          ∞
+                        </span>
+                        <span style={{ fontSize: "0.8rem", color: themeCfg.uiSoftText, fontWeight: 500 }}>
+                          Custom Minutes
+                        </span>
+                      </div>
+                    );
+                  }
+                  const ent = user.entitlements;
+                  if (ent && ent.plan === "FREE") {
+                    return (
+                      <>
+                        <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 4 }}>
+                          <span style={{ fontSize: "2.2rem", fontWeight: 850, color: themeCfg.uiText, lineHeight: 1 }}>
+                            {ent.probes.remaining.toLocaleString("de-DE")}
+                          </span>
+                          <span style={{ fontSize: "0.8rem", color: themeCfg.uiSoftText, fontWeight: 500 }}>
+                            Freie Generierungen
+                          </span>
+                        </div>
+                        <div style={{ fontSize: "0.78rem", color: themeCfg.uiSoftText, marginBottom: 10 }}>
+                          {ent.probes.remaining} von {ent.probes.lifetimeLimit} verfügbar
+                        </div>
+                      </>
+                    );
+                  }
+                  if (ent) {
+                    return (
+                      <>
+                        <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 4 }}>
+                          <span style={{ fontSize: "2.2rem", fontWeight: 850, color: themeCfg.uiText, lineHeight: 1 }}>
+                            {ent.monthlyMinutes.remaining.toLocaleString("de-DE")}
+                          </span>
+                          <span style={{ fontSize: "0.8rem", color: themeCfg.uiSoftText, fontWeight: 500 }}>
+                            Custom Minutes
+                          </span>
+                        </div>
+                        <div style={{ fontSize: "0.78rem", color: themeCfg.uiSoftText, marginBottom: 10 }}>
+                          {ent.monthlyMinutes.remaining} von {ent.monthlyMinutes.allowance} verfügbar
+                        </div>
+                      </>
+                    );
+                  }
+                  // Fallback when the entitlement snapshot could not be
+                  // resolved. Renders a neutral placeholder rather than the
+                  // legacy Credits wording.
+                  return (
+                    <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
+                      <span style={{ fontSize: "2.2rem", fontWeight: 850, color: themeCfg.uiText, lineHeight: 1 }}>
+                        –
+                      </span>
+                      <span style={{ fontSize: "0.8rem", color: themeCfg.uiSoftText, fontWeight: 500 }}>
+                        Custom Minutes
+                      </span>
+                    </div>
+                  );
+                })()}
 
                 <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
                   {user.hasSubscription && user.planLabel ? (
