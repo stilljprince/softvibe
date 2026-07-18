@@ -33,10 +33,12 @@
 //     paid plan is refused with NOT_FREE_PLAN so this path can never overlap
 //     with the PLAN_MINUTES reservation path.
 //
-//   * Duration is enforced server-side: 300–480 seconds inclusive. A
+//   * Duration is enforced server-side: 60–480 seconds inclusive. A
 //     manipulated client cannot request a 20-minute probe. Non-finite,
 //     null, undefined or out-of-range inputs surface INVALID_PROBE_DURATION
-//     rather than being silently coerced.
+//     rather than being silently coerced. The 8-minute upper bound is the
+//     primary cost-protection boundary; the 1-minute floor lets Free users
+//     freely explore any short duration in the approved probe range.
 //
 // This module MUST remain narrowly scoped:
 //   - no PeriodUsage read / write (probes are wholly separate from monthly
@@ -58,8 +60,8 @@ import { prisma as defaultPrisma } from "@/lib/prisma";
 import { resolveEffectivePlan } from "@/lib/entitlement/resolver";
 import { PROBE_LIFETIME_LIMIT } from "@/lib/entitlement/plan";
 
-/** Server-enforced lower bound on probe duration (5 minutes). */
-export const PROBE_MIN_DURATION_SEC = 300;
+/** Server-enforced lower bound on probe duration (1 minute). */
+export const PROBE_MIN_DURATION_SEC = 60;
 /** Server-enforced upper bound on probe duration (8 minutes). */
 export const PROBE_MAX_DURATION_SEC = 480;
 
@@ -99,7 +101,7 @@ export type ClaimProbeAndCreateJobResult =
   | { ok: false; error: ProbeClaimErrorCode };
 
 /**
- * Pure server-side duration guard. Rejects anything outside 300..480 s and
+ * Pure server-side duration guard. Rejects anything outside 60..480 s and
  * anything not a positive finite integer-ish number. Used at the top of the
  * transaction so the counter is never touched for an invalid request.
  */

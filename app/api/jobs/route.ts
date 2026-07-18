@@ -473,7 +473,7 @@ export async function POST(req: Request) {
         }
         if (probeResult.error === "INVALID_PROBE_DURATION") {
           return jsonError("INVALID_PROBE_DURATION", 400, {
-            message: "Probe-Dauer muss zwischen 5 und 8 Minuten liegen.",
+            message: "Probe-Dauer muss zwischen 1 und 8 Minuten liegen.",
           });
         }
         if (probeResult.error === "NOT_FREE_PLAN") {

@@ -8,8 +8,9 @@
 //   npx tsx scripts/test-probe.ts
 //
 // Covers (RP-010 Phase 4A required cases):
-//   * Duration guard — 300 / 480 allowed, 299 / 481 rejected, null / NaN /
-//     Infinity / negative all controlled-rejected.
+//   * Duration guard — 60 / 480 allowed, 59 / 481 rejected, null / NaN /
+//     Infinity / negative all controlled-rejected. The 60 s lower bound is
+//     the RP-004C Free-probe floor; 480 s remains the cost-protection cap.
 //   * Free happy path — first claim ok, counter goes 0→1; second claim ok,
 //     counter 1→2; third claim PROBE_LIMIT_REACHED with no writes; a
 //     pre-existing counter above the limit is controlled-rejected with no
@@ -64,10 +65,11 @@ function check(name: string, actual: unknown, expected: unknown): void {
 // Pure helper tests
 // ---------------------------------------------------------------------------
 
+check("isValidProbeDuration: 60 → true", isValidProbeDuration(60), true);
 check("isValidProbeDuration: 300 → true", isValidProbeDuration(300), true);
 check("isValidProbeDuration: 480 → true", isValidProbeDuration(480), true);
 check("isValidProbeDuration: 400 → true", isValidProbeDuration(400), true);
-check("isValidProbeDuration: 299 → false", isValidProbeDuration(299), false);
+check("isValidProbeDuration: 59 → false", isValidProbeDuration(59), false);
 check("isValidProbeDuration: 481 → false", isValidProbeDuration(481), false);
 check("isValidProbeDuration: 0 → false", isValidProbeDuration(0), false);
 check("isValidProbeDuration: -60 → false", isValidProbeDuration(-60), false);
@@ -89,9 +91,9 @@ check(
   false
 );
 check(
-  "PROBE_MIN_DURATION_SEC = 300",
+  "PROBE_MIN_DURATION_SEC = 60",
   PROBE_MIN_DURATION_SEC,
-  300
+  60
 );
 check(
   "PROBE_MAX_DURATION_SEC = 480",
@@ -546,23 +548,23 @@ async function runProbeTests(): Promise<void> {
   // Duration enforcement
   // ---------------------------------------------------------------------------
 
-  // (6) 300 s allowed
+  // (6) 60 s allowed — RP-004C lower boundary
   {
     const store = seedStore();
-    seedUser(store, { id: "u-d300", plan: "FREE", probeGenerationsUsed: 0 });
+    seedUser(store, { id: "u-d60", plan: "FREE", probeGenerationsUsed: 0 });
     const client = buildStubClient(store);
     const r = await claimProbeAndCreateJob(
       {
-        userId: "u-d300",
-        durationSec: 300,
-        jobData: jobData("u-d300", { durationSec: 300 }),
+        userId: "u-d60",
+        durationSec: 60,
+        jobData: jobData("u-d60", { durationSec: 60 }),
         now: insidePeriod,
       },
       client
     );
-    check("Duration 300: ok=true", r.ok, true);
-    check("Duration 300: counter=1", store.users.get("u-d300")?.probeGenerationsUsed, 1);
-    check("Duration 300: one Job", store.jobs.size, 1);
+    check("Duration 60: ok=true", r.ok, true);
+    check("Duration 60: counter=1", store.users.get("u-d60")?.probeGenerationsUsed, 1);
+    check("Duration 60: one Job", store.jobs.size, 1);
   }
 
   // (7) 480 s allowed
@@ -584,29 +586,29 @@ async function runProbeTests(): Promise<void> {
     check("Duration 480: one Job", store.jobs.size, 1);
   }
 
-  // (8) 299 s rejected — below lower bound
+  // (8) 59 s rejected — below RP-004C lower bound
   {
     const store = seedStore();
-    seedUser(store, { id: "u-d299", plan: "FREE", probeGenerationsUsed: 0 });
+    seedUser(store, { id: "u-d59", plan: "FREE", probeGenerationsUsed: 0 });
     const client = buildStubClient(store);
     const r = await claimProbeAndCreateJob(
       {
-        userId: "u-d299",
-        durationSec: 299,
-        jobData: jobData("u-d299", { durationSec: 299 }),
+        userId: "u-d59",
+        durationSec: 59,
+        jobData: jobData("u-d59", { durationSec: 59 }),
         now: insidePeriod,
       },
       client
     );
-    check("Duration 299: ok=false", r.ok, false);
+    check("Duration 59: ok=false", r.ok, false);
     if (!r.ok)
-      check("Duration 299: error=INVALID_PROBE_DURATION", r.error, "INVALID_PROBE_DURATION");
+      check("Duration 59: error=INVALID_PROBE_DURATION", r.error, "INVALID_PROBE_DURATION");
     check(
-      "Duration 299: counter unchanged (0)",
-      store.users.get("u-d299")?.probeGenerationsUsed,
+      "Duration 59: counter unchanged (0)",
+      store.users.get("u-d59")?.probeGenerationsUsed,
       0
     );
-    check("Duration 299: no Job", store.jobs.size, 0);
+    check("Duration 59: no Job", store.jobs.size, 0);
   }
 
   // (9) 481 s rejected — above upper bound

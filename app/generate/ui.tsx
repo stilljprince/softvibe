@@ -19,6 +19,14 @@ const PRESETS = [
   { id: "narrative",    label: "Narrative",    desc: "Story · Knowledge" },
 ];
 
+// RP-004C — Free Probe duration bounds (user-facing minutes).
+// Kept authoritative on the server; these mirror PROBE_MIN_DURATION_SEC /
+// PROBE_MAX_DURATION_SEC (60..480 s) as the user-facing minute equivalent.
+// Only applied to Free users with remaining probes; paid plans keep their
+// existing preset-specific duration ranges.
+const FREE_PROBE_MIN_MINUTES = 1;
+const FREE_PROBE_MAX_MINUTES = 8;
+
 // ── Suggestion pills — static V1 ─────────────────────────────────────────────
 // Each entry sets prompt + preset on click. No auto-generation.
 // Future: extend with history-based, refreshable, or AI-generated suggestions.
@@ -373,13 +381,24 @@ export default function GenerateClient({
     if (accountSummary.isAdmin) return true;
     const ent = accountSummary.entitlements;
     if (ent) {
-      if (ent.plan === "FREE") return ent.probes.remaining > 0;
+      if (ent.plan === "FREE") {
+        if (ent.probes.remaining <= 0) return false;
+        // RP-004C — explicit derived Free probe duration guard.
+        // Do not rely on HTML min/max alone; a manipulated DOM would slip
+        // through. The server remains authoritative — this only mirrors the
+        // 1..8-minute bound so the submit action reflects the rule locally.
+        if (typeof durationMin !== "number") return false;
+        if (!Number.isFinite(durationMin)) return false;
+        if (durationMin < FREE_PROBE_MIN_MINUTES) return false;
+        if (durationMin > FREE_PROBE_MAX_MINUTES) return false;
+        return true;
+      }
       return ent.monthlyMinutes.remaining > 0;
     }
     // Fallback if the server did not return an entitlement snapshot: rely on
     // the legacy credits value (server remains the definitive authority).
     return accountSummary.credits > 0;
-  }, [title, rawPrompt, scriptEditMode, editedScript, accountSummary]);
+  }, [title, rawPrompt, scriptEditMode, editedScript, accountSummary, durationMin]);
 
   useEffect(() => {
     void loadJobs(0);
@@ -834,6 +853,16 @@ export default function GenerateClient({
     if (ent.plan === "FREE" && ent.probes.remaining <= 0) return "free";
     if (ent.plan !== "FREE" && ent.monthlyMinutes.remaining <= 0) return "paid";
     return null;
+  })();
+
+  // RP-004C — Free-probe UI eligibility. When true, the duration input is
+  // constrained to the 1..8-minute probe range regardless of preset. Paid
+  // plans are unaffected and keep their existing preset-specific ranges.
+  const isFreeProbeEligible: boolean = (() => {
+    if (isAdmin) return false;
+    const ent = accountSummary?.entitlements ?? null;
+    if (!ent) return false;
+    return ent.plan === "FREE" && ent.probes.remaining > 0;
   })();
 
   const displayJobTitle = (j: Job): string => {
@@ -1552,8 +1581,16 @@ export default function GenerateClient({
                 <label className="sv-label" style={{ display: "block", marginBottom: 8 }}>Wie lang?</label>
                 <input
                   type="number"
-                  min={preset === "narrative" ? 10 : 1}
-                  max={preset === "narrative" ? 60 : 30}
+                  min={
+                    isFreeProbeEligible
+                      ? FREE_PROBE_MIN_MINUTES
+                      : preset === "narrative" ? 10 : 1
+                  }
+                  max={
+                    isFreeProbeEligible
+                      ? FREE_PROBE_MAX_MINUTES
+                      : preset === "narrative" ? 60 : 30
+                  }
                   className="sv-no-spinner"
                   style={{ ...svInputStyle(themeKey), maxWidth: 140 }}
                   value={durationMin}
@@ -1565,13 +1602,28 @@ export default function GenerateClient({
                       setDurationMin(Number(v));
                     }
                   }}
-                  placeholder="z. B. 10 Min."
+                  placeholder={
+                    isFreeProbeEligible ? "z. B. 3 Min." : "z. B. 10 Min."
+                  }
                 />
-                <p style={{ fontSize: "0.78rem", color: themeCfg.uiSoftText, marginTop: 6 }}>
-                  {preset === "narrative"
-                    ? "Typischer Bereich: 10–60 Minuten"
-                    : "Typischer Bereich: 1–30 Minuten"}
-                </p>
+                {isFreeProbeEligible ? (
+                  <div style={{ marginTop: 6 }}>
+                    <p style={{ fontSize: "0.78rem", color: themeCfg.uiSoftText, margin: 0 }}>
+                      Kostenlose Probe · Wähle eine kurze Dauer zwischen {FREE_PROBE_MIN_MINUTES} und {FREE_PROBE_MAX_MINUTES} Minuten.
+                    </p>
+                    {accountSummary?.entitlements?.plan === "FREE" && (
+                      <p style={{ fontSize: "0.78rem", color: themeCfg.uiSoftText, marginTop: 4, marginBottom: 0 }}>
+                        Du hast noch {accountSummary.entitlements.probes.remaining} von {accountSummary.entitlements.probes.lifetimeLimit} kostenlosen Proben.
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <p style={{ fontSize: "0.78rem", color: themeCfg.uiSoftText, marginTop: 6 }}>
+                    {preset === "narrative"
+                      ? "Typischer Bereich: 10–60 Minuten"
+                      : "Typischer Bereich: 1–30 Minuten"}
+                  </p>
+                )}
               </div>}
 
               {/* Entitlement-depleted warning — plan-aware. The server is the
