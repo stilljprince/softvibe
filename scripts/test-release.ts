@@ -47,6 +47,15 @@
 //   Non-plan Jobs
 //    (16) Job without PLAN_MINUTES — failure flow works, no PeriodUsage
 //         mutation, no usageReleasedAt
+//
+//   RP-004D1 — PLAN_MINUTES jobs must never refund a legacy credit,
+//   because they never debited one on reservation. Non-plan (legacy
+//   fallback) releases retain the existing refund behaviour.
+//    (18, 20, 22, 23) PLAN_MINUTES + refundCreditIfEligible=true →
+//         creditRefunded=false, User.credits unchanged, creditRefundedAt
+//         still null. Minutes are still released atomically.
+//    (25, 28) Non-plan legacy Job with refundCreditIfEligible=true still
+//         increments User.credits atomically alongside the FAILED write.
 
 import { releasePlanMinuteReservation } from "../lib/entitlement/release";
 import { finalizePlanMinuteUsage } from "../lib/entitlement/finalization";
@@ -1058,11 +1067,11 @@ async function runTests(): Promise<void> {
 // refundCreditIfEligible option added to the release helper.
 // ─────────────────────────────────────────────────────────────────────────
 
-// (18) Complete-error before TTS. PLAN_MINUTES Job with 6 reserved minutes,
-// ttsStartedAt IS NULL, creditRefundedAt IS NULL. The single helper call
-// must: FAIL the job, decrement PeriodUsage.minutesReserved by 6, set
-// usageReleasedAt, set creditRefundedAt, and increment User.credits by 1
-// — all in the same transaction.
+// (18) Complete-error before TTS. RP-004D1 — PLAN_MINUTES Jobs never
+// consumed a legacy User.credits unit (reservation debits PeriodUsage,
+// not credits), so a release on a PLAN_MINUTES Job must NEVER refund a
+// credit — even when the caller still passes refundCreditIfEligible=true.
+// Minutes are still released and the Job is still marked FAILED atomically.
 {
   const store = seedStore();
   makeUser(store, { id: "u18", credits: 2 });
@@ -1087,20 +1096,36 @@ async function runTests(): Promise<void> {
     { jobId: "job-18", error: "empty script", now: t, refundCreditIfEligible: true },
     client
   );
-  check("Atomic pre-TTS: ok=true", r.ok, true);
+  check("PLAN_MINUTES pre-TTS: ok=true", r.ok, true);
   if (r.ok) {
-    check("Atomic pre-TTS: outcome=released", r.outcome, "released");
-    check("Atomic pre-TTS: creditRefunded=true", r.creditRefunded, true);
+    check("PLAN_MINUTES pre-TTS: outcome=released", r.outcome, "released");
+    check(
+      "PLAN_MINUTES pre-TTS: creditRefunded=false (no legacy debit occurred)",
+      r.creditRefunded,
+      false
+    );
   }
   const pu = store.periodUsages.get("pu-18");
-  check("Atomic pre-TTS: minutesReserved 20 → 14", pu?.minutesReserved, 14);
-  check("Atomic pre-TTS: minutesUsed unchanged at 4", pu?.minutesUsed, 4);
+  check("PLAN_MINUTES pre-TTS: minutesReserved 20 → 14", pu?.minutesReserved, 14);
+  check("PLAN_MINUTES pre-TTS: minutesUsed unchanged at 4", pu?.minutesUsed, 4);
   const j = store.jobs.get("job-18");
-  check("Atomic pre-TTS: job.status=FAILED", j?.status, "FAILED");
-  check("Atomic pre-TTS: usageReleasedAt set", j?.usageReleasedAt?.getTime(), t.getTime());
-  check("Atomic pre-TTS: creditRefundedAt set", j?.creditRefundedAt?.getTime(), t.getTime());
+  check("PLAN_MINUTES pre-TTS: job.status=FAILED", j?.status, "FAILED");
+  check(
+    "PLAN_MINUTES pre-TTS: usageReleasedAt set",
+    j?.usageReleasedAt?.getTime(),
+    t.getTime()
+  );
+  check(
+    "PLAN_MINUTES pre-TTS: creditRefundedAt still null",
+    j?.creditRefundedAt,
+    null
+  );
   const u = store.users.get("u18");
-  check("Atomic pre-TTS: User.credits 2 → 3 (refund applied)", u?.credits, 3);
+  check(
+    "PLAN_MINUTES pre-TTS: User.credits unchanged at 2 (no phantom refund)",
+    u?.credits,
+    2
+  );
 }
 
 // (19) Complete-error after TTS. PLAN_MINUTES Job with ttsStartedAt set.
@@ -1145,11 +1170,9 @@ async function runTests(): Promise<void> {
   check("Atomic post-TTS: User.credits unchanged at 1", u?.credits, 1);
 }
 
-// (20) Stale recovery, PLAN_MINUTES, pre-TTS. Same guarantees as (18)
-// but exercised through the same helper call (the stale-recovery route
-// now delegates the whole write bundle to the helper). No partial
-// state — the job is FAILED with credit AND minutes returned, or none
-// of the three fields moved.
+// (20) Stale recovery, PLAN_MINUTES, pre-TTS. Same guarantees as (18):
+// minutes released, Job marked FAILED, but User.credits are NEVER
+// refunded — reservation-path Jobs never consumed a legacy credit.
 {
   const store = seedStore();
   makeUser(store, { id: "u20", credits: 5 });
@@ -1181,7 +1204,11 @@ async function runTests(): Promise<void> {
   );
   check("Stale pre-TTS: ok=true", r.ok, true);
   if (r.ok) {
-    check("Stale pre-TTS: creditRefunded=true", r.creditRefunded, true);
+    check(
+      "Stale pre-TTS: creditRefunded=false (PLAN_MINUTES never debits credits)",
+      r.creditRefunded,
+      false
+    );
   }
   const pu = store.periodUsages.get("pu-20");
   check("Stale pre-TTS: minutes 25 → 13", pu?.minutesReserved, 13);
@@ -1189,9 +1216,9 @@ async function runTests(): Promise<void> {
   const j = store.jobs.get("job-20");
   check("Stale pre-TTS: status=FAILED", j?.status, "FAILED");
   check("Stale pre-TTS: usageReleasedAt set", j?.usageReleasedAt?.getTime(), t.getTime());
-  check("Stale pre-TTS: creditRefundedAt set", j?.creditRefundedAt?.getTime(), t.getTime());
+  check("Stale pre-TTS: creditRefundedAt still null", j?.creditRefundedAt, null);
   const u = store.users.get("u20");
-  check("Stale pre-TTS: User.credits 5 → 6", u?.credits, 6);
+  check("Stale pre-TTS: User.credits unchanged at 5", u?.credits, 5);
 }
 
 // (21) Stale recovery, PLAN_MINUTES, post-TTS. Minutes released but no
@@ -1237,8 +1264,10 @@ async function runTests(): Promise<void> {
   check("Stale post-TTS: User.credits unchanged at 3", u?.credits, 3);
 }
 
-// (22) Repeated request. Second identical release call must be a no-op:
-// no second decrement, no second credit refund, timestamps preserved.
+// (22) Repeated request on PLAN_MINUTES. Second identical release call
+// must be a no-op: no second decrement, timestamps preserved. Under
+// RP-004D1, PLAN_MINUTES releases never refund credits regardless of the
+// flag — first and second calls both leave User.credits untouched.
 {
   const store = seedStore();
   makeUser(store, { id: "u22", credits: 0 });
@@ -1268,7 +1297,12 @@ async function runTests(): Promise<void> {
   );
   check("Repeated: first ok=true", r1.ok, true);
   check("Repeated: second ok=true", r2.ok, true);
-  if (r1.ok) check("Repeated: first creditRefunded=true", r1.creditRefunded, true);
+  if (r1.ok)
+    check(
+      "Repeated: first creditRefunded=false (PLAN_MINUTES never refunds)",
+      r1.creditRefunded,
+      false
+    );
   if (r2.ok) {
     check("Repeated: second outcome=already_released", r2.outcome, "already_released");
     check("Repeated: second creditRefunded=false", r2.creditRefunded, false);
@@ -1282,19 +1316,16 @@ async function runTests(): Promise<void> {
     j?.usageReleasedAt?.getTime(),
     t1.getTime()
   );
-  check(
-    "Repeated: creditRefundedAt preserved at t1",
-    j?.creditRefundedAt?.getTime(),
-    t1.getTime()
-  );
+  check("Repeated: creditRefundedAt still null", j?.creditRefundedAt, null);
   check("Repeated: error preserved as 'first'", j?.error, "first");
   const u = store.users.get("u22");
-  check("Repeated: User.credits +1 exactly once", u?.credits, 1);
+  check("Repeated: User.credits unchanged at 0", u?.credits, 0);
 }
 
-// (23) Parallel releases with credit refund. Exactly one call must
-// perform the minute release AND the credit refund; the other must
-// see the already_released idempotent branch.
+// (23) Parallel PLAN_MINUTES releases with refundCreditIfEligible=true.
+// Exactly one call performs the minute release; both must report
+// creditRefunded=false because PLAN_MINUTES never refunds under RP-004D1.
+// User.credits stays untouched regardless of concurrency.
 {
   const store = seedStore();
   makeUser(store, { id: "u23", credits: 0 });
@@ -1322,19 +1353,27 @@ async function runTests(): Promise<void> {
       client
     ),
   ]);
-  check("Parallel+refund: both ok=true", r1.ok && r2.ok, true);
+  check("Parallel PLAN_MINUTES: both ok=true", r1.ok && r2.ok, true);
   const releasedCount =
     (r1.ok && r1.outcome === "released" ? 1 : 0) +
     (r2.ok && r2.outcome === "released" ? 1 : 0);
   const refundedCount =
     (r1.ok && r1.creditRefunded ? 1 : 0) +
     (r2.ok && r2.creditRefunded ? 1 : 0);
-  check("Parallel+refund: exactly one release", releasedCount, 1);
-  check("Parallel+refund: exactly one credit refund", refundedCount, 1);
+  check("Parallel PLAN_MINUTES: exactly one release", releasedCount, 1);
+  check("Parallel PLAN_MINUTES: zero credit refunds", refundedCount, 0);
   const pu = store.periodUsages.get("pu-23");
-  check("Parallel+refund: minutes 18 → 11 (single release)", pu?.minutesReserved, 11);
+  check(
+    "Parallel PLAN_MINUTES: minutes 18 → 11 (single release)",
+    pu?.minutesReserved,
+    11
+  );
   const u = store.users.get("u23");
-  check("Parallel+refund: User.credits 0 → 1 (single refund)", u?.credits, 1);
+  check(
+    "Parallel PLAN_MINUTES: User.credits unchanged at 0",
+    u?.credits,
+    0
+  );
 }
 
 // (24) Rollback simulation: injected PeriodUsage.updateMany failure
@@ -1381,26 +1420,22 @@ async function runTests(): Promise<void> {
   check("Rollback PU-fail: User.credits unchanged at 4", u?.credits, 4);
 }
 
-// (25) Rollback simulation: injected User.update failure during the
-// credit-refund step. Job.updateMany (FAILED + usageReleasedAt),
-// PeriodUsage.updateMany (minute release) and the refund-claim
-// Job.updateMany all already ran — but the User.credits increment
-// throws. The whole tx must roll back so no field moves.
+// (25) Rollback simulation on the legacy non-plan credit-refund path.
+// A non-PLAN_MINUTES Job with refundCreditIfEligible=true still folds a
+// credit refund into the release transaction (matches pre-Phase-3C
+// tryRefundCredit behaviour). If the User.credits increment throws, the
+// whole tx must roll back — the Job stays PROCESSING and no field moves.
+// Note: PLAN_MINUTES Jobs never reach the User.update step under
+// RP-004D1, so this scenario is exercised via a legacy (untagged) Job.
 {
   const store = seedStore();
   makeUser(store, { id: "u25", credits: 7 });
-  makePeriodUsage(store, {
-    id: "pu-25",
-    userId: "u25",
-    minutesReserved: 12,
-    minutesUsed: 3,
-  });
   makeJob(store, {
     id: "job-25",
     userId: "u25",
-    entitlementKind: "PLAN_MINUTES",
-    reservedMinutes: 5,
-    periodUsageId: "pu-25",
+    entitlementKind: null,
+    reservedMinutes: null,
+    periodUsageId: null,
   });
   store.injectUserUpdateErrorOnce = new Error("user update boom");
   const client = buildStubClient(store);
@@ -1413,17 +1448,21 @@ async function runTests(): Promise<void> {
   } catch {
     threw = true;
   }
-  check("Rollback User-fail: exception propagated", threw, true);
-  const pu = store.periodUsages.get("pu-25");
-  check("Rollback User-fail: minutesReserved unchanged at 12", pu?.minutesReserved, 12);
-  check("Rollback User-fail: minutesUsed unchanged at 3", pu?.minutesUsed, 3);
+  check("Rollback User-fail (legacy): exception propagated", threw, true);
   const j = store.jobs.get("job-25");
-  check("Rollback User-fail: status still PROCESSING", j?.status, "PROCESSING");
-  check("Rollback User-fail: usageReleasedAt still null", j?.usageReleasedAt, null);
-  check("Rollback User-fail: creditRefundedAt still null", j?.creditRefundedAt, null);
-  check("Rollback User-fail: error still null", j?.error, null);
+  check(
+    "Rollback User-fail (legacy): status still PROCESSING",
+    j?.status,
+    "PROCESSING"
+  );
+  check(
+    "Rollback User-fail (legacy): creditRefundedAt still null",
+    j?.creditRefundedAt,
+    null
+  );
+  check("Rollback User-fail (legacy): error still null", j?.error, null);
   const u = store.users.get("u25");
-  check("Rollback User-fail: User.credits unchanged at 7", u?.credits, 7);
+  check("Rollback User-fail (legacy): User.credits unchanged at 7", u?.credits, 7);
 }
 
 // (26) Rollback simulation: injected Job.updateMany (CAS claim) failure.

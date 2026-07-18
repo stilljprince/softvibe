@@ -370,25 +370,13 @@ export async function POST(req: Request) {
     const onProbePath =
       !dbUser.isAdmin && isOnProbePath(dbUser.plan, dbUser.planPeriodEnd, now);
 
-    // Fast-path credits check using already-fetched value.
-    // The authoritative atomic decrement happens below, after the rate-limit check.
-    // This early exit avoids the rate-limit DB query for users definitively at 0.
-    // Probe callers skip the credit gate — probes never debit credits.
-    if (!onProbePath && !dbUser.isAdmin && (dbUser.credits ?? 0) < 1) {
-      addDebugLog({
-        ts: new Date().toISOString(),
-        level: "warn",
-        route: "/api/jobs POST",
-        userId: dbUser.id,
-        message: "No credits left (fast-path)",
-        data: { credits: dbUser.credits },
-        reqId: h.get("x-request-id"),
-      });
-      return Response.json(
-        { error: "NO_CREDITS", message: "Du hast aktuell keine Credits. Bitte lade dein Guthaben auf." },
-        { status: 402 }
-      );
-    }
+    // RP-004D1 — the legacy pre-reservation credits fast-path was removed
+    // here. Active Starter/Premium admission is governed by PeriodUsage and
+    // the requested-duration reservation inside reserveAndCreateJob; a valid
+    // paid user must not be short-circuited on User.credits before ever
+    // reaching that authoritative layer. Non-reserve compatibility branches
+    // still perform the legacy atomic credit gate inside the same
+    // transaction.
 
     // Softes Rate-Limit über DB
     const WINDOW_MS = 5000;

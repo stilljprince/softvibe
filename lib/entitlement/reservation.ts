@@ -11,12 +11,15 @@
 //
 // Four invariants matter here:
 //
-//   * Credit debit, Custom-Minute reservation and Job.create all run inside
-//     the same Prisma interactive transaction. If any step fails the whole
-//     transaction rolls back — so a decremented credit can never remain
-//     without its matching Job, and a Job tagged `entitlementKind =
-//     PLAN_MINUTES` cannot exist without a matching PeriodUsage.minutesReserved
-//     increment.
+//   * Custom-Minute reservation, the legacy non-reserve credit debit, and
+//     Job.create all run inside the same Prisma interactive transaction. If
+//     any step fails the whole transaction rolls back — so a decremented
+//     legacy credit can never remain without its matching Job, and a Job
+//     tagged `entitlementKind = PLAN_MINUTES` cannot exist without a
+//     matching PeriodUsage.minutesReserved increment. A PLAN_MINUTES
+//     reservation is authoritative on PeriodUsage and never debits
+//     User.credits — Starter/Premium users are entitled by Custom Minutes,
+//     not by credits.
 //
 //   * The monthly allowance is enforced atomically. The reservation only
 //     commits when
@@ -44,11 +47,11 @@
 // Allowance values are sourced from `lib/entitlement/plan.ts`:
 //   FREE = 0   STARTER = 80   PREMIUM = 200
 //
-// The existing Credits admission system remains authoritative for whether a
-// Job may be admitted at all; Custom-Minute reservation is additive on top
-// and only affects paid users. Credit decrement now lives inside the same
-// transaction as the reservation — there is no longer a separate refund
-// path for INSUFFICIENT_MINUTES.
+// For legacy non-reserve compatibility branches (FREE, expired paid,
+// missing period, zero minutes) the credit gate remains the admission
+// authority and still runs inside this same transaction. Active
+// PLAN_MINUTES admissions are governed solely by the atomic Custom-Minute
+// reservation below.
 
 import { EntitlementKind, Prisma } from "@prisma/client";
 import type { Plan, PrismaClient, Job } from "@prisma/client";
@@ -208,11 +211,16 @@ function isPeriodUsageUniqueConflict(e: unknown): boolean {
  * The whole operation runs inside a single Prisma interactive transaction:
  *
  *   1. Load the user's plan and current billing period.
- *   2. For non-admin callers: atomically decrement `User.credits` with a
- *      `updateMany` guarded by `credits >= 1`. If zero rows match the
- *      transaction aborts as NO_CREDITS.
- *   3. Decide whether reservation applies (see decidePlanMinuteReservation).
- *   4. On the `reserve` branch:
+ *   2. Decide whether reservation applies (see decidePlanMinuteReservation).
+ *   3. On the `reserve` branch — an active PLAN_MINUTES admission —
+ *      `User.credits` is NOT touched. Custom Minutes are the sole paid
+ *      admission ledger; Starter/Premium users are not required to hold a
+ *      positive legacy credit balance.
+ *   4. On any non-reserving branch (FREE, expired paid, missing period,
+ *      zero minutes): for non-admin callers, atomically decrement
+ *      `User.credits` with an `updateMany` guarded by `credits >= 1`. If
+ *      zero rows match the transaction aborts as NO_CREDITS.
+ *   5. On the `reserve` branch:
  *        a. Compute the plan allowance from the effective plan.
  *        b. Attempt a conditional `updateMany` that increments minutesReserved
  *           only when the row satisfies
@@ -228,7 +236,7 @@ function isPeriodUsageUniqueConflict(e: unknown): boolean {
  *           fresh, allowance-guarded create.
  *        d. Create the Job with `entitlementKind = PLAN_MINUTES` and
  *           `reservedMinutes = decision.minutes`.
- *   5. On any non-reserving branch: create the Job with null entitlement
+ *   6. On any non-reserving branch: create the Job with null entitlement
  *      fields — the caller still gets exactly one Job.
  *
  * If two callers race to create the first PeriodUsage for a period, one
@@ -287,20 +295,6 @@ async function runReservationTx(
       });
       if (!user) throw new ReservationRejectError("USER_NOT_FOUND");
 
-      // Atomic credit debit for non-admin callers. Any downstream failure
-      // — INSUFFICIENT_MINUTES, PeriodUsage write, Job create, P2002 —
-      // rolls this back with the rest of the transaction, so no manual
-      // refund path is needed.
-      if (!params.isAdmin) {
-        const creditRes = await tx.user.updateMany({
-          where: { id: params.userId, credits: { gte: 1 } },
-          data: { credits: { decrement: 1 } },
-        });
-        if (creditRes.count === 0) {
-          throw new ReservationRejectError("NO_CREDITS");
-        }
-      }
-
       const decision = decidePlanMinuteReservation({
         plan: user.plan,
         planPeriodStart: user.planPeriodStart,
@@ -310,7 +304,22 @@ async function runReservationTx(
       });
 
       if (decision.action !== "reserve") {
-        // Non-reserving branch — create the Job untagged and return.
+        // Non-reserving branch — retain the legacy atomic credit debit
+        // for non-admin callers. The reserve branch below (an active
+        // PLAN_MINUTES admission) is authoritative on PeriodUsage and must
+        // not touch User.credits: Starter/Premium users receive Custom
+        // Minutes, not credits. Any downstream failure inside this branch
+        // (Job.create throw) still rolls the debit back with the rest of
+        // the transaction, so no separate refund path is needed.
+        if (!params.isAdmin) {
+          const creditRes = await tx.user.updateMany({
+            where: { id: params.userId, credits: { gte: 1 } },
+            data: { credits: { decrement: 1 } },
+          });
+          if (creditRes.count === 0) {
+            throw new ReservationRejectError("NO_CREDITS");
+          }
+        }
         const job = await tx.job.create({
           data: {
             userId: params.jobData.userId,

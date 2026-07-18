@@ -42,25 +42,31 @@
 //       - Rejection preserves minutesUsed at 0 (never touched by this path)
 //       - Concurrent reservations at the boundary cannot exceed allowance
 //         (some succeed, some are rejected; the total never overshoots)
-//   * Common transaction (RP-010 Phase 3A final)
-//       - Credit debit, PeriodUsage reservation and Job.create are one
-//         atomic unit. Rejection at any step reverts every earlier write.
-//       - NO_CREDITS surfaces from the atomic credit gate; no PeriodUsage,
-//         no Job is created.
-//       - INSUFFICIENT_MINUTES rolls the credit debit back.
-//       - Injected Job.create failure rolls credit + reservation back.
-//       - Injected PeriodUsage.update failure rolls credit back, no Job.
-//       - Happy path debits exactly one credit and creates exactly one Job.
+//   * Common transaction (RP-004D1)
+//       - PeriodUsage reservation and Job.create are one atomic unit on
+//         the reserve branch. Non-reserve fallbacks additionally include
+//         the legacy credit debit in the same transaction. Rejection at
+//         any step reverts every earlier write.
+//       - STARTER/PREMIUM with credits = 0 and sufficient minutes: reserve
+//         succeeds, Job tagged PLAN_MINUTES, credits stay 0.
+//       - Legacy non-reserve fallback (FREE, non-admin) with credits = 0
+//         still surfaces NO_CREDITS.
+//       - INSUFFICIENT_MINUTES (with credits > 0 or 0) never debits.
+//       - Injected Job.create failure rolls the reservation back.
+//       - Injected PeriodUsage.update failure leaves nothing committed.
+//       - Reserve-branch happy path creates one PLAN_MINUTES Job without
+//         debiting credits.
 //   * First-PeriodUsage-row concurrency (RP-010 Phase 3A final)
 //       - Two parallel first reservations that both fit: both succeed,
-//         one PeriodUsage row, correct sum, one credit per success, two Jobs.
+//         one PeriodUsage row, correct sum, two Jobs, credits unchanged
+//         (reserve path never debits).
 //       - Two parallel first reservations that together exceed the cap:
-//         the winner succeeds, the loser sees INSUFFICIENT_MINUTES on retry,
-//         limit never overshoots, loser retains its credit, no orphan Job.
+//         the winner succeeds, the loser sees INSUFFICIENT_MINUTES on
+//         retry, limit never overshoots, credits unchanged, no orphan Job.
 //       - Injected single P2002 on the first create: exactly one retry,
-//         one net credit debit, one net reservation, one Job.
+//         one net reservation, one Job, credits unchanged.
 //       - Persistent P2002 on create: controlled CONCURRENCY_CONFLICT after
-//         one retry, no credit lost, no reservation, no Job.
+//         one retry, no reservation, no Job, credits unchanged.
 
 import {
   decidePlanMinuteReservation,
@@ -1305,12 +1311,14 @@ async function runReservationTests(): Promise<void> {
 // Common transaction — credit debit + reservation + Job.create are atomic
 // ---------------------------------------------------------------------------
 
-// (20) NO_CREDITS: non-admin user with zero credits gets NO_CREDITS from the
-// atomic credit gate. No reservation, no Job, credits stay at 0.
+// (20) RP-004D1: Starter/Premium PLAN_MINUTES reservation must NOT require
+// a positive legacy credit balance. A non-admin STARTER with credits=0 and
+// sufficient monthly minutes reserves and creates the Job atomically;
+// credits are left untouched and NO_CREDITS is unreachable on this path.
 {
   const store = seedStore();
   seedUser(store, {
-    id: "u-nc",
+    id: "u-nc-starter",
     plan: "STARTER",
     planPeriodStart: periodStart,
     planPeriodEnd: periodEnd,
@@ -1319,24 +1327,158 @@ async function runReservationTests(): Promise<void> {
   const client = buildStubClient(store);
   const r = await reserveAndCreateJob(
     {
-      userId: "u-nc",
+      userId: "u-nc-starter",
       isAdmin: false,
       requestedMinutes: 5,
-      jobData: jobData("u-nc"),
+      jobData: jobData("u-nc-starter"),
       now: insidePeriod,
     },
     client
   );
-  check("NO_CREDITS: ok=false", r.ok, false);
-  if (!r.ok) check("NO_CREDITS: error=NO_CREDITS", r.error, "NO_CREDITS");
-  check("NO_CREDITS: no Job created", store.jobs.size, 0);
-  check("NO_CREDITS: no PeriodUsage created", store.periodUsages.size, 0);
-  check("NO_CREDITS: credits still 0", store.users.get("u-nc")?.credits, 0);
+  check("STARTER credits=0 reserve: ok=true", r.ok, true);
+  if (r.ok) {
+    check(
+      "STARTER credits=0 reserve: reservation=reserved",
+      r.reservation,
+      "reserved"
+    );
+    if (r.reservation === "reserved") {
+      check("STARTER credits=0 reserve: minutes=5", r.minutes, 5);
+    }
+  }
+  check("STARTER credits=0 reserve: one Job created", store.jobs.size, 1);
+  const puKey = pukey("u-nc-starter", periodStart);
+  const pu = store.periodUsages.get(puKey);
+  check(
+    "STARTER credits=0 reserve: PeriodUsage.minutesReserved=5",
+    pu?.minutesReserved,
+    5
+  );
+  check(
+    "STARTER credits=0 reserve: PeriodUsage.minutesUsed still 0",
+    pu?.minutesUsed,
+    0
+  );
+  const job = Array.from(store.jobs.values())[0];
+  check(
+    "STARTER credits=0 reserve: Job tagged PLAN_MINUTES",
+    job.entitlementKind,
+    "PLAN_MINUTES"
+  );
+  check(
+    "STARTER credits=0 reserve: Job.reservedMinutes=5",
+    job.reservedMinutes,
+    5
+  );
+  check(
+    "STARTER credits=0 reserve: credits remain 0 (never debited)",
+    store.users.get("u-nc-starter")?.credits,
+    0
+  );
 }
 
-// (21) INSUFFICIENT_MINUTES on paid user rolls the credit debit back.
+// (20b) RP-004D1: same guarantee for PREMIUM. A non-admin PREMIUM with
+// credits=0 and sufficient monthly minutes must reserve and succeed.
+{
+  const store = seedStore();
+  seedUser(store, {
+    id: "u-nc-premium",
+    plan: "PREMIUM",
+    planPeriodStart: periodStart,
+    planPeriodEnd: periodEnd,
+    credits: 0,
+  });
+  const client = buildStubClient(store);
+  const r = await reserveAndCreateJob(
+    {
+      userId: "u-nc-premium",
+      isAdmin: false,
+      requestedMinutes: 30,
+      jobData: jobData("u-nc-premium"),
+      now: insidePeriod,
+    },
+    client
+  );
+  check("PREMIUM credits=0 reserve: ok=true", r.ok, true);
+  if (r.ok) {
+    check(
+      "PREMIUM credits=0 reserve: reservation=reserved",
+      r.reservation,
+      "reserved"
+    );
+  }
+  const pu = store.periodUsages.get(pukey("u-nc-premium", periodStart));
+  check(
+    "PREMIUM credits=0 reserve: PeriodUsage.minutesReserved=30",
+    pu?.minutesReserved,
+    30
+  );
+  const job = Array.from(store.jobs.values())[0];
+  check(
+    "PREMIUM credits=0 reserve: Job tagged PLAN_MINUTES",
+    job.entitlementKind,
+    "PLAN_MINUTES"
+  );
+  check(
+    "PREMIUM credits=0 reserve: credits remain 0 (never debited)",
+    store.users.get("u-nc-premium")?.credits,
+    0
+  );
+}
+
+// (20c) RP-004D1: legacy non-reserve fallback still enforces the credit
+// gate. A non-admin FREE user with credits=0 must still receive NO_CREDITS,
+// because Free users do not fall through to the reserve branch (their
+// probe path is enforced by the /api/jobs route, not this helper).
+{
+  const store = seedStore();
+  seedUser(store, {
+    id: "u-nc-free",
+    plan: "FREE",
+    planPeriodStart: null,
+    planPeriodEnd: null,
+    credits: 0,
+  });
+  const client = buildStubClient(store);
+  const r = await reserveAndCreateJob(
+    {
+      userId: "u-nc-free",
+      isAdmin: false,
+      requestedMinutes: 5,
+      jobData: jobData("u-nc-free"),
+      now: insidePeriod,
+    },
+    client
+  );
+  check("FREE credits=0 legacy fallback: ok=false", r.ok, false);
+  if (!r.ok)
+    check(
+      "FREE credits=0 legacy fallback: error=NO_CREDITS",
+      r.error,
+      "NO_CREDITS"
+    );
+  check(
+    "FREE credits=0 legacy fallback: no Job created",
+    store.jobs.size,
+    0
+  );
+  check(
+    "FREE credits=0 legacy fallback: no PeriodUsage",
+    store.periodUsages.size,
+    0
+  );
+  check(
+    "FREE credits=0 legacy fallback: credits still 0",
+    store.users.get("u-nc-free")?.credits,
+    0
+  );
+}
+
+// (21) INSUFFICIENT_MINUTES on paid user with positive credits.
 // Pre-condition: user has 3 credits and STARTER at 79/80. Request 2 minutes.
-// Expected: credits unchanged (3), minutesReserved unchanged (79), no Job.
+// Under RP-004D1 the reserve branch never touches User.credits, so the
+// balance is unchanged trivially. Reservation itself must still be
+// rejected with INSUFFICIENT_MINUTES, no Job, no PeriodUsage mutation.
 {
   const store = seedStore();
   seedUser(store, {
@@ -1364,28 +1506,74 @@ async function runReservationTests(): Promise<void> {
     },
     client
   );
-  check("INSUFFICIENT_MINUTES+credit rb: ok=false", r.ok, false);
+  check("INSUFFICIENT_MINUTES+credits>0: ok=false", r.ok, false);
   if (!r.ok)
     check(
-      "INSUFFICIENT_MINUTES+credit rb: error=INSUFFICIENT_MINUTES",
+      "INSUFFICIENT_MINUTES+credits>0: error=INSUFFICIENT_MINUTES",
       r.error,
       "INSUFFICIENT_MINUTES"
     );
   check(
-    "INSUFFICIENT_MINUTES+credit rb: credits still 3",
+    "INSUFFICIENT_MINUTES+credits>0: credits untouched at 3",
     store.users.get("u-imr")?.credits,
     3
   );
   check(
-    "INSUFFICIENT_MINUTES+credit rb: minutesReserved still 79",
+    "INSUFFICIENT_MINUTES+credits>0: minutesReserved still 79",
     store.periodUsages.get(pukey("u-imr", periodStart))?.minutesReserved,
     79
   );
-  check("INSUFFICIENT_MINUTES+credit rb: no Job", store.jobs.size, 0);
+  check("INSUFFICIENT_MINUTES+credits>0: no Job", store.jobs.size, 0);
 }
 
-// (22) Happy path: non-admin STARTER debits exactly one credit, reserves,
-// and creates one Job.
+// (21b) INSUFFICIENT_MINUTES with zero credits still returns
+// INSUFFICIENT_MINUTES (never NO_CREDITS) on the active PLAN_MINUTES path
+// — the reserve branch never consults the credit gate.
+{
+  const store = seedStore();
+  seedUser(store, {
+    id: "u-imr0",
+    plan: "PREMIUM",
+    planPeriodStart: periodStart,
+    planPeriodEnd: periodEnd,
+    credits: 0,
+  });
+  store.periodUsages.set(pukey("u-imr0", periodStart), {
+    userId: "u-imr0",
+    periodStart,
+    periodEnd,
+    minutesReserved: 199,
+    minutesUsed: 0,
+  });
+  const client = buildStubClient(store);
+  const r = await reserveAndCreateJob(
+    {
+      userId: "u-imr0",
+      isAdmin: false,
+      requestedMinutes: 5,
+      jobData: jobData("u-imr0"),
+      now: insidePeriod,
+    },
+    client
+  );
+  check("INSUFFICIENT_MINUTES+credits=0: ok=false", r.ok, false);
+  if (!r.ok)
+    check(
+      "INSUFFICIENT_MINUTES+credits=0: error=INSUFFICIENT_MINUTES",
+      r.error,
+      "INSUFFICIENT_MINUTES"
+    );
+  check(
+    "INSUFFICIENT_MINUTES+credits=0: credits still 0",
+    store.users.get("u-imr0")?.credits,
+    0
+  );
+  check("INSUFFICIENT_MINUTES+credits=0: no Job", store.jobs.size, 0);
+}
+
+// (22) Happy path: non-admin STARTER reserve. RP-004D1 — the reserve
+// branch is authoritative on PeriodUsage; User.credits must NOT be
+// debited even though the caller has a positive balance.
 {
   const store = seedStore();
   seedUser(store, {
@@ -1407,7 +1595,11 @@ async function runReservationTests(): Promise<void> {
     client
   );
   check("Happy: ok=true", r.ok, true);
-  check("Happy: credits debited by 1", store.users.get("u-happy")?.credits, 4);
+  check(
+    "Happy: credits untouched at 5 (reserve path never debits)",
+    store.users.get("u-happy")?.credits,
+    5
+  );
   const pu = store.periodUsages.get(pukey("u-happy", periodStart));
   check("Happy: minutesReserved=10", pu?.minutesReserved, 10);
   check("Happy: one Job", store.jobs.size, 1);
@@ -1416,7 +1608,9 @@ async function runReservationTests(): Promise<void> {
   check("Happy: Job.reservedMinutes=10", job.reservedMinutes, 10);
 }
 
-// (23) Job.create failure rolls credit + PeriodUsage back.
+// (23) Job.create failure inside a reserve-branch transaction still rolls
+// back the PeriodUsage write; the credit balance is untouched trivially
+// because the reserve path does not debit.
 {
   const store = seedStore();
   seedUser(store, {
@@ -1445,7 +1639,7 @@ async function runReservationTests(): Promise<void> {
   }
   check("Job.create error: exception propagated", threw, true);
   check(
-    "Job.create error: credits rolled back to 5",
+    "Job.create error: credits untouched at 5",
     store.users.get("u-jce")?.credits,
     5
   );
@@ -1457,7 +1651,8 @@ async function runReservationTests(): Promise<void> {
   check("Job.create error: no Job", store.jobs.size, 0);
 }
 
-// (24) PeriodUsage update failure rolls credit back, no Job.
+// (24) PeriodUsage update failure aborts the reserve branch. Credits are
+// never debited on this path; the balance is unchanged trivially.
 {
   const store = seedStore();
   seedUser(store, {
@@ -1493,7 +1688,7 @@ async function runReservationTests(): Promise<void> {
   }
   check("PeriodUsage.update error: exception propagated", threw, true);
   check(
-    "PeriodUsage.update error: credits rolled back to 5",
+    "PeriodUsage.update error: credits untouched at 5",
     store.users.get("u-puue")?.credits,
     5
   );
@@ -1542,8 +1737,8 @@ async function runReservationTests(): Promise<void> {
 // (26) Two parallel first reservations that both fit. The loser hits P2002
 // on the initial create; the outer layer retries exactly once and the
 // retry finds the committed row, takes the atomic-increment path. Result:
-// both succeed, one PeriodUsage row, correct sum, two Jobs, two credit
-// debits (one each).
+// both succeed, one PeriodUsage row, correct sum, two Jobs, and — under
+// RP-004D1 — credits are untouched (reserve path never debits).
 {
   const store = seedStore();
   seedUser(store, {
@@ -1595,9 +1790,9 @@ async function runReservationTests(): Promise<void> {
   );
   check("First-race fit: exactly two Jobs", store.jobs.size, 2);
   check(
-    "First-race fit: credits debited twice (5-2=3)",
+    "First-race fit: credits untouched at 5 (reserve path never debits)",
     store.users.get("u-firstfit")?.credits,
-    3
+    5
   );
   const jobs = Array.from(store.jobs.values());
   check(
@@ -1609,7 +1804,8 @@ async function runReservationTests(): Promise<void> {
 
 // (27) Two parallel first reservations where the second would push past the
 // cap. Winner succeeds; loser retries, sees the committed row and gets
-// INSUFFICIENT_MINUTES with a full rollback (its credit is restored).
+// INSUFFICIENT_MINUTES. Under RP-004D1 the reserve path never debits, so
+// credits are untouched on both branches.
 {
   const store = seedStore();
   seedUser(store, {
@@ -1660,16 +1856,16 @@ async function runReservationTests(): Promise<void> {
     true
   );
   check("First-race over: exactly one Job", store.jobs.size, 1);
-  // Loser's credit must be back — one debit committed, one rolled back.
   check(
-    "First-race over: credits debited exactly once (5-1=4)",
+    "First-race over: credits untouched at 5 (reserve path never debits)",
     store.users.get("u-firstover")?.credits,
-    4
+    5
   );
 }
 
 // (28) Simulated single P2002 on the first create. Verifies the retry path
-// commits exactly one credit debit, exactly one reservation, exactly one Job.
+// commits exactly one reservation and exactly one Job. Under RP-004D1 the
+// reserve path never debits credits.
 {
   const store = seedStore();
   seedUser(store, {
@@ -1699,7 +1895,11 @@ async function runReservationTests(): Promise<void> {
   // by 5. Net minutesReserved is 5.
   check("Retry: minutesReserved=5", pu?.minutesReserved, 5);
   check("Retry: exactly one Job", store.jobs.size, 1);
-  check("Retry: credits debited exactly once (5-1=4)", store.users.get("u-p2002")?.credits, 4);
+  check(
+    "Retry: credits untouched at 5 (reserve path never debits)",
+    store.users.get("u-p2002")?.credits,
+    5
+  );
   check(
     "Retry: injection hook consumed",
     store.injectPeriodUsageCreateP2002Once,
@@ -1751,7 +1951,7 @@ async function runReservationTests(): Promise<void> {
   );
   check("Persistent P2002: no Job", store.jobs.size, 0);
   check(
-    "Persistent P2002: credits fully restored (5)",
+    "Persistent P2002: credits untouched at 5",
     store.users.get("u-cc")?.credits,
     5
   );

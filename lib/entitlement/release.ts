@@ -379,18 +379,14 @@ export async function releasePlanMinuteReservation(
         throw new ReleaseRejectError("RESERVED_MINUTES_UNDERFLOW");
       }
 
-      // Optional credit refund. Fires only when the caller opts in AND
-      // the product rule allows it (no prior refund, TTS never started).
-      // Runs inside this same transaction, so a downstream throw rolls
-      // the refund back together with the Job.updateMany above and the
-      // PeriodUsage decrement — no partial state is possible.
-      const creditRefunded = refundCreditIfEligible
-        ? await tryClaimCreditRefund(tx, {
-            jobId: params.jobId,
-            userId: job.userId,
-            now,
-          })
-        : false;
+      // RP-004D1 — PLAN_MINUTES jobs never consumed a legacy User.credits
+      // unit (reservation debits PeriodUsage.minutesReserved, not credits).
+      // Any refund on release would therefore mint a phantom credit. We
+      // short-circuit here regardless of refundCreditIfEligible so callers
+      // that still pass the flag for a PLAN_MINUTES job cannot cause a
+      // spurious increment. Legacy pre-TTS refunds remain intact on the
+      // non-PLAN_MINUTES branch above.
+      const creditRefunded = false;
 
       const updated = await tx.job.findUnique({
         where: { id: params.jobId },
