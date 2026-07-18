@@ -618,9 +618,12 @@ export default function GenerateClient({
         msg =
           "Für die gewählte Dauer stehen nicht genug Custom Minutes zur Verfügung.";
       } else if (code === "NO_CREDITS") {
-        // Legacy admission path — keep a safe generic fallback that does not
-        // expose internal accounting details to the user.
-        msg = serverMsg ?? "Diese Generierung ist derzeit nicht verfügbar.";
+        // Residual compatibility branch. Do not surface serverMsg here — it
+        // may still carry legacy Credits/Guthaben/Aufladen wording. A neutral
+        // client-owned message keeps the user-visible surface product-consistent
+        // while the underlying error code stays unchanged.
+        msg =
+          "Für diese Generierung steht aktuell kein passendes Nutzungskontingent zur Verfügung.";
       } else {
         msg = serverMsg ?? "Diese Generierung ist derzeit nicht verfügbar.";
       }

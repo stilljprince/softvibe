@@ -284,9 +284,11 @@ export default function LibraryClient() {
   const headerCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const downloadingRef = useRef<Set<string>>(new Set());
 
-  // Inline credits for header menu — avoids HeaderCredits CSS-var dependency
-  const [creditsCount, setCreditsCount] = useState<number | null>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
+  // Entitlement-derived Custom Minutes for the header menu. null = hide
+  // (Free, admin, loading, failed fetch, or unresolved snapshot). Zero for a
+  // valid paid plan is a truthful value and must render, not be treated as
+  // loading.
+  const [paidMinutesRemaining, setPaidMinutesRemaining] = useState<number | null>(null);
 
   // ── Manual playlists ─────────────────────────────────────────────────────────
   const [manualPlaylists, setManualPlaylists] = useState<ManualPlaylist[]>([]);
@@ -314,10 +316,16 @@ export default function LibraryClient() {
       .then((r) => r.ok ? r.json() : null)
       .then((json) => {
         const d = json?.ok === true && json.data ? json.data : json;
-        if (d && typeof d === "object" && "credits" in d) {
-          setCreditsCount(d.credits as number);
-          setIsAdmin(!!(d as { isAdmin?: boolean }).isAdmin);
-        }
+        if (!d || typeof d !== "object") return;
+        const ent = (d as { entitlements?: unknown }).entitlements;
+        if (!ent || typeof ent !== "object") return;
+        const plan = (ent as { plan?: unknown }).plan;
+        const mm = (ent as { monthlyMinutes?: unknown }).monthlyMinutes;
+        if (plan !== "STARTER" && plan !== "PREMIUM") return;
+        if (!mm || typeof mm !== "object") return;
+        const remaining = (mm as { remaining?: unknown }).remaining;
+        if (typeof remaining !== "number") return;
+        setPaidMinutesRemaining(remaining);
       })
       .catch(() => null);
   }, []);
@@ -1219,29 +1227,11 @@ export default function LibraryClient() {
                 >
                   {themeKey === "dark" ? "☾ Dark" : themeKey === "pastel" ? "✦ Pastel" : "◑ Light"}
                 </div>
-                {creditsCount !== null && (
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                {paidMinutesRemaining !== null && (
+                  <div style={{ display: "flex", alignItems: "center", marginBottom: 12 }}>
                     <span style={{ fontSize: "0.82rem", color: themeCfg.uiSoftText, fontWeight: 600 }}>
-                      {isAdmin ? "∞ Credits" : `${creditsCount} Credits`}
+                      {paidMinutesRemaining} Custom Minutes
                     </span>
-                    {!isAdmin && (
-                      <a
-                        href="/pricing"
-                        style={{
-                          fontSize: "0.78rem",
-                          fontWeight: 600,
-                          color: themeCfg.uiText,
-                          textDecoration: "none",
-                          padding: "4px 12px",
-                          borderRadius: 999,
-                          border: `1px solid ${themeCfg.secondaryButtonBorder}`,
-                          background: "transparent",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        Aufladen
-                      </a>
-                    )}
                   </div>
                 )}
                 <form action="/api/auth/signout" method="post">

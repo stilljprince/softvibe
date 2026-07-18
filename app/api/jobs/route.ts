@@ -547,7 +547,7 @@ export async function POST(req: Request) {
       if (reservation.error === "NO_CREDITS") {
         return jsonError("NO_CREDITS", 402, {
           message:
-            "Du hast aktuell keine Credits mehr. Bitte lade dein Guthaben auf.",
+            "Für diese Generierung steht aktuell kein passendes Nutzungskontingent zur Verfügung.",
         });
       }
       if (reservation.error === "INSUFFICIENT_MINUTES") {
