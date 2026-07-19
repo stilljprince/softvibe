@@ -62,6 +62,7 @@
 import { LibraryUnlockSource, type Plan, type PrismaClient } from "@prisma/client";
 import { prisma as defaultPrisma } from "@/lib/prisma";
 import { resolveEffectivePlan } from "@/lib/entitlement/resolver";
+import { localDayBoundsUtc } from "@/lib/entitlement/timezone";
 
 /**
  * Duration of a new Free LibraryUnlock in milliseconds.
@@ -85,10 +86,12 @@ export const DAILY_UNLOCK_LIMIT = 3;
 const LIBRARY_UNLOCK_LOCK_NAMESPACE = 730104;
 
 /**
- * Server-side day boundary used by the daily limit. UTC calendar day: the
- * window is `[start, start + 24h)` where `start` is the UTC midnight
- * preceding `now`. No user-timezone preference exists and none is invented
- * for this phase — the day boundary is a server-side product rule.
+ * Server-side day boundary used by the daily limit. Historical helper —
+ * retained so `scripts/test-library-unlock.ts` continues to exercise the
+ * pure UTC calendar-day rule directly. The runtime path now consults
+ * `localDayBoundsUtc(now, User.timezone)` (see step 7 of
+ * `claimLibrarySessionUnlock`), which delegates back to this same
+ * behaviour when `User.timezone === null`.
  */
 export function startOfUtcDay(now: Date): Date {
   return new Date(
@@ -211,7 +214,7 @@ export async function claimLibrarySessionUnlock(
       // -----------------------------------------------------------------
       const user = await tx.user.findUnique({
         where: { id: params.userId },
-        select: { plan: true, planPeriodEnd: true },
+        select: { plan: true, planPeriodEnd: true, timezone: true },
       });
       if (!user) throw new ClaimRejectError("USER_NOT_FOUND");
 
@@ -254,19 +257,27 @@ export async function claimLibrarySessionUnlock(
       // deterministically. The lock releases automatically when the
       // transaction commits or aborts (that's the -xact- suffix), so no
       // manual release / stale-holder recovery is possible or needed.
+      //
+      // We call the lock via $executeRaw rather than $queryRaw:
+      // pg_advisory_xact_lock() returns the PostgreSQL `void` type, which
+      // Prisma's $queryRaw cannot deserialize as a result column (see
+      // P2010 — "Failed to deserialize column of type 'void'"). $executeRaw
+      // executes the same parameter-bound statement inside the same
+      // transaction, acquires the lock identically, and returns only the
+      // affected-row count — no column deserialization is attempted.
       // -----------------------------------------------------------------
-      // Prisma's tagged-template $queryRaw exists on both the top-level
+      // Prisma's tagged-template $executeRaw exists on both the top-level
       // client and the transaction client. We cast to a minimal shape to
       // avoid pulling the full Prisma runtime type here — the SQL is
       // fully parameter-bound below.
       await (
         tx as unknown as {
-          $queryRaw: (
+          $executeRaw: (
             strings: TemplateStringsArray,
             ...values: unknown[]
-          ) => Promise<unknown>;
+          ) => Promise<number>;
         }
-      ).$queryRaw`SELECT pg_advisory_xact_lock(${LIBRARY_UNLOCK_LOCK_NAMESPACE}::int, hashtext(${params.userId})::int)`;
+      ).$executeRaw`SELECT pg_advisory_xact_lock(${LIBRARY_UNLOCK_LOCK_NAMESPACE}::int, hashtext(${params.userId})::int)`;
 
       // -----------------------------------------------------------------
       // 5. Provider Event ID idempotency (optional). Runs INSIDE the
@@ -338,12 +349,17 @@ export async function claimLibrarySessionUnlock(
 
       // -----------------------------------------------------------------
       // 7. Daily limit gate. Count NEW unlock rows created during the
-      // current UTC day window. Because we're inside the per-user
-      // advisory lock, this count → check → create is atomic against
-      // any concurrent claim by the same user.
+      // current *user-local* calendar day. When User.timezone is NULL
+      // the window degrades to UTC (the pre-RP-004E1 behaviour).
+      // Because we're inside the per-user advisory lock, this count →
+      // check → create is atomic against any concurrent claim by the
+      // same user, and DST-driven 23 h / 25 h days behave identically to
+      // ordinary 24 h days from a race-safety standpoint.
       // -----------------------------------------------------------------
-      const dayStart = startOfUtcDay(now);
-      const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+      const { start: dayStart, end: dayEnd } = localDayBoundsUtc(
+        now,
+        user.timezone
+      );
       const todayCount = await tx.libraryUnlock.count({
         where: {
           userId: params.userId,

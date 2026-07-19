@@ -301,11 +301,18 @@ function buildTxOps(store: Store, writes: WriteOp[], releases: ReleaseFn[]) {
     },
     // Advisory lock simulation. The production helper calls
     // `SELECT pg_advisory_xact_lock($1::int, hashtext($2)::int)` inside
-    // the transaction; $1 is the namespace constant, $2 is the userId
-    // string. We ignore the namespace (all Library-Unlock calls share it)
-    // and queue on the userId.
+    // the transaction via $executeRaw; $1 is the namespace constant, $2
+    // is the userId string. We ignore the namespace (all Library-Unlock
+    // calls share it) and queue on the userId.
+    //
+    // $queryRaw is also intercepted defensively: pg_advisory_xact_lock
+    // returns the PostgreSQL `void` type, which real Prisma cannot
+    // deserialize through $queryRaw (P2010). Production uses $executeRaw
+    // for exactly this reason; the $queryRaw stub is kept as a no-op so
+    // any accidental regression to $queryRaw is caught by the guarded
+    // real-DB regression check rather than silently coordinating here.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    $queryRaw: async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    $executeRaw: async (strings: TemplateStringsArray, ...values: unknown[]) => {
       const sql = Array.from(strings).join("?").toLowerCase();
       if (sql.includes("pg_advisory_xact_lock")) {
         // values[0] = namespace int, values[1] = userId string
@@ -325,8 +332,12 @@ function buildTxOps(store: Store, writes: WriteOp[], releases: ReleaseFn[]) {
           }
           release();
         });
-        return [];
+        return 1;
       }
+      return 0;
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    $queryRaw: async () => {
       return [];
     },
   };

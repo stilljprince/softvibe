@@ -9,6 +9,7 @@ import { usePlayer, type Chapter } from "@/app/components/player-context";
 import { useSVTheme } from "@/app/components/sv-kit";
 import SVScene from "@/app/components/sv-scene";
 import { PLAYLIST_COVERS, getPlaylistCover } from "@/lib/playlist-covers";
+import CuratedLibrarySection from "./CuratedLibrarySection";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -31,7 +32,7 @@ type Track = {
 
 type SortKey = "newest" | "oldest" | "short" | "long";
 type ViewMode = "list" | "grid";
-type LibraryView = "recent" | "playlists";
+type LibraryView = "recent" | "playlists" | "curated";
 
 type ManualPlaylist = {
   id: string;
@@ -1284,9 +1285,9 @@ export default function LibraryClient() {
           </Link>
         </div>
 
-        {/* View toggle — Zuletzt erstellt / Playlists */}
+        {/* View toggle — Zuletzt erstellt / Playlists / Kuratiert */}
         <div style={{ display: "flex", marginBottom: 20, borderBottom: `1px solid ${glassCardBorder}` }}>
-          {(["recent", "playlists"] as LibraryView[]).map((v) => (
+          {(["recent", "playlists", "curated"] as LibraryView[]).map((v) => (
             <button
               key={v}
               type="button"
@@ -1305,10 +1306,18 @@ export default function LibraryClient() {
                 transition: "color 150ms ease, border-color 150ms ease",
               }}
             >
-              {v === "recent" ? "Zuletzt erstellt" : "Playlists"}
+              {v === "recent" ? "Zuletzt erstellt" : v === "playlists" ? "Playlists" : "Kuratiert"}
             </button>
           ))}
         </div>
+
+        {/* ── Curated view (RP-004E1) ─────────────────────────────────── */}
+        {libraryView === "curated" && (
+          <CuratedLibrarySection
+            glassCardBg={glassCardBg}
+            glassCardBorder={glassCardBorder}
+          />
+        )}
 
         {/* ── Recent view ──────────────────────────────────────────────── */}
         {libraryView === "recent" && (<>

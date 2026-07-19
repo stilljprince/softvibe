@@ -26,12 +26,16 @@
 //     depends on the caller's effective plan and unlock state.
 
 import { getServerSession } from "next-auth";
-import { headers } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { authOptions } from "@/lib/auth/config";
 import { jsonError, jsonOk } from "@/lib/api";
 import { log } from "@/lib/log";
 import { toErrData } from "@/lib/error";
 import { getActiveLibrarySessionDetail } from "@/lib/entitlement/library-catalog";
+import {
+  LIBRARY_QA_MODE_COOKIE_NAME,
+  resolveLibraryEffectiveAccess,
+} from "@/lib/entitlement/library-effective-access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -54,7 +58,18 @@ export async function GET(
     }
     const userId = session.user.id as string;
 
-    const result = await getActiveLibrarySessionDetail(userId, id);
+    const cookieStore = await cookies();
+    const qaModeCookie =
+      cookieStore.get(LIBRARY_QA_MODE_COOKIE_NAME)?.value ?? null;
+    const effective = await resolveLibraryEffectiveAccess({
+      userId,
+      qaModeCookie,
+    });
+    const effectiveAccess = effective.ok ? effective.access : undefined;
+
+    const result = await getActiveLibrarySessionDetail(userId, id, {
+      effectiveAccess,
+    });
     if (!result.ok) {
       if (result.error === "AUTH_REQUIRED") {
         return jsonError("Unauthorized", 401, undefined, PRIVATE_NO_STORE);

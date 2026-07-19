@@ -13,6 +13,8 @@
     "start": "next start",
     "lint": "next lint",
     "seed": "prisma db seed",
+    "seed:library:qa": "tsx scripts/seed-library-qa.ts seed",
+    "seed:library:qa:cleanup": "tsx scripts/seed-library-qa.ts cleanup",
     "backfill:track-titles": "node scripts/backfill-track-titles.cjs",
     "normalize:track-titles": "node scripts/normalize-track-titles.cjs"
   },

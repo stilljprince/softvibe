@@ -33,9 +33,13 @@
 //     + O(1) unlock-batch query. No per-session User re-read, no
 //     per-session resolver call, no per-session unlock query.
 
-import type { Plan, PrismaClient } from "@prisma/client";
+import type { PrismaClient } from "@prisma/client";
 import { prisma as defaultPrisma } from "@/lib/prisma";
 import { resolveEffectivePlan } from "@/lib/entitlement/resolver";
+import type {
+  LibraryEffectiveAccess,
+  LibraryEffectiveMode,
+} from "@/lib/entitlement/library-effective-access";
 
 /**
  * Maximum number of sessions returned by `listActiveLibrarySessions`
@@ -110,11 +114,30 @@ export type ListActiveLibrarySessionsOptions = {
   take?: number;
   /** Explicit clock for deterministic tests. */
   now?: Date;
+  /**
+   * Optional precomputed effective-access snapshot. When supplied, its
+   * `effectiveMode` replaces the raw plan calculation — this is the
+   * hook through which the admin Library-QA override (dev-only)
+   * changes what the catalog reports without touching User.plan.
+   */
+  effectiveAccess?: LibraryEffectiveAccess;
 };
 
 export type GetActiveLibrarySessionDetailOptions = {
   now?: Date;
+  /** See ListActiveLibrarySessionsOptions.effectiveAccess. */
+  effectiveAccess?: LibraryEffectiveAccess;
 };
+
+/**
+ * Reduce an effective mode to the internal effective plan the catalog
+ * uses for the (paid | free) branch. ADMIN behaves identically to a
+ * paid plan for catalog rendering: no unlock query, no expiry, direct
+ * playback.
+ */
+function toCatalogPlanBranch(mode: LibraryEffectiveMode): "PAID" | "FREE" {
+  return mode === "FREE" ? "FREE" : "PAID";
+}
 
 /**
  * Build the protected Phase-4C audio URL for a chapter id. Kept as a
@@ -139,11 +162,16 @@ function normalizeUserId(userId: string | null | undefined): string | null {
   return typeof userId === "string" && userId.trim() !== "" ? userId : null;
 }
 
-function accessFor(
-  plan: Plan,
+/**
+ * Branch on effective mode (which may include ADMIN) rather than the
+ * raw Plan enum. ADMIN uses `direct_plan_access` — the UI never shows
+ * an unlock expiry for admins.
+ */
+function accessForMode(
+  mode: LibraryEffectiveMode,
   unlockExpiresAt: Date | null
 ): LibraryCatalogAccess {
-  if (plan !== "FREE") {
+  if (mode !== "FREE") {
     return { status: "direct_plan_access", unlockExpiresAt: null };
   }
   if (unlockExpiresAt) {
@@ -179,11 +207,13 @@ export async function listActiveLibrarySessions(
   });
   if (!user) return { ok: false, error: "USER_NOT_FOUND" };
 
-  const effectivePlan = resolveEffectivePlan(
+  const rawEffectivePlan = resolveEffectivePlan(
     user.plan,
     user.planPeriodEnd,
     now
   );
+  const effectiveMode: LibraryEffectiveMode =
+    options.effectiveAccess?.effectiveMode ?? rawEffectivePlan;
 
   // Sessions with chapter count in a single query. Deterministic order:
   // createdAt desc first, then id asc as a stable tiebreaker so the
@@ -204,10 +234,12 @@ export async function listActiveLibrarySessions(
   });
 
   // Batched unlock lookup — only needed if the caller resolves to FREE.
-  // For paid callers no unlock is ever consulted (system separation) so
-  // the query is skipped entirely.
+  // For paid callers (and effective-ADMIN QA overrides) no unlock is
+  // ever consulted (system separation) so the query is skipped
+  // entirely — this is what makes STARTER / PREMIUM / ADMIN behave
+  // identically at the storage layer.
   const unlockByLibrarySessionId = new Map<string, Date>();
-  if (effectivePlan === "FREE" && sessions.length > 0) {
+  if (toCatalogPlanBranch(effectiveMode) === "FREE" && sessions.length > 0) {
     const sessionIds = sessions.map((s) => s.id);
     const activeUnlocks = await client.libraryUnlock.findMany({
       where: {
@@ -233,7 +265,7 @@ export async function listActiveLibrarySessions(
 
   const items: LibraryCatalogSessionListItem[] = sessions.map((s) => {
     const unlockExpiresAt =
-      effectivePlan === "FREE"
+      toCatalogPlanBranch(effectiveMode) === "FREE"
         ? unlockByLibrarySessionId.get(s.id) ?? null
         : null;
     return {
@@ -244,7 +276,7 @@ export async function listActiveLibrarySessions(
       preset: s.preset,
       durationSeconds: s.durationSeconds,
       chapterCount: s._count.chapters,
-      access: accessFor(effectivePlan, unlockExpiresAt),
+      access: accessForMode(effectiveMode, unlockExpiresAt),
     };
   });
 
@@ -287,11 +319,13 @@ export async function getActiveLibrarySessionDetail(
   });
   if (!user) return { ok: false, error: "USER_NOT_FOUND" };
 
-  const effectivePlan = resolveEffectivePlan(
+  const rawEffectivePlan = resolveEffectivePlan(
     user.plan,
     user.planPeriodEnd,
     now
   );
+  const effectiveMode: LibraryEffectiveMode =
+    options.effectiveAccess?.effectiveMode ?? rawEffectivePlan;
 
   const session = await client.librarySession.findUnique({
     where: { id: librarySessionId },
@@ -322,7 +356,7 @@ export async function getActiveLibrarySessionDetail(
   }
 
   let unlockExpiresAt: Date | null = null;
-  if (effectivePlan === "FREE") {
+  if (toCatalogPlanBranch(effectiveMode) === "FREE") {
     const unlock = await client.libraryUnlock.findFirst({
       where: {
         userId: uid,
@@ -352,7 +386,7 @@ export async function getActiveLibrarySessionDetail(
       description: session.description,
       preset: session.preset,
       durationSeconds: session.durationSeconds,
-      access: accessFor(effectivePlan, unlockExpiresAt),
+      access: accessForMode(effectiveMode, unlockExpiresAt),
       chapters,
     },
   };

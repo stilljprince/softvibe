@@ -39,6 +39,7 @@
 import type { Plan, PrismaClient } from "@prisma/client";
 import { prisma as defaultPrisma } from "@/lib/prisma";
 import { resolveEffectivePlan } from "@/lib/entitlement/resolver";
+import type { LibraryEffectiveAccess } from "@/lib/entitlement/library-effective-access";
 
 /**
  * Outcomes for successful and refused authorization decisions.
@@ -133,6 +134,19 @@ export type ResolveLibraryAudioAccessInput = {
    * their URL (e.g. /api/library/sessions/[sessionId]/chapters/[chapterId]).
    */
   expectedLibrarySessionId?: string;
+  /**
+   * Precomputed effective-access snapshot from
+   * `resolveLibraryEffectiveAccess`. When supplied, the resolver uses
+   * its `effectiveMode` in place of `resolveEffectivePlan(user.plan, …)`,
+   * which is how the QA override (admin-only, dev-only) flows into
+   * this authorization step without duplicating the guard logic.
+   *
+   * When omitted (or provided but with `effectiveMode: undefined`
+   * shape), the resolver falls back to the ordinary plan-based
+   * calculation and NEVER applies an override — legacy tests keep
+   * working unchanged.
+   */
+  effectiveAccess?: LibraryEffectiveAccess;
   /**
    * Explicit clock override for deterministic tests. Falls back to
    * `new Date()` in production callers.
@@ -233,21 +247,30 @@ export async function resolveLibraryAudioAccess(
   // 5. Effective plan gate (RP-010 Phase 2B-2, Option C). A paid plan
   // whose period has already ended resolves to FREE on the read side —
   // we never re-check Stripe here, we never mutate User.plan.
-  const effectivePlan = resolveEffectivePlan(
+  //
+  // If the caller supplied a precomputed effective-access snapshot
+  // (Library-QA override path), its `effectiveMode` wins over the raw
+  // plan calculation. ADMIN grants direct access exactly like a paid
+  // plan, no LibraryUnlock consulted; FREE routes through the unlock
+  // gate below just as a real FREE caller would.
+  const rawEffectivePlan = resolveEffectivePlan(
     user.plan,
     user.planPeriodEnd,
     now
   );
-
+  const effectiveMode = input.effectiveAccess?.effectiveMode ?? rawEffectivePlan;
+  // The grant.plan field is a Plan enum, which currently has no ADMIN
+  // value — surface the underlying real plan there for logging while
+  // the effectiveMode governs the actual authorization decision.
   const grant: LibraryAudioAccessGrant = {
     librarySessionId: session.id,
     librarySessionChapterId: chapter.id,
     audioKey: chapter.audioKey,
-    plan: effectivePlan,
+    plan: rawEffectivePlan,
   };
 
-  if (effectivePlan !== "FREE") {
-    // STARTER / PREMIUM — direct access, no LibraryUnlock consulted.
+  if (effectiveMode !== "FREE") {
+    // STARTER / PREMIUM / ADMIN — direct access, no LibraryUnlock consulted.
     return {
       ok: true,
       outcome: "allowed_direct_plan",

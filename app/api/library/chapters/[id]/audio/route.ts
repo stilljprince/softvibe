@@ -22,7 +22,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/config";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { headers } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { log } from "@/lib/log";
 import { jsonError } from "@/lib/api";
 import {
@@ -36,6 +36,14 @@ import {
   httpStatusForAccessError,
   type LibraryAudioAccessResult,
 } from "@/lib/entitlement/library-audio-access";
+import {
+  isQaLibraryAudioKey,
+  statQaLibraryAudio,
+} from "@/lib/library/qa-audio-storage";
+import {
+  LIBRARY_QA_MODE_COOKIE_NAME,
+  resolveLibraryEffectiveAccess,
+} from "@/lib/entitlement/library-effective-access";
 
 export const runtime = "nodejs";
 
@@ -153,6 +161,22 @@ async function currentUserId(): Promise<string | null> {
   return typeof id === "string" && id !== "" ? id : null;
 }
 
+/**
+ * Load the caller's effective Library-access snapshot from the QA
+ * cookie (dev-only, admin-only, feature-flag-gated) and hand it to the
+ * shared audio-access resolver. When the caller is unauthenticated or
+ * missing, returns `undefined` so `resolveLibraryAudioAccess` falls
+ * back to its ordinary plan-based logic — legacy tests keep working.
+ */
+async function currentEffectiveAccess(userId: string | null) {
+  if (!userId) return undefined;
+  const cookieStore = await cookies();
+  const qaModeCookie =
+    cookieStore.get(LIBRARY_QA_MODE_COOKIE_NAME)?.value ?? null;
+  const eff = await resolveLibraryEffectiveAccess({ userId, qaModeCookie });
+  return eff.ok ? eff.access : undefined;
+}
+
 function withPrivateCache(headers: Headers): Headers {
   // Curated audio must not be publicly cached — a previously authorized
   // Free response would otherwise be replayable to a later caller from
@@ -174,9 +198,11 @@ export async function HEAD(
   log.info(h, "library:chapters:audio:head:start", { id });
 
   const userId = await currentUserId();
+  const effectiveAccess = await currentEffectiveAccess(userId);
   const access = await resolveLibraryAudioAccess({
     userId,
     librarySessionChapterId: id,
+    effectiveAccess,
   });
 
   if (!access.ok) {
@@ -192,6 +218,22 @@ export async function HEAD(
   const hdrs = withPrivateCache(new Headers());
   hdrs.set("Accept-Ranges", "bytes");
   hdrs.set("Content-Type", "audio/mpeg");
+
+  // ── Private QA local storage ────────────────────────────────────────────
+  // A key under `.storage/qa-library/` is a development-only seeded object
+  // and MUST bypass S3 entirely — the QA seed never uploads to S3 and a
+  // wildcard S3 miss here would appear as a spurious 404 (the visible
+  // browser regression we are fixing). The helper enforces production
+  // fail-closed, traversal rejection and root containment.
+  if (isQaLibraryAudioKey(audioKey)) {
+    const stat = await statQaLibraryAudio(audioKey);
+    if (!stat) {
+      log.warn(h, "library:chapters:audio:head:qa_missing", { id });
+      return jsonError("NOT_FOUND", 404);
+    }
+    hdrs.set("Content-Length", String(stat.size));
+    return new Response(null, { status: 200, headers: hdrs });
+  }
 
   if (hasS3Env()) {
     try {
@@ -230,9 +272,11 @@ export async function GET(
   log.info(h, "library:chapters:audio:get:start", { id });
 
   const userId = await currentUserId();
+  const effectiveAccess = await currentEffectiveAccess(userId);
   const access = await resolveLibraryAudioAccess({
     userId,
     librarySessionChapterId: id,
+    effectiveAccess,
   });
 
   if (!access.ok) {
@@ -249,6 +293,45 @@ export async function GET(
   const baseHdrs = withPrivateCache(new Headers());
   baseHdrs.set("Accept-Ranges", "bytes");
   baseHdrs.set("Content-Type", "audio/mpeg");
+
+  // ── Private QA local storage ────────────────────────────────────────────
+  // See HEAD above. `.storage/qa-library/…` keys always resolve locally in
+  // development and are refused in production — S3 is never consulted for
+  // these keys, and there is NO broad "S3 missing → try local filesystem"
+  // fallback for ordinary production audioKeys.
+  if (isQaLibraryAudioKey(audioKey)) {
+    const stat = await statQaLibraryAudio(audioKey);
+    if (!stat) {
+      log.warn(h, "library:chapters:audio:get:qa_missing", { id });
+      return jsonError("NOT_FOUND", 404);
+    }
+    const total = stat.size;
+    const range = parseRangeHeader(rangeHeader, total);
+    if (range.kind === "invalid") {
+      baseHdrs.set("Content-Range", `bytes */${total}`);
+      return new Response(null, { status: 416, headers: baseHdrs });
+    }
+    if (range.kind === "range") {
+      const { start, end } = range;
+      const length = end - start + 1;
+      const fh = await fs.open(stat.absPath, "r");
+      const buf = Buffer.allocUnsafe(length);
+      await fh.read(buf, 0, length, start);
+      await fh.close();
+      baseHdrs.set("Content-Range", `bytes ${start}-${end}/${total}`);
+      baseHdrs.set("Content-Length", String(length));
+      return new Response(toArrayBuffer(new Uint8Array(buf)), {
+        status: 206,
+        headers: baseHdrs,
+      });
+    }
+    const u8 = new Uint8Array(await fs.readFile(stat.absPath));
+    baseHdrs.set("Content-Length", String(u8.byteLength));
+    return new Response(toArrayBuffer(u8), {
+      status: 200,
+      headers: baseHdrs,
+    });
+  }
 
   // ── S3 path ─────────────────────────────────────────────────────────────
   if (hasS3Env()) {

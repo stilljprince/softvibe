@@ -42,3 +42,7 @@ next-env.d.ts
 
 /lib/generated/prisma
 
+# RP-004E1-QA — private local storage for the guarded QA Library seed.
+# Contains the runtime-generated private copy of the QA soundbed and
+# must never be served by Next.js static asset handling.
+/.storage/qa-library/

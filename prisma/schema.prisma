@@ -30,6 +30,13 @@ model User {
   planPeriodEnd        DateTime?
   probeGenerationsUsed Int       @default(0)
 
+  // 🔹 Stable IANA timezone (RP-004E1).
+  // Captured on first successful automatic sample from the browser and never
+  // silently overwritten afterwards. NULL means "not yet captured" — read
+  // paths fall back to UTC. Must be a validated IANA name (e.g.
+  // "Europe/Berlin"); raw UTC offsets are rejected at the capture route.
+  timezone String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -38,9 +45,10 @@ model User {
   stories   Story[]
   playlists Playlist[]
 
-  preferenceProfile UserPreferenceProfile?
-  periodUsages      PeriodUsage[]
-  libraryUnlocks    LibraryUnlock[]
+  preferenceProfile     UserPreferenceProfile?
+  periodUsages          PeriodUsage[]
+  libraryUnlocks        LibraryUnlock[]
+  sponsoredUnlockEvents SponsoredUnlockEvent[]
 }
 
 model UserPreferenceProfile {
@@ -300,8 +308,9 @@ model LibrarySession {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  chapters LibrarySessionChapter[]
-  unlocks  LibraryUnlock[]
+  chapters              LibrarySessionChapter[]
+  unlocks               LibraryUnlock[]
+  sponsoredUnlockEvents SponsoredUnlockEvent[]
 
   @@index([isActive])
 }
@@ -346,4 +355,74 @@ model LibraryUnlock {
 
   @@index([userId, unlockedAt])
   @@index([userId, librarySessionId, expiresAt])
+}
+
+// Source / provider kind of a SponsoredUnlockEvent (RP-004E1).
+// SIMULATED_SOFTVIBE denotes the first-party Early Access simulation used
+// while a real advertising provider is being selected. RP-004E2 will add
+// real provider values (e.g. AD_MANAGER_X, VUNGLE_Y) without touching the
+// central Library unlock logic.
+enum SponsoredUnlockProvider {
+  SIMULATED_SOFTVIBE
+}
+
+// Lifecycle status of a SponsoredUnlockEvent (RP-004E1).
+//   PENDING   — event created, user still watching the interstitial
+//   COMPLETED — server accepted completion (used as a transient snapshot
+//               only when the atomic claim helper is invoked)
+//   CONSUMED  — completion drove a LibraryUnlock claim (created OR reused);
+//               retries are idempotent and re-observe this state
+//   EXPIRED   — window elapsed without a valid completion
+//   CANCELLED — user actively dismissed / a new pending event superseded
+enum SponsoredUnlockEventStatus {
+  PENDING
+  COMPLETED
+  CONSUMED
+  EXPIRED
+  CANCELLED
+}
+
+// Server-owned Sponsored Unlock event (RP-004E1).
+//
+// Represents one visible sponsor interstitial the user is watching before
+// a Free-tier LibraryUnlock is claimed. Server-authoritative:
+//   * event id is server-generated
+//   * eligibleAt / expiresAt are server-generated
+//   * providerEventId (surfaced to the central LibraryUnlock claim as its
+//     unique correlation id) is server-generated and never accepted from
+//     the client
+//   * completion cannot happen before eligibleAt or after expiresAt
+//   * (user, session) binding is enforced — an event cannot unlock a
+//     different session or be consumed by a different user
+//
+// Strictly separated from LibraryUnlock: SponsoredUnlockEvent tracks the
+// advertisement lifecycle only; the actual entitlement lives on
+// LibraryUnlock via the central claim helper. Consumption is one-way:
+// CONSUMED events never re-consume a new daily slot.
+model SponsoredUnlockEvent {
+  id               String                     @id @default(cuid())
+  userId           String
+  librarySessionId String
+  provider         SponsoredUnlockProvider
+  status           SponsoredUnlockEventStatus @default(PENDING)
+
+  // Server-owned providerEventId handed to claimLibrarySessionUnlock so
+  // retries idempotently reuse the same LibraryUnlock row. Unique across
+  // all events — mirrors LibraryUnlock.providerEventId uniqueness so a
+  // completed event can never bind to two different unlock rows.
+  providerEventId  String                     @unique
+
+  createdAt        DateTime                   @default(now())
+  eligibleAt       DateTime
+  expiresAt        DateTime
+  completedAt      DateTime?
+  consumedAt       DateTime?
+  cancelledAt      DateTime?
+
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  librarySession LibrarySession @relation(fields: [librarySessionId], references: [id], onDelete: Cascade)
+
+  @@index([userId, librarySessionId, status])
+  @@index([userId, createdAt])
+  @@index([expiresAt])
 }
