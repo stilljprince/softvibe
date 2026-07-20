@@ -395,9 +395,11 @@ export default function GenerateClient({
       }
       return ent.monthlyMinutes.remaining > 0;
     }
-    // Fallback if the server did not return an entitlement snapshot: rely on
-    // the legacy credits value (server remains the definitive authority).
-    return accountSummary.credits > 0;
+    // Fallback if the server did not return an entitlement snapshot: leave
+    // the submit action enabled and let the server enforce the plan. We
+    // deliberately do NOT derive availability from the legacy User.credits
+    // value — Custom Minutes / probes are the sole authoritative entitlements.
+    return true;
   }, [title, rawPrompt, scriptEditMode, editedScript, accountSummary, durationMin]);
 
   useEffect(() => {

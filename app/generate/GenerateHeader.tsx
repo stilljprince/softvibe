@@ -8,10 +8,10 @@ import Link from "next/link";
 type Theme = "light" | "dark" | "pastel";
 
 type Props = {
-  creditsLabel: string;
+  entitlementLabel: string;
 };
 
-export default function GenerateHeader({ creditsLabel }: Props) {
+export default function GenerateHeader({ entitlementLabel }: Props) {
   const [theme, setTheme] = useState<Theme>("light");
   const [showHeader, setShowHeader] = useState(true);
   const [lastScrollY, setLastScrollY] = useState(0);
@@ -107,20 +107,20 @@ export default function GenerateHeader({ creditsLabel }: Props) {
         <Link href="/library" style={navLinkStyle}>
           Bibliothek
         </Link>
-        <Link href="/pricing" style={navLinkStyle}>
-          Credits
+        <Link href="/billing" style={navLinkStyle}>
+          Plan
         </Link>
         <Link href="/account" style={navLinkStyle}>
           Account
         </Link>
       </nav>
 
-      {/* Rechts: Credits + Theme */}
+      {/* Rechts: Entitlement-Pill + Theme */}
       <div
         className="desktop-nav"
         style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}
       >
-        {/* Credits-Pill */}
+        {/* Entitlement-Pill */}
         <div
           style={{
             padding: "0.25rem 0.7rem",
@@ -131,13 +131,12 @@ export default function GenerateHeader({ creditsLabel }: Props) {
             fontWeight: 600,
           }}
         >
-          Credits:{" "}
           <span
             style={{
               fontWeight: 800,
             }}
           >
-            {creditsLabel}
+            {entitlementLabel}
           </span>
         </div>
 
