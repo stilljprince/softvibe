@@ -5,15 +5,12 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { stripe } from "@/lib/stripe";
 import { resolveEntitlements } from "@/lib/entitlement/resolver";
-import type { EntitlementsView } from "@/lib/entitlement-view";
+import {
+  labelFromEntitlementPlan,
+  resolveVisiblePlanStatus,
+  type EntitlementsView,
+} from "@/lib/entitlement-view";
 import AccountClient from "./ui";
-
-function mapPriceToPlan(priceId: string | null): string | null {
-  if (!priceId) return null;
-  if (priceId === process.env.STRIPE_PRICE_STARTER) return "Starter";
-  if (priceId === process.env.STRIPE_PRICE_PREMIUM) return "Premium";
-  return "Unbekannter Plan";
-}
 
 function mapStripeStatusLabel(status: string | null | undefined): string {
   switch (status) {
@@ -60,33 +57,28 @@ export default async function AccountPage() {
   }
 
   let hasSubscription = !!dbUser.stripeSubscriptionId;
-  let planLabel: string | null = null;
   let planStatus: string | null = null;
 
+  // Stripe subscription retrieval is intentionally kept — it drives the
+  // billing-metadata pill (aktiv / gekündigt / inaktiv) shown next to the
+  // plan label. It does NOT determine the visible plan. The effective plan
+  // comes exclusively from the entitlement resolver below.
   if (dbUser.stripeSubscriptionId) {
     try {
       const sub = await stripe.subscriptions.retrieve(dbUser.stripeSubscriptionId);
-
-      const firstItem = sub.items?.data?.[0];
-      const priceId =
-        firstItem && typeof firstItem.price?.id === "string"
-          ? firstItem.price.id
-          : null;
-
-      planLabel = mapPriceToPlan(priceId);
       planStatus = mapStripeStatusLabel(sub.status);
     } catch (err) {
       console.error("[account] Fehler beim Laden des Stripe-Abos:", err);
       hasSubscription = false;
-      planLabel = null;
       planStatus = null;
     }
   }
 
-  // Resolve the server-side entitlement snapshot. This is the display source
-  // of truth for probes and Custom Minutes — Stripe labels are kept as an
-  // orthogonal subscription-status indicator (their consolidation belongs to
-  // a later RP-004 task and is intentionally out of scope here).
+  // Resolve the server-side entitlement snapshot. This is the visible source
+  // of truth for the current plan, probes and Custom Minutes. A paid plan
+  // whose billing period has elapsed resolves to FREE here and must render
+  // as "Free" — never as an outdated "Starter" / "Premium" derived from a
+  // historical Stripe Price ID.
   let entitlements: EntitlementsView | null = null;
   const resolved = await resolveEntitlements(userId);
   if (resolved.ok) {
@@ -109,6 +101,19 @@ export default async function AccountPage() {
     };
   }
 
+  const planLabel: string | null = entitlements
+    ? labelFromEntitlementPlan(entitlements.plan)
+    : null;
+
+  // The Stripe status pill (aktiv / gekündigt / inaktiv) is a decoration on
+  // the visible plan label. Gated by the effective entitlement plan so a
+  // historical paid subscription still reporting active can never render as
+  // "Free · aktiv". Stripe metadata, hasSubscription and the Customer Portal
+  // are intentionally unaffected.
+  const visiblePlanStatus: string | null = entitlements
+    ? resolveVisiblePlanStatus(entitlements.plan, planStatus)
+    : null;
+
   return (
     <AccountClient
       user={{
@@ -123,7 +128,7 @@ export default async function AccountPage() {
         hasSubscription,
         createdAt: dbUser.createdAt.toISOString(),
         planLabel,
-        planStatus,
+        planStatus: visiblePlanStatus,
         entitlements,
       }}
     />

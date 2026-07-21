@@ -30,3 +30,35 @@ export type EntitlementsView = {
     hasDirectAccess: boolean;
   };
 };
+
+// Pure human-readable label for the visible plan pill. Sourced from the
+// resolved entitlement snapshot (the effective plan), never from a Stripe
+// Price ID — a paid subscription whose billing period has already elapsed
+// resolves to FREE server-side and MUST render as "Free" here.
+export function labelFromEntitlementPlan(plan: EntitlementPlanView): string {
+  switch (plan) {
+    case "STARTER":
+      return "Starter";
+    case "PREMIUM":
+      return "Premium";
+    case "FREE":
+    default:
+      return "Free";
+  }
+}
+
+// Gates the Stripe status decoration (aktiv / gekündigt / inaktiv) so that
+// it can only accompany the visible plan label when the effective plan is
+// paid. A user whose paid billing period has elapsed resolves to FREE but
+// may still carry a Stripe subscription reporting active — attaching that
+// status would render "Free · aktiv", which is misleading. Returning null
+// suppresses the decoration; hasSubscription and the Customer Portal are
+// intentionally unaffected.
+export function resolveVisiblePlanStatus(
+  plan: EntitlementPlanView,
+  stripeStatusLabel: string | null
+): string | null {
+  if (!stripeStatusLabel) return null;
+  if (plan === "STARTER" || plan === "PREMIUM") return stripeStatusLabel;
+  return null;
+}

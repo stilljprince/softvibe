@@ -571,7 +571,7 @@ export default function AccountClient({ user }: { user: AccountUser }) {
                 })()}
 
                 <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
-                  {user.hasSubscription && user.planLabel ? (
+                  {user.planLabel ? (
                     <div
                       style={{
                         display: "inline-flex",
@@ -587,7 +587,7 @@ export default function AccountClient({ user }: { user: AccountUser }) {
                       }}
                     >
                       {user.planLabel}
-                      {user.planStatus && (
+                      {user.hasSubscription && user.planStatus && (
                         <span style={{ fontWeight: 400, color: themeCfg.uiSoftText }}>
                           · {user.planStatus}
                         </span>
