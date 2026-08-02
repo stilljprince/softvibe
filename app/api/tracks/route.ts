@@ -109,10 +109,6 @@ const storyId = (searchParams.get("storyId") ?? "").trim();
   const jobTitle = (t.job?.title ?? "").trim();   // ✅ fehlt bei dir
   const jobPrompt = (t.job?.prompt ?? "").trim();
 const baseTitle = (t.title ?? "").trim() || jobTitle || "SoftVibe Track";
-const withChapter =
-  t.storyId && typeof t.partIndex === "number"
-    ? `${baseTitle} · ${t.partTitle?.trim() || `Chapter ${t.partIndex + 1}`}`
-    : baseTitle;
 
   const chapterLabel =
     t.storyId && typeof t.partIndex === "number"
@@ -121,7 +117,7 @@ const withChapter =
 
   return {
     id: t.id,
-    title: withChapter,
+    title: baseTitle,
     prompt: jobPrompt || null,
     url: t.url,
     durationSeconds: t.durationSeconds,

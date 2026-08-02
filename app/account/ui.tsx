@@ -8,7 +8,7 @@ import type React from "react";
 
 import SVScene from "@/app/components/sv-scene";
 import { useSVTheme, useHeaderMenu, formatEntitlementMenuLabel, type ThemeConfig } from "@/app/components/sv-kit";
-import { usePlayer } from "@/app/components/player-context";
+import { usePlayer, type Chapter } from "@/app/components/player-context";
 import { AVATAR_PRESETS, getAvatarPreset } from "@/lib/avatars";
 import type { EntitlementsView } from "@/lib/entitlement-view";
 
@@ -43,6 +43,18 @@ type Track = {
   url?: string | null;
   durationSeconds?: number | null;
   playCount?: number | null;
+  storyId?: string | null;
+  storyTitle?: string | null;
+  partIndex?: number | null;
+  partTitle?: string | null;
+};
+
+// A session-aware display entry — a plain single track, or a multi-chapter
+// story session collapsed to a single Account row via storyId.
+type AccountItem = Track & {
+  isStorySession: boolean;
+  chapterCount: number;
+  aggregatedDurationSeconds: number;
 };
 
 type ItemsResp = { items: Track[]; nextCursor?: string | null };
@@ -87,6 +99,111 @@ function displayUrl(t: Track): string {
   return t.url ?? t.resultUrl ?? "";
 }
 
+function formatDuration(sec: number | null | undefined): string {
+  if (!sec || !Number.isFinite(sec) || sec <= 0) return "";
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+// Groups raw tracks into session-aware Account entries. Tracks without a
+// storyId pass through unchanged; tracks sharing a storyId collapse into one
+// entry keyed by first occurrence (API order = createdAt desc), accumulating
+// chapter count and duration from the already-loaded tracks.
+function buildAccountItems(rawTracks: Track[]): AccountItem[] {
+  const items: AccountItem[] = [];
+  const indexByStoryId = new Map<string, number>();
+
+  for (const t of rawTracks) {
+    const chapterDuration =
+      typeof t.durationSeconds === "number" && Number.isFinite(t.durationSeconds)
+        ? t.durationSeconds
+        : 0;
+
+    if (t.storyId) {
+      const existingIndex = indexByStoryId.get(t.storyId);
+      if (existingIndex === undefined) {
+        indexByStoryId.set(t.storyId, items.length);
+        items.push({
+          ...t,
+          title: (t.storyTitle ?? "").trim() || displayTitle(t),
+          isStorySession: true,
+          chapterCount: 1,
+          aggregatedDurationSeconds: chapterDuration,
+        });
+      } else {
+        const existing = items[existingIndex];
+        existing.chapterCount += 1;
+        existing.aggregatedDurationSeconds += chapterDuration;
+      }
+    } else {
+      items.push({
+        ...t,
+        isStorySession: false,
+        chapterCount: 1,
+        aggregatedDurationSeconds: chapterDuration,
+      });
+    }
+  }
+
+  return items;
+}
+
+// Chapters derived from the already-loaded track list — no network wait.
+function deriveChapters(storyId: string, allTracks: Track[]): Chapter[] {
+  return allTracks
+    .filter((t) => t.storyId === storyId && t.url)
+    .sort((a, b) => (a.partIndex ?? 0) - (b.partIndex ?? 0))
+    .map((t) => ({
+      id: t.id,
+      url: t.url as string,
+      title: (t.partTitle ?? "").trim() || `Kapitel ${(t.partIndex ?? 0) + 1}`,
+      partIndex: t.partIndex ?? 0,
+      durationSeconds:
+        typeof t.durationSeconds === "number" ? t.durationSeconds : undefined,
+    }));
+}
+
+// Fallback for stories with more chapters than fit in the moderate initial
+// fetch — fetches the complete chapter set for accurate playback.
+async function fetchStoryChapters(storyId: string): Promise<Chapter[]> {
+  try {
+    const res = await fetch(
+      `/api/tracks?storyId=${encodeURIComponent(storyId)}&take=200`,
+      { credentials: "include" }
+    );
+    if (!res.ok) return [];
+    const raw: unknown = await res.json().catch(() => null);
+    const payload =
+      raw && typeof raw === "object" && "data" in (raw as object)
+        ? (raw as { data: unknown }).data
+        : raw;
+    const list: unknown[] = Array.isArray((payload as { items?: unknown })?.items)
+      ? (payload as { items: unknown[] }).items
+      : Array.isArray(payload)
+      ? (payload as unknown[])
+      : [];
+    return list
+      .map((item) => {
+        const it = item as Record<string, unknown>;
+        const partIndex = typeof it.partIndex === "number" ? it.partIndex : 0;
+        const partTitle = typeof it.partTitle === "string" ? it.partTitle.trim() : "";
+        return {
+          id: String(it.id ?? ""),
+          url: String(it.url ?? ""),
+          title: partTitle || `Kapitel ${partIndex + 1}`,
+          partIndex,
+          durationSeconds:
+            typeof it.durationSeconds === "number" ? it.durationSeconds : undefined,
+        };
+      })
+      .filter((ch) => ch.id && ch.url)
+      .sort((a, b) => a.partIndex - b.partIndex);
+  } catch {
+    return [];
+  }
+}
+
 // ── pillStyle — matches /generate exactly ─────────────────────────────────────
 
 function pillStyle(cfg: ThemeConfig, variant: "primary" | "secondary"): React.CSSProperties {
@@ -124,7 +241,7 @@ function pillStyle(cfg: ThemeConfig, variant: "primary" | "secondary"): React.CS
 
 export default function AccountClient({ user }: { user: AccountUser }) {
   const { themeKey, themeCfg, cycleTheme, logoSrc } = useSVTheme();
-  const { loadTrack, play, pause, state } = usePlayer();
+  const { loadTrack, loadStory, play, pause, state } = usePlayer();
 
   const [tracks, setTracks] = useState<Track[]>([]);
   const [loadingTracks, setLoadingTracks] = useState(false);
@@ -167,21 +284,30 @@ export default function AccountClient({ user }: { user: AccountUser }) {
     boxShadow: isDark ? "0 26px 80px rgba(0,0,0,0.55)" : "0 22px 60px rgba(15,23,42,0.25)",
   }), [isDark, themeCfg.uiText]);
 
+  // Session-aware Account entries — tracks sharing a storyId collapse into
+  // one row. Grouped from a moderately larger fetch (see below), then capped
+  // to the final visible count so a multi-chapter story can't crowd out
+  // otherwise-visible recent sessions.
+  const accountItems = useMemo(
+    () => buildAccountItems(tracks).slice(0, 5),
+    [tracks],
+  );
+
   // "Meist gehört" is disabled until playCount data is available
-  const hasPlayCount = tracks.some(
+  const hasPlayCount = accountItems.some(
     (t) => typeof t.playCount === "number" && t.playCount > 0,
   );
   const tabTracks =
     tab === "popular" && hasPlayCount
-      ? [...tracks].sort((a, b) => (b.playCount ?? 0) - (a.playCount ?? 0))
-      : tracks;
+      ? [...accountItems].sort((a, b) => (b.playCount ?? 0) - (a.playCount ?? 0))
+      : accountItems;
 
   // Load recent tracks
   useEffect(() => {
     const load = async () => {
       setLoadingTracks(true);
       try {
-        let res = await fetch("/api/tracks?take=5");
+        let res = await fetch("/api/tracks?take=20");
         if (!res.ok) res = await fetch("/api/jobs?take=5");
         if (!res.ok) throw new Error(String(res.status));
         const data: unknown = await res.json();
@@ -216,16 +342,33 @@ export default function AccountClient({ user }: { user: AccountUser }) {
   };
 
   // Global player
-  const handlePlay = useCallback((t: Track) => {
-    const url = displayUrl(t);
-    if (!url) return;
-    const active = state.trackId === t.id;
+  const isItemActive = useCallback((t: AccountItem) => {
+    if (t.isStorySession && t.storyId) return state.storyId === t.storyId;
+    return state.trackId === t.id;
+  }, [state.storyId, state.trackId]);
+
+  const handlePlay = useCallback(async (t: AccountItem) => {
+    const active = isItemActive(t);
     if (active) {
       state.isPlaying ? pause() : play();
       return;
     }
+    if (t.isStorySession && t.storyId) {
+      const storyId = t.storyId;
+      const storyTitle = (t.storyTitle ?? "").trim() || displayTitle(t);
+      const chapters = deriveChapters(storyId, tracks);
+      if (chapters.length >= t.chapterCount) {
+        loadStory(storyId, chapters, undefined, storyTitle);
+      } else {
+        const fetched = await fetchStoryChapters(storyId);
+        loadStory(storyId, fetched.length > 0 ? fetched : chapters, undefined, storyTitle);
+      }
+      return;
+    }
+    const url = displayUrl(t);
+    if (!url) return;
     loadTrack(url, displayTitle(t), t.id);
-  }, [state.trackId, state.isPlaying, loadTrack, play, pause]);
+  }, [isItemActive, state.isPlaying, tracks, loadStory, loadTrack, play, pause]);
 
   const initials = user.name?.split(" ").map((p) => p[0]).join("").toUpperCase() || "SV";
   const activePreset = getAvatarPreset(avatarKey);
@@ -821,12 +964,12 @@ export default function AccountClient({ user }: { user: AccountUser }) {
                     }}
                   >
                     {tabTracks.map((t) => {
-                      const active = state.trackId === t.id;
+                      const active = isItemActive(t);
                       const playing = active && state.isPlaying;
                       const hasAudio = !!(t.status === "DONE" || t.url || t.resultUrl);
                       return (
                         <li
-                          key={t.id}
+                          key={t.isStorySession && t.storyId ? t.storyId : t.id}
                           style={{
                             background: glassCardBg,
                             border: `1px solid ${active ? themeCfg.primaryButtonBg + "55" : glassCardBorder}`,
@@ -869,17 +1012,15 @@ export default function AccountClient({ user }: { user: AccountUser }) {
                           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                             <div style={{ minWidth: 0 }}>
                               <div className="sv-meta-track" style={{ fontSize: "0.72rem", color: themeCfg.uiSoftText, fontWeight: 600, marginBottom: 1 }}>
-                                {(t.preset ?? "—") || "—"}
-                              </div>
-                              <div style={{ fontSize: "0.68rem", color: themeCfg.uiSoftText, opacity: 0.7 }}>
-                                {(t.durationSec ?? t.durationSeconds) ? `${t.durationSec ?? t.durationSeconds}s` : ""}
-                                {t.createdAt ? ` · ${new Date(t.createdAt).toLocaleDateString("de-DE")}` : ""}
+                                {t.isStorySession
+                                  ? `${(t.preset ?? "—") || "—"} · ${t.chapterCount} Kapitel${formatDuration(t.aggregatedDurationSeconds) ? ` · ${formatDuration(t.aggregatedDurationSeconds)}` : ""}`
+                                  : `${(t.preset ?? "—") || "—"}${formatDuration(t.durationSec ?? t.durationSeconds) ? ` · ${formatDuration(t.durationSec ?? t.durationSeconds)}` : ""}`}
                               </div>
                             </div>
                             {hasAudio && (
                               <button
                                 type="button"
-                                onClick={() => handlePlay(t)}
+                                onClick={() => void handlePlay(t)}
                                 aria-label={playing ? "Pause" : "Abspielen"}
                                 style={{
                                   flexShrink: 0,
@@ -925,13 +1066,13 @@ export default function AccountClient({ user }: { user: AccountUser }) {
                   {/* ── List view — clean rows, no surfaces ── */}
                   <ul style={{ listStyle: "none" }}>
                     {tabTracks.map((t, i) => {
-                      const active = state.trackId === t.id;
+                      const active = isItemActive(t);
                       const playing = active && state.isPlaying;
                       const hasAudio = !!(t.status === "DONE" || t.url || t.resultUrl);
                       const isLast = i === tabTracks.length - 1;
                       return (
                         <li
-                          key={t.id}
+                          key={t.isStorySession && t.storyId ? t.storyId : t.id}
                           style={{
                             display: "flex",
                             alignItems: "center",
@@ -943,7 +1084,7 @@ export default function AccountClient({ user }: { user: AccountUser }) {
                           {hasAudio && (
                             <button
                               type="button"
-                              onClick={() => handlePlay(t)}
+                              onClick={() => void handlePlay(t)}
                               aria-label={playing ? "Pause" : "Abspielen"}
                               style={{
                                 flexShrink: 0,
@@ -991,9 +1132,17 @@ export default function AccountClient({ user }: { user: AccountUser }) {
                               {displayTitle(t)}
                             </div>
                             <div className="sv-meta-track" style={{ fontSize: "0.72rem", color: themeCfg.uiSoftText }}>
-                              {(t.preset ?? "—") || "—"}
-                              {(t.durationSec ?? t.durationSeconds) ? ` · ${t.durationSec ?? t.durationSeconds}s` : ""}
-                              {t.createdAt ? ` · ${new Date(t.createdAt).toLocaleDateString("de-DE")}` : ""}
+                              {t.isStorySession ? (
+                                <>
+                                  {(t.preset ?? "—") || "—"} · {t.chapterCount} Kapitel
+                                  {formatDuration(t.aggregatedDurationSeconds) ? ` · ${formatDuration(t.aggregatedDurationSeconds)}` : ""}
+                                </>
+                              ) : (
+                                <>
+                                  {(t.preset ?? "—") || "—"}
+                                  {formatDuration(t.durationSec ?? t.durationSeconds) ? ` · ${formatDuration(t.durationSec ?? t.durationSeconds)}` : ""}
+                                </>
+                              )}
                             </div>
                           </div>
                         </li>

@@ -543,6 +543,27 @@ export default function LibraryClient() {
     return counts;
   }, [tracks]);
 
+  // Sum of durationSeconds across every loaded chapter of a story — the
+  // visible session duration, not just the representative first chapter's.
+  const storyDurationSeconds = useMemo<Record<string, number>>(() => {
+    const sums: Record<string, number> = {};
+    for (const t of tracks) {
+      if (!t.storyId) continue;
+      const d = getDurSeconds(t);
+      if (Number.isFinite(d)) sums[t.storyId] = (sums[t.storyId] ?? 0) + d;
+    }
+    return sums;
+  }, [tracks]);
+
+  // Story rows show the aggregated session duration; single tracks show their own.
+  function getDisplayDurationSeconds(t: Track): number {
+    if (t.storyId) {
+      const total = storyDurationSeconds[t.storyId];
+      return typeof total === "number" ? total : NaN;
+    }
+    return getDurSeconds(t);
+  }
+
   // Playlist grouping uses the raw track list (no search filter, no sort)
   // so groups don't shift when the user types in the search box.
   // Only the same chapter-deduplication as listItems is applied.
@@ -1043,7 +1064,7 @@ export default function LibraryClient() {
     const displayTitle = isStoryItem ? getStoryTitle(t) : getEffectiveTitle(t);
     const active = isTrackActive(t);
     const playing = isTrackPlaying(t);
-    const dur = getDurSeconds(t);
+    const dur = getDisplayDurationSeconds(t);
     const durLabel = Number.isFinite(dur) ? formatDuration(dur) : "";
     const { label: presetLabel, isStoryType } = resolvePreset(t);
     const isLast = idx === total - 1;
@@ -1107,7 +1128,7 @@ export default function LibraryClient() {
                 {durLabel && <span>{durLabel}</span>}
                 {isStoryItem && chapterCount && chapterCount > 1 && (
                   <span style={{ padding: "0 5px", borderRadius: 999, background: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)", border: `1px solid ${glassCardBorder}`, fontSize: "0.67rem", fontWeight: 700 }}>
-                    {chapterCount} Kap.
+                    {chapterCount} Kapitel
                   </span>
                 )}
                 {presetLabel && !isStoryType && <span style={{ opacity: 0.65 }}>{presetLabel}</span>}
@@ -1539,7 +1560,7 @@ export default function LibraryClient() {
                 const displayTitle = isStoryItem ? getStoryTitle(t) : getEffectiveTitle(t);
                 const active = isTrackActive(t);
                 const playing = isTrackPlaying(t);
-                const dur = getDurSeconds(t);
+                const dur = getDisplayDurationSeconds(t);
                 const durLabel = Number.isFinite(dur) ? formatDuration(dur) : "";
                 const { label: presetLabel, isStoryType } = resolvePreset(t);
 
@@ -1576,7 +1597,7 @@ export default function LibraryClient() {
                           color: themeCfg.uiSoftText,
                         }}
                       >
-                        {chapterCount} Kap.
+                        {chapterCount} Kapitel
                       </span>
                     )}
                     <span
@@ -1742,7 +1763,7 @@ export default function LibraryClient() {
                                 color: themeCfg.uiSoftText,
                               }}
                             >
-                              {chapterCount} Kap.
+                              {chapterCount} Kapitel
                             </span>
                           )}
                           {t.isPublic && (
@@ -2146,7 +2167,7 @@ export default function LibraryClient() {
                               const displayTitle = isStoryItem ? getStoryTitle(t) : getEffectiveTitle(t);
                               const active = isTrackActive(t);
                               const playing = isTrackPlaying(t);
-                              const dur = getDurSeconds(t);
+                              const dur = getDisplayDurationSeconds(t);
                               const durLabel = Number.isFinite(dur) ? formatDuration(dur) : "";
                               const menuItems = [
                                 { label: "Umbenennen", action: () => beginEdit(t) },
@@ -2179,7 +2200,7 @@ export default function LibraryClient() {
                                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
                                     <div style={{ fontSize: "0.7rem", color: themeCfg.uiSoftText, display: "flex", gap: 4, alignItems: "center" }}>
                                       {durLabel && <span>{durLabel}</span>}
-                                      {isStoryItem && chapterCount && chapterCount > 1 && <span style={{ padding: "0 5px", borderRadius: 999, background: themeCfg.secondaryButtonBg, border: `1px solid ${themeCfg.secondaryButtonBorder}`, fontSize: "0.67rem", fontWeight: 700 }}>{chapterCount} Kap.</span>}
+                                      {isStoryItem && chapterCount && chapterCount > 1 && <span style={{ padding: "0 5px", borderRadius: 999, background: themeCfg.secondaryButtonBg, border: `1px solid ${themeCfg.secondaryButtonBorder}`, fontSize: "0.67rem", fontWeight: 700 }}>{chapterCount} Kapitel</span>}
                                       {t.isPublic && <span style={{ color: themeCfg.progressColor, fontWeight: 600 }}>Öffentlich</span>}
                                     </div>
                                     <button type="button" onClick={() => void handlePlayFromPlaylist(t, group)} aria-label={playing ? "Pause" : "Abspielen"} style={{ width: 32, height: 32, borderRadius: "50%", border: "none", background: themeCfg.primaryButtonBg, color: themeCfg.primaryButtonText, display: "grid", placeItems: "center", cursor: "pointer", flexShrink: 0, boxShadow: active ? "0 4px 14px rgba(0,0,0,0.22)" : "0 2px 8px rgba(0,0,0,0.1)", transition: "box-shadow 200ms ease" }}>
@@ -2403,8 +2424,8 @@ export default function LibraryClient() {
                             const displayTitle = isStoryItem ? getStoryTitle(t) : getEffectiveTitle(t);
                             const active = isTrackActive(t);
                             const playing = isTrackPlaying(t);
-                            const dur = t.durationSeconds ?? null;
-                            const durLabel = Number.isFinite(dur ?? NaN) ? formatDuration(dur) : "";
+                            const dur = getDisplayDurationSeconds(t);
+                            const durLabel = Number.isFinite(dur) ? formatDuration(dur) : "";
                             const isLast = idx === manualPlaylistItems.length - 1;
                             const itemMenuId = `mpl-${item.id}`;
                             return (
@@ -2520,7 +2541,7 @@ export default function LibraryClient() {
                 <span>{new Date(detailTrack.createdAt).toLocaleDateString("de-DE")}</span>
               )}
               {(() => {
-                const dur = getDurSeconds(detailTrack);
+                const dur = getDisplayDurationSeconds(detailTrack);
                 return Number.isFinite(dur) ? <span>{formatDuration(dur)}</span> : null;
               })()}
               {detailTrack.isPublic && (
