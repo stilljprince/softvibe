@@ -183,6 +183,9 @@ export async function POST(req: Request) {
   } catch (e) {
     const { code, msg } = toErrData(e);
     log.error(h, "library:sponsored:verify:failed", { code, msg });
-    return jsonError("INTERNAL_ERROR", 500, { code, message: msg });
+    return jsonError("INTERNAL_ERROR", 500, {
+      code,
+      message: "Deine Anfrage konnte gerade nicht verarbeitet werden.",
+    });
   }
 }

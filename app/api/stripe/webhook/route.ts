@@ -218,7 +218,7 @@ export async function POST(req: Request) {
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown error";
     console.error("[billing/webhook] constructEvent failed:", msg);
-    return NextResponse.json({ error: `Webhook error: ${msg}` }, { status: 400 });
+    return NextResponse.json({ error: "Invalid webhook signature" }, { status: 400 });
   }
 
   try {
@@ -431,6 +431,6 @@ export async function POST(req: Request) {
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown error";
     console.error("[billing/webhook] handler error:", msg);
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
   }
 }

@@ -17,6 +17,17 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
 
+// Historical rows (and legacy write paths outside this route's scope) may
+// still hold raw provider/exception text in Job.error. Only known stable
+// codes are ever returned to clients; anything else collapses to the
+// generic code without touching the stored value.
+const SAFE_JOB_ERROR_CODES = new Set(["GENERATION_FAILED", "STORAGE_FAILED"]);
+
+function sanitizeJobError(error: string | null | undefined): string | null {
+  if (!error) return null;
+  return SAFE_JOB_ERROR_CODES.has(error) ? error : "GENERATION_FAILED";
+}
+
 /**
  * GET /api/jobs/[id]
  * Wird von /generate für das Polling benutzt.
@@ -122,12 +133,12 @@ export async function GET(
       }
 
       const { userId, ttsStartedAt, creditRefundedAt, entitlementKind, ...safe } = job;
-      return jsonOk({ ...safe, status: "FAILED", error: staleError }, 200);
+      return jsonOk({ ...safe, status: "FAILED", error: sanitizeJobError(staleError) }, 200);
     }
   }
 
   const { userId, ttsStartedAt, creditRefundedAt, entitlementKind, ...safe } = job;
-  return jsonOk(safe, 200);
+  return jsonOk({ ...safe, error: sanitizeJobError(safe.error) }, 200);
 }
 
 /**

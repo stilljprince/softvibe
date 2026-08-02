@@ -5,22 +5,30 @@ import { s3, hasS3Env } from "@/lib/s3";
 import { HeadBucketCommand } from "@aws-sdk/client-s3";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { headers } from "next/headers";
+import { log } from "@/lib/log";
 
 export const runtime = "nodejs";
 
-type Check = { ok: boolean; error?: string };
-type S3Check = { enabled: boolean; ok?: boolean; bucket?: string | null; region?: string | null; error?: string };
+// Public, unauthenticated endpoint (used by hosting/monitoring). Response is
+// intentionally boolean-only — no raw exceptions, bucket/region/endpoint, or
+// filesystem paths are ever returned. Full technical detail is logged
+// server-side only.
+type Check = { ok: boolean };
+type S3Check = { enabled: boolean; ok?: boolean };
 
 export async function GET() {
+  const h = await headers();
+
   const results: {
     db: Check;
     s3: S3Check;
-    disk: Check & { dir: string };
+    disk: Check;
     timestamp: string;
   } = {
     db: { ok: false },
     s3: { enabled: false },
-    disk: { ok: false, dir: path.join(process.cwd(), "public", "generated") },
+    disk: { ok: false },
     timestamp: new Date().toISOString(),
   };
 
@@ -31,7 +39,9 @@ export async function GET() {
     results.db.ok = true;
   } catch (e) {
     results.db.ok = false;
-    results.db.error = e instanceof Error ? e.message : "DB_CHECK_FAILED";
+    log.error(h, "health:db:failed", {
+      msg: e instanceof Error ? e.message : "DB_CHECK_FAILED",
+    });
   }
 
   // 2) S3 check (nur wenn env konfiguriert)
@@ -40,13 +50,9 @@ export async function GET() {
     results.s3.enabled = enabled;
     if (enabled) {
       const Bucket = process.env.S3_BUCKET ?? null;
-      const region = process.env.S3_REGION ?? null;
-      results.s3.bucket = Bucket;
-      results.s3.region = region;
-
       if (!Bucket) {
         results.s3.ok = false;
-        results.s3.error = "S3_BUCKET missing";
+        log.error(h, "health:s3:failed", { msg: "S3_BUCKET missing" });
       } else {
         await s3.send(new HeadBucketCommand({ Bucket })); // leichtgewichtiger Existenz-Check
         results.s3.ok = true;
@@ -54,17 +60,22 @@ export async function GET() {
     }
   } catch (e) {
     results.s3.ok = false;
-    results.s3.error = e instanceof Error ? e.message : "S3_CHECK_FAILED";
+    log.error(h, "health:s3:failed", {
+      msg: e instanceof Error ? e.message : "S3_CHECK_FAILED",
+    });
   }
 
   // 3) Disk check (lokaler Fallback-Ordner)
   try {
-    await fs.mkdir(results.disk.dir, { recursive: true });
-    await fs.access(results.disk.dir);
+    const dir = path.join(process.cwd(), "public", "generated");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.access(dir);
     results.disk.ok = true;
   } catch (e) {
     results.disk.ok = false;
-    results.disk.error = e instanceof Error ? e.message : "DISK_CHECK_FAILED";
+    log.error(h, "health:disk:failed", {
+      msg: e instanceof Error ? e.message : "DISK_CHECK_FAILED",
+    });
   }
 
   const allOk =

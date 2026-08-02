@@ -107,7 +107,9 @@ export async function GET(_req: Request, ctx: Ctx) {
     } catch (e) {
       const msg = e instanceof Error ? e.message : "S3_STREAM_FAILED";
       log.error(h, "public:audio:failed", { slug, msg });
-      return jsonError(msg, 500);
+      return jsonError("STREAM_FAILED", 500, {
+        message: "Dieser Inhalt konnte gerade nicht geladen werden.",
+      });
     }
   } else {
     // 🔹 Lokale Datei unter /public/generated/[jobId].mp3

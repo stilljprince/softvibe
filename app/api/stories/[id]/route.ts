@@ -174,8 +174,11 @@ export async function DELETE(
   try {
     await prisma.story.delete({ where: { id: story.id } });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return jsonError("DELETE_FAILED", 500, { message });
+    const rawMessage = err instanceof Error ? err.message : String(err);
+    log.error(h, "stories:delete:failed", { id: story.id, error: rawMessage });
+    return jsonError("DELETE_FAILED", 500, {
+      message: "Diese Story konnte gerade nicht gelöscht werden.",
+    });
   }
   log.info(h, "stories:delete:ok", { id });
 

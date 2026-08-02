@@ -1,6 +1,7 @@
 // app/api/debug/logs/route.ts
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/config";
+import { prisma } from "@/lib/prisma";
 import { getDebugLogs } from "@/lib/debug-log";
 import { headers } from "next/headers";
 import { jsonOk, jsonError } from "@/lib/api";
@@ -10,6 +11,18 @@ export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
     return jsonError("UNAUTHORIZED", 401);
+  }
+
+  // isAdmin lives only in the DB, not the JWT — must check here. This is the
+  // fail-closed baseline: access requires isAdmin regardless of whether
+  // DEBUG_LOG_EMAIL is configured. When DEBUG_LOG_EMAIL IS set, it narrows
+  // access further to that specific admin identity.
+  const caller = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: { isAdmin: true },
+  });
+  if (!caller?.isAdmin) {
+    return jsonError("FORBIDDEN", 403);
   }
 
   const adminEmail = process.env.DEBUG_LOG_EMAIL?.trim();

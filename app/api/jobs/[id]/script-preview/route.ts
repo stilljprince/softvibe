@@ -180,7 +180,7 @@ export async function POST(
       );
     }
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Script generation failed";
+    const rawMsg = e instanceof Error ? e.message : "Script generation failed";
     if (isNarrative) {
       const err = e as { name?: string; message?: string; status?: number; code?: string; type?: string };
       console.error(
@@ -195,8 +195,12 @@ export async function POST(
         `type=${err?.type ?? "—"}`,
         `message=${(err?.message ?? "—").slice(0, 240)}`,
       );
+    } else {
+      console.error("[script-preview] generation failed", { jobId: job.id, error: rawMsg });
     }
-    return jsonError(msg, 500);
+    return jsonError("GENERATION_FAILED", 500, {
+      message: "Das Skript konnte gerade nicht erstellt werden.",
+    });
   }
 
   if (!finalText) {

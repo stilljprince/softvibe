@@ -212,7 +212,9 @@ export async function GET(req: Request) {
     data: { msg },
     reqId: h.get("x-request-id") ?? undefined,
   });
-  return jsonError("INTERNAL_ERROR", 500, { message: msg });
+  return jsonError("INTERNAL_ERROR", 500, {
+    message: "Deine Anfrage konnte gerade nicht verarbeitet werden.",
+  });
 }
 
 }
@@ -604,6 +606,9 @@ export async function POST(req: Request) {
       data: { code, msg },
       reqId: (await headers()).get("x-request-id") ?? undefined,
     });
-    return jsonError("INTERNAL_ERROR", 500, { code, message: msg });
+    return jsonError("INTERNAL_ERROR", 500, {
+      code,
+      message: "Deine Anfrage konnte gerade nicht verarbeitet werden.",
+    });
   }
 }

@@ -851,7 +851,8 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
               await fs.writeFile(partAbs, buf);
             }
           } catch (e) {
-            const msg = e instanceof Error ? e.message : "Store audio failed";
+            const rawMsg = e instanceof Error ? e.message : "Store audio failed";
+            console.error("[complete] storage failed", { jobId: id, partIndex, error: rawMsg });
             // Phase 4A-2 dispatcher: PROBE → restore lifetime slot + FAILED
             // (probe restoration is independent of ttsStartedAt — a probe
             // slot is only spent on DONE, never on partial rendering).
@@ -859,8 +860,10 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
             // bill only on successful generation (no partial-consumption
             // accounting). refundCreditIfEligible is omitted here (post-TTS
             // storage failure — matches pre-Phase-4A-2 behaviour).
-            await persistTerminalFailure(id, job.entitlementKind, msg);
-            return jsonError(msg, 500);
+            await persistTerminalFailure(id, job.entitlementKind, "STORAGE_FAILED");
+            return jsonError("STORAGE_FAILED", 500, {
+              message: "Deine Session konnte gerade nicht erstellt werden.",
+            });
           }
         }
 
@@ -1003,18 +1006,22 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
           nextResultUrl = `/api/jobs/${id}/audio`;
         }
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "Store audio failed";
+        const rawMsg = e instanceof Error ? e.message : "Store audio failed";
+        console.error("[complete] storage failed", { jobId: id, error: rawMsg });
         // Phase 4A-2 dispatcher: PROBE → restore lifetime slot + FAILED
         // (independent of ttsStartedAt — probe slots are only spent on
         // DONE). Otherwise release the PLAN_MINUTES reservation — audio
         // rendered but storage failed; no partial-consumption accounting
         // and refundCreditIfEligible is intentionally omitted (post-TTS).
-        await persistTerminalFailure(id, job.entitlementKind, msg);
-        return jsonError(msg, 500);
+        await persistTerminalFailure(id, job.entitlementKind, "STORAGE_FAILED");
+        return jsonError("STORAGE_FAILED", 500, {
+          message: "Deine Session konnte gerade nicht erstellt werden.",
+        });
       }
     }
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "TTS failed";
+    const rawMsg = e instanceof Error ? e.message : "TTS failed";
+    console.error("[complete] generation pipeline failed", { jobId: id, error: rawMsg });
     // Phase 4A-2 dispatcher: PROBE → restore lifetime slot + FAILED,
     // atomically. Probe slots are only spent on DONE, so restoration
     // fires regardless of whether ttsStartedAt was already persisted.
@@ -1023,10 +1030,12 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
     // happened after ttsStartedAt was persisted, no credit refund
     // fires; if before, the credit is returned atomically with the
     // FAILED and minute-release writes.
-    await persistTerminalFailure(id, job.entitlementKind, msg, {
+    await persistTerminalFailure(id, job.entitlementKind, "GENERATION_FAILED", {
       refundCreditIfEligible: !callerIsAdmin,
     });
-    return jsonError(msg, 500);
+    return jsonError("GENERATION_FAILED", 500, {
+      message: "Deine Session konnte gerade nicht erstellt werden.",
+    });
   }
 }
 

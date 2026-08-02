@@ -94,7 +94,10 @@ export default function LoginForm() {
                 callbackUrl,
               });
               setLoading(false);
-              if (res?.error) { setErr(res.error); return; }
+              if (res?.error) {
+                setErr("E-Mail-Adresse oder Passwort sind nicht korrekt.");
+                return;
+              }
               router.push(callbackUrl);
             }}
           >
