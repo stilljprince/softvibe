@@ -4,8 +4,9 @@ import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { THEMES, type ThemeKey } from "@/app/components/sv-kit";
+import { THEMES, formatEntitlementMenuLabel, useHeaderMenu, type ThemeKey } from "@/app/components/sv-kit";
 import SVScene from "@/app/components/sv-scene";
+import type { EntitlementsView } from "@/lib/entitlement-view";
 
 type SendStatus = "idle" | "sending" | "success" | "error";
 
@@ -60,8 +61,47 @@ export default function Home() {
     setTheme((p) => (p === "light" ? "pastel" : p === "pastel" ? "dark" : "light"));
   };
 
-  // Menu
-  const [menuOpen, setMenuOpen] = useState(false);
+  // Menu — shared hover/click/outside-click behaviour with /generate, /library, /account.
+  const {
+    open: menuOpen,
+    rootRef: menuRootRef,
+    onMouseEnter: menuOnMouseEnter,
+    onMouseLeave: menuOnMouseLeave,
+    toggle: toggleMenu,
+    close: closeMenu,
+  } = useHeaderMenu();
+
+  // Mobile header auto-hide on scroll. Only takes visual effect below the
+  // mobile/landscape/low-height breakpoints (see the scoped <style> below) —
+  // desktop stays unaffected regardless of this state.
+  const [headerHidden, setHeaderHidden] = useState(false);
+  const lastScrollYRef = useRef(0);
+  const menuOpenRef = useRef(false);
+  useEffect(() => {
+    menuOpenRef.current = menuOpen;
+    if (menuOpen) setHeaderHidden(false);
+  }, [menuOpen]);
+
+  // Usage info for the logged-in menu — reuses /api/account/summary, the
+  // same endpoint /generate, /library and /account already read.
+  const [menuIsAdmin, setMenuIsAdmin] = useState(false);
+  const [menuEntitlements, setMenuEntitlements] = useState<EntitlementsView | null>(null);
+
+  useEffect(() => {
+    if (!loggedIn) return;
+    void fetch("/api/account/summary", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json) => {
+        const d = json?.ok === true && json.data ? json.data : json;
+        if (!d || typeof d !== "object") return;
+        setMenuIsAdmin((d as { isAdmin?: unknown }).isAdmin === true);
+        const ent = (d as { entitlements?: unknown }).entitlements;
+        if (ent && typeof ent === "object") {
+          setMenuEntitlements(ent as EntitlementsView);
+        }
+      })
+      .catch(() => null);
+  }, [loggedIn]);
 
   // Contact
   const [sendStatus, setSendStatus] = useState<SendStatus>("idle");
@@ -122,6 +162,20 @@ export default function Home() {
       const heroEnd = 0.95;
       const hT = clamp((fT - heroStart) / (heroEnd - heroStart), 0, 1);
       setHeroT(hT);
+
+      // Mobile header auto-hide: hide on scroll-down past a small threshold,
+      // show on scroll-up, and always show near the top or while the menu is open.
+      const scrollY = window.scrollY || 0;
+      const delta = scrollY - lastScrollYRef.current;
+      const HIDE_THRESHOLD = 8;
+      if (menuOpenRef.current || scrollY < 60) {
+        setHeaderHidden(false);
+      } else if (delta > HIDE_THRESHOLD) {
+        setHeaderHidden(true);
+      } else if (delta < -HIDE_THRESHOLD) {
+        setHeaderHidden(false);
+      }
+      lastScrollYRef.current = scrollY;
     };
 
     const onScroll = () => {
@@ -203,6 +257,7 @@ export default function Home() {
 
       {/* Fixed header */}
       <header
+        className={`sv-header-autohide${headerHidden ? " sv-header-hidden" : ""}`}
         style={{
           position: "fixed",
           top: 18,
@@ -225,168 +280,238 @@ export default function Home() {
           <Image src={logoSrc} alt="SoftVibe Logo" width={160} height={50} priority />
         </button>
 
-        <div className="sv-desktop" style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <button type="button" onClick={() => go(secondaryCta.href)} style={pillStyle("secondary")}>
-            {secondaryCta.label}
-          </button>
-          <button type="button" onClick={() => go(primaryCta.href)} style={pillStyle("primary")}>
-            {primaryCta.label} →
-          </button>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <div className="sv-desktop" style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <button type="button" onClick={() => go(secondaryCta.href)} style={pillStyle("secondary")}>
+              {secondaryCta.label}
+            </button>
+            <button type="button" onClick={() => go(primaryCta.href)} style={pillStyle("primary")}>
+              {primaryCta.label} →
+            </button>
+          </div>
 
-          <button
-            type="button"
-            onClick={() => setMenuOpen((v) => !v)}
-            style={{
-              marginLeft: 6,
-              width: 40,
-              height: 40,
-              borderRadius: 999,
-              border: `1px solid ${themeCfg.secondaryButtonBorder}`,
-              background: themeCfg.secondaryButtonBg,
-              color: themeCfg.secondaryButtonText,
-              cursor: "pointer",
-              display: "grid",
-              placeItems: "center",
-              boxShadow: "0 10px 25px rgba(0,0,0,0.25)",
-              fontWeight: 900,
-            }}
-            aria-label="Menü"
-            title="Menü"
+          {/* Menu — hover-based shared wrapper, matches /generate, /library, /account */}
+          <div
+            ref={menuRootRef}
+            style={{ position: "relative" }}
+            onMouseEnter={menuOnMouseEnter}
+            onMouseLeave={menuOnMouseLeave}
           >
-            ☰
-          </button>
+            <button
+              type="button"
+              onClick={toggleMenu}
+              style={{
+                width: 40,
+                height: 40,
+                borderRadius: 999,
+                border: `1px solid ${themeCfg.secondaryButtonBorder}`,
+                background: themeCfg.secondaryButtonBg,
+                color: themeCfg.secondaryButtonText,
+                cursor: "pointer",
+                display: "grid",
+                placeItems: "center",
+                boxShadow: "0 10px 25px rgba(0,0,0,0.25)",
+                fontWeight: 900,
+              }}
+              aria-label="Menü"
+              title="Menü"
+            >
+              ☰
+            </button>
+
+            {menuOpen && (
+              <div
+                style={{
+                  position: "absolute",
+                  right: 0,
+                  top: "calc(100% + 8px)",
+                  zIndex: 90,
+                  width: "min(360px, calc(100vw - 28px))",
+                  padding: 2,
+                  borderRadius: 26,
+                  background:
+                    theme === "dark"
+                      ? "radial-gradient(circle at top, rgba(56,189,248,0.22), transparent 68%)"
+                      : "radial-gradient(circle at top, rgba(244,114,182,0.32), transparent 70%)",
+                  boxShadow: "0 26px 80px rgba(0,0,0,0.7)",
+                }}
+              >
+                <div style={{ ...glassPanel, padding: 16, borderRadius: 24 }}>
+                  <div
+                    style={{
+                      fontSize: "0.8rem",
+                      letterSpacing: "0.14em",
+                      textTransform: "uppercase",
+                      fontWeight: 800,
+                      color: themeCfg.uiSoftText,
+                      marginBottom: 10,
+                    }}
+                  >
+                    Menü
+                  </div>
+
+                  {loggedIn && (
+                    <div style={{ fontSize: "0.78rem", color: themeCfg.uiSoftText, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
+                      {formatEntitlementMenuLabel(menuEntitlements, menuIsAdmin)}
+                    </div>
+                  )}
+
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 14 }}>
+                    {[
+                      { label: "Features", id: "features" },
+                      { label: "Über SoftVibe", id: "about" },
+                      { label: "Kontakt", id: "contact" },
+                    ].map((x) => (
+                      <button
+                        key={x.id}
+                        type="button"
+                        onClick={() => {
+                          closeMenu();
+                          document.getElementById(x.id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+                        }}
+                        style={{ ...pillStyle("secondary"), width: "100%", textAlign: "left" }}
+                      >
+                        {x.label}
+                      </button>
+                    ))}
+
+                    <div style={{ height: 1, background: "rgba(148,163,184,0.25)", margin: "4px 0" }} />
+
+                    {loggedIn ? (
+                      <>
+                        {[
+                          { label: "Generieren", href: "/generate" },
+                          { label: "Bibliothek", href: "/library" },
+                          { label: "Konto", href: "/account" },
+                        ].map((x) => (
+                          <button
+                            key={x.href}
+                            type="button"
+                            onClick={() => {
+                              closeMenu();
+                              go(x.href);
+                            }}
+                            style={{ ...pillStyle("secondary"), width: "100%", textAlign: "left" }}
+                          >
+                            {x.label}
+                          </button>
+                        ))}
+
+                        <div style={{ height: 1, background: "rgba(148,163,184,0.25)", margin: "4px 0" }} />
+
+                        <form action="/api/auth/signout" method="post">
+                          <button
+                            type="submit"
+                            style={{ ...pillStyle("secondary"), width: "100%", textAlign: "left" }}
+                          >
+                            Logout
+                          </button>
+                        </form>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            closeMenu();
+                            go(secondaryCta.href);
+                          }}
+                          style={{ ...pillStyle("secondary"), width: "100%", textAlign: "left" }}
+                        >
+                          {secondaryCta.label}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            closeMenu();
+                            go(primaryCta.href);
+                          }}
+                          style={{ ...pillStyle("primary"), width: "100%", textAlign: "left" }}
+                        >
+                          {primaryCta.label} →
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
-        <button
-          className="sv-mobile"
-          type="button"
-          onClick={() => setMenuOpen(true)}
-          style={{
-            width: 44,
-            height: 44,
-            borderRadius: 999,
-            border: `1px solid ${themeCfg.secondaryButtonBorder}`,
-            background: themeCfg.secondaryButtonBg,
-            color: themeCfg.secondaryButtonText,
-            cursor: "pointer",
-            display: "none",
-            placeItems: "center",
-            boxShadow: "0 10px 25px rgba(0,0,0,0.25)",
-            fontWeight: 900,
-          }}
-          aria-label="Menü"
-          title="Menü"
-        >
-          ☰
-        </button>
+        {/* Mobile header fix: hide the desktop pill group below the breakpoint,
+            and on short/landscape mobile viewports so the fixed header never
+            wraps or overflows. The menu trigger stays visible at all sizes. */}
+        <style jsx>{`
+          .sv-header-autohide {
+            transition: transform 320ms ease;
+          }
+          @media (max-width: 768px) {
+            .sv-desktop {
+              display: none !important;
+            }
+            .sv-header-hidden.sv-header-autohide {
+              transform: translateY(-130%);
+            }
+          }
+          @media (orientation: landscape) and (max-width: 1024px) {
+            .sv-desktop {
+              display: none !important;
+            }
+            .sv-header-hidden.sv-header-autohide {
+              transform: translateY(-130%);
+            }
+          }
+          @media (max-height: 600px) and (max-width: 1100px) {
+            .sv-desktop {
+              display: none !important;
+            }
+            .sv-header-hidden.sv-header-autohide {
+              transform: translateY(-130%);
+            }
+          }
+          @media (orientation: landscape) and (max-width: 1024px) {
+            .sv-hero {
+              top: 61% !important;
+            }
+          }
+          @media (max-height: 600px) and (max-width: 1100px) {
+            .sv-hero {
+              top: 64% !important;
+            }
+          }
+          .sv-scroll-hint {
+            animation: svScrollHintFloat 2.2s ease-in-out infinite;
+          }
+          @keyframes svScrollHintFloat {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(6px); }
+          }
+          @media (prefers-reduced-motion: reduce) {
+            .sv-scroll-hint {
+              animation: none;
+            }
+          }
+        `}</style>
       </header>
 
-      {/* Mobile menu overlay */}
+      {/* Dimming backdrop — focus layer behind the open menu, shared across all pages */}
       {menuOpen && (
-        <>
-          <div
-            onClick={() => setMenuOpen(false)}
-            style={{ position: "fixed", inset: 0, zIndex: 80, background: "rgba(0,0,0,0.45)" }}
-          />
-          <div
-            style={{
-              position: "fixed",
-              right: 14,
-              top: 14,
-              zIndex: 90,
-              width: "min(360px, calc(100vw - 28px))",
-              padding: 2,
-              borderRadius: 26,
-              background:
-                theme === "dark"
-                  ? "radial-gradient(circle at top, rgba(56,189,248,0.22), transparent 68%)"
-                  : "radial-gradient(circle at top, rgba(244,114,182,0.32), transparent 70%)",
-              boxShadow: "0 26px 80px rgba(0,0,0,0.7)",
-            }}
-          >
-            <div style={{ ...glassPanel, padding: 16, borderRadius: 24 }} onClick={(e) => e.stopPropagation()}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div
-                  style={{
-                    fontSize: "0.8rem",
-                    letterSpacing: "0.14em",
-                    textTransform: "uppercase",
-                    fontWeight: 800,
-                    color: themeCfg.uiSoftText,
-                  }}
-                >
-                  Menü
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setMenuOpen(false)}
-                  style={{
-                    width: 40,
-                    height: 40,
-                    borderRadius: 999,
-                    border: `1px solid ${themeCfg.secondaryButtonBorder}`,
-                    background: themeCfg.secondaryButtonBg,
-                    color: themeCfg.secondaryButtonText,
-                    cursor: "pointer",
-                    fontSize: 18,
-                    fontWeight: 900,
-                  }}
-                  aria-label="Schließen"
-                >
-                  ✕
-                </button>
-              </div>
-
-              <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 14 }}>
-                {[
-                  { label: "Features", id: "features" },
-                  { label: "Über SoftVibe", id: "about" },
-                  { label: "Kontakt", id: "contact" },
-                ].map((x) => (
-                  <button
-                    key={x.id}
-                    type="button"
-                    onClick={() => {
-                      setMenuOpen(false);
-                      document.getElementById(x.id)?.scrollIntoView({ behavior: "smooth", block: "start" });
-                    }}
-                    style={{ ...pillStyle("secondary"), width: "100%", textAlign: "left" }}
-                  >
-                    {x.label}
-                  </button>
-                ))}
-
-                <div style={{ height: 1, background: "rgba(148,163,184,0.25)", margin: "4px 0" }} />
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    go(secondaryCta.href);
-                  }}
-                  style={{ ...pillStyle("secondary"), width: "100%", textAlign: "left" }}
-                >
-                  {secondaryCta.label}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    go(primaryCta.href);
-                  }}
-                  style={{ ...pillStyle("primary"), width: "100%", textAlign: "left" }}
-                >
-                  {primaryCta.label} →
-                </button>
-              </div>
-            </div>
-          </div>
-        </>
+        <div
+          onClick={closeMenu}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 25,
+            background: theme === "dark" ? "rgba(2,6,23,0.35)" : "rgba(15,23,42,0.16)",
+          }}
+        />
       )}
 
       {/* HERO (fixed, lingers longer, then pushed away by features) */}
       <div
+        className="sv-hero"
         style={{
           position: "fixed",
           left: 0,
@@ -491,6 +616,56 @@ export default function Home() {
             ))}
           </div>
         </div>
+      </div>
+
+      {/* Scroll hint — anchored near the bottom viewport edge, independent of
+          the hero's own centered text flow. Shares the hero's fade/pointer
+          state so it disappears together with the hero on scroll. */}
+      <div
+        style={{
+          position: "fixed",
+          left: 0,
+          right: 0,
+          bottom: "clamp(20px, 5vh, 44px)",
+          zIndex: 20,
+          display: "flex",
+          justifyContent: "center",
+          opacity: heroOpacity,
+          pointerEvents: heroPointer,
+          transition: "opacity 120ms linear",
+        }}
+      >
+        <button
+          type="button"
+          aria-label="Zu Features scrollen"
+          className="sv-scroll-hint"
+          onClick={() => {
+            const reduceMotion =
+              typeof window !== "undefined" &&
+              window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+            featuresRef.current?.scrollIntoView({
+              behavior: reduceMotion ? "auto" : "smooth",
+              block: "start",
+            });
+          }}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 36,
+            height: 36,
+            borderRadius: "50%",
+            border: "none",
+            background: "transparent",
+            color: themeCfg.uiSoftText,
+            cursor: "pointer",
+            opacity: 0.6,
+          }}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </button>
       </div>
 
       {/* CONTENT */}

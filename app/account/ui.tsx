@@ -1,13 +1,13 @@
 // app/account/ui.tsx
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import type React from "react";
 
 import SVScene from "@/app/components/sv-scene";
-import { useSVTheme, type ThemeConfig } from "@/app/components/sv-kit";
+import { useSVTheme, useHeaderMenu, formatEntitlementMenuLabel, type ThemeConfig } from "@/app/components/sv-kit";
 import { usePlayer } from "@/app/components/player-context";
 import { AVATAR_PRESETS, getAvatarPreset } from "@/lib/avatars";
 import type { EntitlementsView } from "@/lib/entitlement-view";
@@ -130,8 +130,7 @@ export default function AccountClient({ user }: { user: AccountUser }) {
   const [loadingTracks, setLoadingTracks] = useState(false);
   const [viewMode, setViewMode] = useState<"list" | "grid">("list");
   const [tab, setTab] = useState<"recent" | "popular">("recent");
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { open: menuOpen, rootRef: menuRootRef, onMouseEnter: menuOnMouseEnter, onMouseLeave: menuOnMouseLeave, toggle: toggleMenu, close: closeMenu } = useHeaderMenu();
 
   // Avatar — initialise from sessionStorage so a stale router-cache remount can't
   // temporarily overwrite the user's latest saved choice before fresh data arrives.
@@ -257,9 +256,21 @@ export default function AccountClient({ user }: { user: AccountUser }) {
         @media (min-width: 900px) {
           .sv-account-grid {
             display: grid !important;
-            grid-template-columns: 320px 1fr;
-            gap: 32px;
+            grid-template-columns: 350px 1fr;
+            gap: 40px;
             align-items: start;
+          }
+          .sv-ent-number {
+            font-size: 2.48rem !important;
+          }
+          .sv-meta-member {
+            font-size: 0.8rem !important;
+          }
+          .sv-meta-email {
+            font-size: 0.86rem !important;
+          }
+          .sv-meta-track {
+            font-size: 0.78rem !important;
           }
         }
       `}</style>
@@ -318,17 +329,14 @@ export default function AccountClient({ user }: { user: AccountUser }) {
 
         {/* Menu — hover with close-delay so cursor can reach the dropdown */}
         <div
+          ref={menuRootRef}
           style={{ position: "relative" }}
-          onMouseEnter={() => {
-            if (menuCloseTimer.current) { clearTimeout(menuCloseTimer.current); menuCloseTimer.current = null; }
-            setMenuOpen(true);
-          }}
-          onMouseLeave={() => {
-            menuCloseTimer.current = setTimeout(() => setMenuOpen(false), 150);
-          }}
+          onMouseEnter={menuOnMouseEnter}
+          onMouseLeave={menuOnMouseLeave}
         >
           <button
             type="button"
+            onClick={toggleMenu}
             style={{
               width: 40,
               height: 40,
@@ -355,7 +363,7 @@ export default function AccountClient({ user }: { user: AccountUser }) {
                 right: 0,
                 top: "calc(100% + 8px)",
                 zIndex: 90,
-                width: "min(280px, calc(100vw - 28px))",
+                width: "min(360px, calc(100vw - 28px))",
                 padding: 2,
                 borderRadius: 26,
                 background: isDark
@@ -365,20 +373,40 @@ export default function AccountClient({ user }: { user: AccountUser }) {
               }}
             >
               <div style={{ ...glassPanel, padding: 16, borderRadius: 24 }}>
-                <div style={{ fontSize: "0.8rem", letterSpacing: "0.14em", textTransform: "uppercase", fontWeight: 800, color: themeCfg.uiSoftText, marginBottom: 12 }}>
+                <div style={{ fontSize: "0.8rem", letterSpacing: "0.14em", textTransform: "uppercase", fontWeight: 800, color: themeCfg.uiSoftText, marginBottom: 10 }}>
                   Menü
                 </div>
 
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ fontSize: "0.78rem", color: themeCfg.uiSoftText, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
+                  {formatEntitlementMenuLabel(user.entitlements, user.isAdmin)}
+                </div>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 14 }}>
                   {[
-                    { label: "Generieren", href: "/generate" },
-                    { label: "Bibliothek", href: "/library" },
-                    { label: "Konto", href: "/account" },
+                    { label: "Features", href: "/#features" },
+                    { label: "Über SoftVibe", href: "/#about" },
+                    { label: "Kontakt", href: "/#contact" },
                   ].map((x) => (
                     <Link
                       key={x.href}
                       href={x.href}
-                      onClick={() => setMenuOpen(false)}
+                      onClick={closeMenu}
+                      style={{ ...pillStyle(themeCfg, "secondary"), width: "100%", textAlign: "left" as const, display: "block" }}
+                    >
+                      {x.label}
+                    </Link>
+                  ))}
+
+                  <div style={{ height: 1, background: "rgba(148,163,184,0.25)", margin: "4px 0" }} />
+
+                  {[
+                    { label: "Generieren", href: "/generate" },
+                    { label: "Bibliothek", href: "/library" },
+                  ].map((x) => (
+                    <Link
+                      key={x.href}
+                      href={x.href}
+                      onClick={closeMenu}
                       style={{ ...pillStyle(themeCfg, "secondary"), width: "100%", textAlign: "left" as const, display: "block" }}
                     >
                       {x.label}
@@ -402,9 +430,22 @@ export default function AccountClient({ user }: { user: AccountUser }) {
         </div>
       </header>
 
+      {/* Dimming backdrop — focus layer behind the open menu, shared across all pages */}
+      {menuOpen && (
+        <div
+          onClick={closeMenu}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 20,
+            background: isDark ? "rgba(2,6,23,0.35)" : "rgba(15,23,42,0.16)",
+          }}
+        />
+      )}
+
       {/* ── Page content ──────────────────────────────────────────────── */}
       <main style={{ minHeight: "100vh", padding: "96px 24px 80px" }}>
-        <div style={{ maxWidth: 1200, margin: "0 auto" }}>
+        <div style={{ maxWidth: 1360, margin: "0 auto" }}>
 
           {/* Responsive grid container */}
           <div
@@ -462,7 +503,7 @@ export default function AccountClient({ user }: { user: AccountUser }) {
                     <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 3 }}>
                       <h1
                         style={{
-                          fontSize: "clamp(1.25rem, 2.5vw, 1.55rem)",
+                          fontSize: "clamp(1.25rem, 2.5vw, 1.72rem)",
                           fontWeight: 800,
                           color: themeCfg.uiText,
                           margin: 0,
@@ -488,13 +529,13 @@ export default function AccountClient({ user }: { user: AccountUser }) {
                         </div>
                       )}
                     </div>
-                    <div style={{ fontSize: "0.8rem", color: themeCfg.uiSoftText, overflowWrap: "anywhere" }}>
+                    <div className="sv-meta-email" style={{ fontSize: "0.8rem", color: themeCfg.uiSoftText, overflowWrap: "anywhere" }}>
                       {user.email}
                     </div>
                   </div>
                 </div>
 
-                <div style={{ fontSize: "0.75rem", color: themeCfg.uiSoftText, paddingLeft: 72 }}>
+                <div className="sv-meta-member" style={{ fontSize: "0.75rem", color: themeCfg.uiSoftText, paddingLeft: 72 }}>
                   Mitglied seit {formatDate(user.createdAt)}
                 </div>
               </div>
@@ -511,7 +552,7 @@ export default function AccountClient({ user }: { user: AccountUser }) {
                   if (user.isAdmin) {
                     return (
                       <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
-                        <span style={{ fontSize: "2.2rem", fontWeight: 850, color: themeCfg.uiText, lineHeight: 1 }}>
+                        <span className="sv-ent-number" style={{ fontSize: "2.2rem", fontWeight: 850, color: themeCfg.uiText, lineHeight: 1 }}>
                           ∞
                         </span>
                         <span style={{ fontSize: "0.8rem", color: themeCfg.uiSoftText, fontWeight: 500 }}>
@@ -525,7 +566,7 @@ export default function AccountClient({ user }: { user: AccountUser }) {
                     return (
                       <>
                         <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 4 }}>
-                          <span style={{ fontSize: "2.2rem", fontWeight: 850, color: themeCfg.uiText, lineHeight: 1 }}>
+                          <span className="sv-ent-number" style={{ fontSize: "2.2rem", fontWeight: 850, color: themeCfg.uiText, lineHeight: 1 }}>
                             {ent.probes.remaining.toLocaleString("de-DE")}
                           </span>
                           <span style={{ fontSize: "0.8rem", color: themeCfg.uiSoftText, fontWeight: 500 }}>
@@ -542,7 +583,7 @@ export default function AccountClient({ user }: { user: AccountUser }) {
                     return (
                       <>
                         <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 4 }}>
-                          <span style={{ fontSize: "2.2rem", fontWeight: 850, color: themeCfg.uiText, lineHeight: 1 }}>
+                          <span className="sv-ent-number" style={{ fontSize: "2.2rem", fontWeight: 850, color: themeCfg.uiText, lineHeight: 1 }}>
                             {ent.monthlyMinutes.remaining.toLocaleString("de-DE")}
                           </span>
                           <span style={{ fontSize: "0.8rem", color: themeCfg.uiSoftText, fontWeight: 500 }}>
@@ -560,7 +601,7 @@ export default function AccountClient({ user }: { user: AccountUser }) {
                   // legacy Credits wording.
                   return (
                     <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
-                      <span style={{ fontSize: "2.2rem", fontWeight: 850, color: themeCfg.uiText, lineHeight: 1 }}>
+                      <span className="sv-ent-number" style={{ fontSize: "2.2rem", fontWeight: 850, color: themeCfg.uiText, lineHeight: 1 }}>
                         –
                       </span>
                       <span style={{ fontSize: "0.8rem", color: themeCfg.uiSoftText, fontWeight: 500 }}>
@@ -827,7 +868,7 @@ export default function AccountClient({ user }: { user: AccountUser }) {
                           {/* Meta + play button row */}
                           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                             <div style={{ minWidth: 0 }}>
-                              <div style={{ fontSize: "0.72rem", color: themeCfg.uiSoftText, fontWeight: 600, marginBottom: 1 }}>
+                              <div className="sv-meta-track" style={{ fontSize: "0.72rem", color: themeCfg.uiSoftText, fontWeight: 600, marginBottom: 1 }}>
                                 {(t.preset ?? "—") || "—"}
                               </div>
                               <div style={{ fontSize: "0.68rem", color: themeCfg.uiSoftText, opacity: 0.7 }}>
@@ -949,7 +990,7 @@ export default function AccountClient({ user }: { user: AccountUser }) {
                             >
                               {displayTitle(t)}
                             </div>
-                            <div style={{ fontSize: "0.72rem", color: themeCfg.uiSoftText }}>
+                            <div className="sv-meta-track" style={{ fontSize: "0.72rem", color: themeCfg.uiSoftText }}>
                               {(t.preset ?? "—") || "—"}
                               {(t.durationSec ?? t.durationSeconds) ? ` · ${t.durationSec ?? t.durationSeconds}s` : ""}
                               {t.createdAt ? ` · ${new Date(t.createdAt).toLocaleDateString("de-DE")}` : ""}

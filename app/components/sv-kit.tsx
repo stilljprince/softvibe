@@ -1,8 +1,9 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import type { EntitlementsView } from "@/lib/entitlement-view";
 
 export type ThemeKey = "light" | "pastel" | "dark";
 
@@ -138,6 +139,77 @@ export function useAutoHideControls(isPlaying: boolean) {
   }, [isPlaying]);
 
   return { controlsVisible, setControlsVisible };
+}
+
+const HEADER_MENU_CLOSE_DELAY_MS = 150;
+
+// Shared open/close behaviour for the header hamburger dropdown used on
+// /generate, /library and /account. Desktop hovers open instantly and close
+// on a short delay (so the cursor can travel the gap between the trigger and
+// the dropdown without the menu vanishing first); touch taps toggle via the
+// trigger's onClick; clicking outside the menu closes it.
+export function useHeaderMenu() {
+  const [open, setOpen] = useState(false);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  const clearCloseTimer = useCallback(() => {
+    if (closeTimerRef.current !== null) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }, []);
+
+  const openNow = useCallback(() => {
+    clearCloseTimer();
+    setOpen(true);
+  }, [clearCloseTimer]);
+
+  const scheduleClose = useCallback(() => {
+    clearCloseTimer();
+    closeTimerRef.current = setTimeout(() => setOpen(false), HEADER_MENU_CLOSE_DELAY_MS);
+  }, [clearCloseTimer]);
+
+  const toggle = useCallback(() => {
+    clearCloseTimer();
+    setOpen((v) => !v);
+  }, [clearCloseTimer]);
+
+  const close = useCallback(() => {
+    clearCloseTimer();
+    setOpen(false);
+  }, [clearCloseTimer]);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDocClick(e: MouseEvent) {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        close();
+      }
+    }
+    document.addEventListener("click", onDocClick);
+    return () => document.removeEventListener("click", onDocClick);
+  }, [open, close]);
+
+  useEffect(() => clearCloseTimer, [clearCloseTimer]);
+
+  return { open, rootRef, onMouseEnter: openNow, onMouseLeave: scheduleClose, toggle, close };
+}
+
+// Plan-aware, human-readable entitlement label shared by every header menu.
+// Mirrors the wording already established on /generate so the usage line
+// reads identically everywhere: Admin -> unlimited, Free -> probes
+// remaining, Starter/Premium -> Custom Minutes remaining.
+export function formatEntitlementMenuLabel(
+  entitlements: EntitlementsView | null,
+  isAdmin: boolean
+): string {
+  if (isAdmin) return "∞ Custom Minutes";
+  if (!entitlements) return "–";
+  if (entitlements.plan === "FREE") {
+    return `${entitlements.probes.remaining} von ${entitlements.probes.lifetimeLimit} freien Generierungen`;
+  }
+  return `${entitlements.monthlyMinutes.remaining} von ${entitlements.monthlyMinutes.allowance} Custom Minutes`;
 }
 
 export function SVPage({

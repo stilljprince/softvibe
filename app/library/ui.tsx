@@ -6,10 +6,11 @@ import Image from "next/image";
 import type React from "react";
 import { useRouter } from "next/navigation";
 import { usePlayer, type Chapter } from "@/app/components/player-context";
-import { useSVTheme } from "@/app/components/sv-kit";
+import { useSVTheme, useHeaderMenu, formatEntitlementMenuLabel, type ThemeConfig } from "@/app/components/sv-kit";
 import SVScene from "@/app/components/sv-scene";
 import { PLAYLIST_COVERS, getPlaylistCover } from "@/lib/playlist-covers";
 import CuratedLibrarySection from "./CuratedLibrarySection";
+import type { EntitlementsView } from "@/lib/entitlement-view";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -81,6 +82,38 @@ function isOkDataResp(v: unknown): v is OkDataResp {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+// pillStyle — matches /generate and /account exactly
+function pillStyle(cfg: ThemeConfig, variant: "primary" | "secondary"): React.CSSProperties {
+  if (variant === "primary") {
+    return {
+      textDecoration: "none",
+      padding: "0.55rem 1.15rem",
+      borderRadius: 999,
+      background: cfg.primaryButtonBg,
+      color: cfg.primaryButtonText,
+      fontSize: "0.88rem",
+      fontWeight: 700,
+      boxShadow: "0 14px 35px rgba(0,0,0,0.35)",
+      border: "none",
+      cursor: "pointer",
+      whiteSpace: "nowrap" as const,
+    };
+  }
+  return {
+    textDecoration: "none",
+    padding: "0.55rem 1.05rem",
+    borderRadius: 999,
+    border: `1px solid ${cfg.secondaryButtonBorder}`,
+    background: cfg.secondaryButtonBg,
+    color: cfg.secondaryButtonText,
+    fontSize: "0.85rem",
+    fontWeight: 650,
+    boxShadow: "0 10px 25px rgba(0,0,0,0.25)",
+    cursor: "pointer",
+    whiteSpace: "nowrap" as const,
+  };
+}
 
 function getEffectiveTitle(t: Track): string {
   const trackTitle = (t.title ?? "").trim();
@@ -264,6 +297,16 @@ export default function LibraryClient() {
   const isDark = themeKey === "dark";
   const router = useRouter();
 
+  // glassPanel — matches /generate and /account exactly
+  const glassPanel = useMemo((): React.CSSProperties => ({
+    background: isDark ? "rgba(15,23,42,0.52)" : "rgba(248,250,252,0.62)",
+    border: isDark ? "1px solid rgba(148,163,184,0.22)" : "1px solid rgba(148,163,184,0.28)",
+    color: themeCfg.uiText,
+    backdropFilter: "blur(18px)",
+    WebkitBackdropFilter: "blur(18px)",
+    boxShadow: isDark ? "0 26px 80px rgba(0,0,0,0.55)" : "0 22px 60px rgba(15,23,42,0.25)",
+  }), [themeKey, themeCfg.uiText]);
+
   const [tracks, setTracks] = useState<Track[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -272,7 +315,7 @@ export default function LibraryClient() {
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [libraryView, setLibraryView] = useState<LibraryView>("recent");
   const [openPlaylistSlug, setOpenPlaylistSlug] = useState<string | null>(null);
-  const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
+  const { open: headerMenuOpen, rootRef: headerMenuRootRef, onMouseEnter: headerMenuOnMouseEnter, onMouseLeave: headerMenuOnMouseLeave, toggle: toggleHeaderMenu, close: closeHeaderMenu } = useHeaderMenu();
 
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -282,14 +325,12 @@ export default function LibraryClient() {
 
   const [toast, setToast] = useState<{ msg: string; kind?: "ok" | "err" } | null>(null);
   const toastTimer = useRef<number | null>(null);
-  const headerCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const downloadingRef = useRef<Set<string>>(new Set());
 
-  // Entitlement-derived Custom Minutes for the header menu. null = hide
-  // (Free, admin, loading, failed fetch, or unresolved snapshot). Zero for a
-  // valid paid plan is a truthful value and must render, not be treated as
-  // loading.
-  const [paidMinutesRemaining, setPaidMinutesRemaining] = useState<number | null>(null);
+  // Entitlement snapshot for the header menu's usage-info line — mirrors the
+  // wording shown on /generate via formatEntitlementMenuLabel.
+  const [menuIsAdmin, setMenuIsAdmin] = useState(false);
+  const [menuEntitlements, setMenuEntitlements] = useState<EntitlementsView | null>(null);
 
   // ── Manual playlists ─────────────────────────────────────────────────────────
   const [manualPlaylists, setManualPlaylists] = useState<ManualPlaylist[]>([]);
@@ -318,15 +359,11 @@ export default function LibraryClient() {
       .then((json) => {
         const d = json?.ok === true && json.data ? json.data : json;
         if (!d || typeof d !== "object") return;
+        setMenuIsAdmin((d as { isAdmin?: unknown }).isAdmin === true);
         const ent = (d as { entitlements?: unknown }).entitlements;
-        if (!ent || typeof ent !== "object") return;
-        const plan = (ent as { plan?: unknown }).plan;
-        const mm = (ent as { monthlyMinutes?: unknown }).monthlyMinutes;
-        if (plan !== "STARTER" && plan !== "PREMIUM") return;
-        if (!mm || typeof mm !== "object") return;
-        const remaining = (mm as { remaining?: unknown }).remaining;
-        if (typeof remaining !== "number") return;
-        setPaidMinutesRemaining(remaining);
+        if (ent && typeof ent === "object") {
+          setMenuEntitlements(ent as EntitlementsView);
+        }
       })
       .catch(() => null);
   }, []);
@@ -1159,18 +1196,14 @@ export default function LibraryClient() {
 
         {/* Right — menu button with dropdown */}
         <div
+          ref={headerMenuRootRef}
           style={{ position: "relative" }}
-          onMouseEnter={() => {
-            if (headerCloseTimer.current) { clearTimeout(headerCloseTimer.current); headerCloseTimer.current = null; }
-            setHeaderMenuOpen(true);
-          }}
-          onMouseLeave={() => {
-            headerCloseTimer.current = setTimeout(() => setHeaderMenuOpen(false), 150);
-          }}
+          onMouseEnter={headerMenuOnMouseEnter}
+          onMouseLeave={headerMenuOnMouseLeave}
         >
           <button
             type="button"
-            onClick={() => setHeaderMenuOpen((v) => !v)}
+            onClick={toggleHeaderMenu}
             style={{
               width: 40,
               height: 40,
@@ -1197,68 +1230,89 @@ export default function LibraryClient() {
                 right: 0,
                 top: "calc(100% + 8px)",
                 zIndex: 90,
-                width: "min(280px, calc(100vw - 36px))",
+                width: "min(360px, calc(100vw - 28px))",
                 padding: 2,
                 borderRadius: 26,
                 background: isDark
-                  ? "radial-gradient(circle at top, rgba(56,189,248,0.18), transparent 68%)"
-                  : "radial-gradient(circle at top, rgba(244,114,182,0.22), transparent 70%)",
-                boxShadow: "0 26px 80px rgba(0,0,0,0.6)",
+                  ? "radial-gradient(circle at top, rgba(56,189,248,0.22), transparent 68%)"
+                  : "radial-gradient(circle at top, rgba(244,114,182,0.32), transparent 70%)",
+                boxShadow: "0 26px 80px rgba(0,0,0,0.7)",
               }}
             >
-              <div
-                style={{
-                  background: isDark ? "rgba(15,23,42,0.96)" : "rgba(255,255,255,0.95)",
-                  backdropFilter: "blur(24px)",
-                  WebkitBackdropFilter: "blur(24px)",
-                  border: `1px solid ${themeCfg.cardBorder}`,
-                  borderRadius: 24,
-                  padding: 16,
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: "0.72rem",
-                    letterSpacing: "0.14em",
-                    textTransform: "uppercase",
-                    fontWeight: 800,
-                    color: themeCfg.uiSoftText,
-                    marginBottom: 10,
-                  }}
-                >
-                  {themeKey === "dark" ? "☾ Dark" : themeKey === "pastel" ? "✦ Pastel" : "◑ Light"}
+              <div style={{ ...glassPanel, padding: 16, borderRadius: 24 }}>
+                {/* Header row */}
+                <div style={{ fontSize: "0.8rem", letterSpacing: "0.14em", textTransform: "uppercase", fontWeight: 800, color: themeCfg.uiSoftText, marginBottom: 10 }}>
+                  Menü
                 </div>
-                {paidMinutesRemaining !== null && (
-                  <div style={{ display: "flex", alignItems: "center", marginBottom: 12 }}>
-                    <span style={{ fontSize: "0.82rem", color: themeCfg.uiSoftText, fontWeight: 600 }}>
-                      {paidMinutesRemaining} Custom Minutes
-                    </span>
-                  </div>
-                )}
-                <form action="/api/auth/signout" method="post">
-                  <button
-                    type="submit"
-                    style={{
-                      width: "100%",
-                      textAlign: "left",
-                      padding: "10px 14px",
-                      borderRadius: 12,
-                      border: `1px solid ${themeCfg.cardBorder}`,
-                      background: "transparent",
-                      color: themeCfg.uiText,
-                      fontWeight: 600,
-                      fontSize: "0.875rem",
-                      cursor: "pointer",
-                    }}
+
+                {/* Entitlements — plan-aware, mirrors /generate and /account. */}
+                <div style={{ fontSize: "0.78rem", color: themeCfg.uiSoftText, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
+                  {formatEntitlementMenuLabel(menuEntitlements, menuIsAdmin)}
+                </div>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 14 }}>
+                  {[
+                    { label: "Features", href: "/#features" },
+                    { label: "Über SoftVibe", href: "/#about" },
+                    { label: "Kontakt", href: "/#contact" },
+                  ].map((x) => (
+                    <Link
+                      key={x.href}
+                      href={x.href}
+                      onClick={closeHeaderMenu}
+                      style={{ ...pillStyle(themeCfg, "secondary"), width: "100%", textAlign: "left" as const, display: "block" }}
+                    >
+                      {x.label}
+                    </Link>
+                  ))}
+
+                  <div style={{ height: 1, background: "rgba(148,163,184,0.25)", margin: "4px 0" }} />
+
+                  <Link
+                    href="/generate"
+                    onClick={closeHeaderMenu}
+                    style={{ ...pillStyle(themeCfg, "secondary"), width: "100%", textAlign: "left" as const, display: "block" }}
                   >
-                    Logout
-                  </button>
-                </form>
+                    Generieren
+                  </Link>
+
+                  <Link
+                    href="/account"
+                    onClick={closeHeaderMenu}
+                    style={{ ...pillStyle(themeCfg, "secondary"), width: "100%", textAlign: "left" as const, display: "block" }}
+                  >
+                    Konto
+                  </Link>
+
+                  <div style={{ height: 1, background: "rgba(148,163,184,0.25)", margin: "4px 0" }} />
+
+                  <form action="/api/auth/signout" method="post">
+                    <button
+                      type="submit"
+                      style={{ ...pillStyle(themeCfg, "secondary"), width: "100%", textAlign: "left" as const }}
+                    >
+                      Logout
+                    </button>
+                  </form>
+                </div>
               </div>
             </div>
           )}
         </div>
       </header>
+
+      {/* Dimming backdrop — focus layer behind the open menu, shared across all pages */}
+      {headerMenuOpen && (
+        <div
+          onClick={closeHeaderMenu}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 50,
+            background: isDark ? "rgba(2,6,23,0.35)" : "rgba(15,23,42,0.16)",
+          }}
+        />
+      )}
 
       {/* ── Content ───────────────────────────────────────────────────────── */}
       <div style={{ width: "min(900px, 100vw - 40px)", margin: "0 auto", padding: "8px 0 40px" }}>

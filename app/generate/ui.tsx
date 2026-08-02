@@ -6,7 +6,7 @@ import Link from "next/link";
 import Image from "next/image";
 import type React from "react";
 
-import { useSVTheme, SVCard, type ThemeConfig } from "@/app/components/sv-kit";
+import { useSVTheme, SVCard, useHeaderMenu, type ThemeConfig } from "@/app/components/sv-kit";
 import SVScene from "@/app/components/sv-scene";
 import { usePlayer, type Chapter } from "@/app/components/player-context";
 import type { EntitlementsView } from "@/lib/entitlement-view";
@@ -210,7 +210,7 @@ export default function GenerateClient({
     warmupText: string | null;
   } | null>(null);
   const [language, setLanguage] = useState<"de" | "en">("de");
-  const [menuOpen, setMenuOpen] = useState(false);
+  const { open: menuOpen, rootRef: menuRootRef, onMouseEnter: menuOnMouseEnter, onMouseLeave: menuOnMouseLeave, toggle: toggleMenu, close: closeMenu } = useHeaderMenu();
   const [viewMode, setViewMode] = useState<"list" | "grid">("list");
   const [openJobMenu, setOpenJobMenu] = useState<string | null>(null);
 
@@ -949,12 +949,14 @@ export default function GenerateClient({
 
           {/* Menu — hover-based shared wrapper */}
           <div
+            ref={menuRootRef}
             style={{ position: "relative" }}
-            onMouseEnter={() => setMenuOpen(true)}
-            onMouseLeave={() => setMenuOpen(false)}
+            onMouseEnter={menuOnMouseEnter}
+            onMouseLeave={menuOnMouseLeave}
           >
             <button
               type="button"
+              onClick={toggleMenu}
               style={{
                 width: 40,
                 height: 40,
@@ -1012,7 +1014,7 @@ export default function GenerateClient({
                       <Link
                         key={x.href}
                         href={x.href}
-                        onClick={() => setMenuOpen(false)}
+                        onClick={closeMenu}
                         style={{ ...pillStyle(themeCfg, "secondary"), width: "100%", textAlign: "left" as const, display: "block" }}
                       >
                         {x.label}
@@ -1023,10 +1025,18 @@ export default function GenerateClient({
 
                     <Link
                       href="/library"
-                      onClick={() => setMenuOpen(false)}
+                      onClick={closeMenu}
                       style={{ ...pillStyle(themeCfg, "secondary"), width: "100%", textAlign: "left" as const, display: "block" }}
                     >
                       Library
+                    </Link>
+
+                    <Link
+                      href="/account"
+                      onClick={closeMenu}
+                      style={{ ...pillStyle(themeCfg, "secondary"), width: "100%", textAlign: "left" as const, display: "block" }}
+                    >
+                      Konto
                     </Link>
 
                     <div style={{ height: 1, background: "rgba(148,163,184,0.25)", margin: "4px 0" }} />
@@ -1045,6 +1055,19 @@ export default function GenerateClient({
             )}
           </div>
         </header>
+
+        {/* Dimming backdrop — focus layer behind the open menu, shared across all pages */}
+        {menuOpen && (
+          <div
+            onClick={closeMenu}
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 20,
+              background: isDark ? "rgba(2,6,23,0.35)" : "rgba(15,23,42,0.16)",
+            }}
+          />
+        )}
 
         {/* ===== Page Content — matches SVScene content structure ===== */}
         <div style={{ position: "relative", zIndex: 10 }}>
