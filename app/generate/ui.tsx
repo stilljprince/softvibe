@@ -99,6 +99,14 @@ function formatSec(sec: number): string {
   return s > 0 ? `${m}m ${s}s` : `${m}m`;
 }
 
+// Slice B — safe, static user-facing copy for a failed session. Every job
+// failure code (GENERATION_FAILED, STORAGE_FAILED, unknown/historical
+// codes, or a null error) maps to the same calm message; provider/storage
+// details never reach the client.
+function getJobFailureMessage(): string {
+  return "Deine Session konnte leider nicht erstellt werden. Bitte versuche es erneut.";
+}
+
 // Fetches and maps chapter list for a story job.
 // Returns [] on any failure — caller decides how to surface errors.
 async function fetchStoryChapters(storyId: string): Promise<Chapter[]> {
@@ -572,12 +580,22 @@ export default function GenerateClient({
       body.durationSec = durationMin * 60;
     }
 
-    const res = await fetch("/api/jobs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      credentials: "include",
-    });
+    let res: Response;
+    try {
+      res = await fetch("/api/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        credentials: "include",
+      });
+    } catch {
+      showToast(
+        "Verbindungsproblem. Bitte prüfe deine Internetverbindung und versuche es erneut.",
+        "err",
+        4500
+      );
+      return;
+    }
 
     if (res.status === 429) {
       const ra = res.headers.get("Retry-After");
@@ -605,11 +623,9 @@ export default function GenerateClient({
 
     if (res.status === 402) {
       let code: string | null = null;
-      let serverMsg: string | null = null;
       try {
         const data = (await res.json()) as { error?: string; message?: string };
         if (typeof data?.error === "string") code = data.error;
-        if (typeof data?.message === "string") serverMsg = data.message;
       } catch {
         /* ignore */
       }
@@ -620,14 +636,17 @@ export default function GenerateClient({
         msg =
           "Für die gewählte Dauer stehen nicht genug Custom Minutes zur Verfügung.";
       } else if (code === "NO_CREDITS") {
-        // Residual compatibility branch. Do not surface serverMsg here — it
-        // may still carry legacy Credits/Guthaben/Aufladen wording. A neutral
-        // client-owned message keeps the user-visible surface product-consistent
-        // while the underlying error code stays unchanged.
+        // Residual compatibility branch. Do not surface a server-provided
+        // message here — it may still carry legacy Credits/Guthaben/Aufladen
+        // wording. A neutral client-owned message keeps the user-visible
+        // surface product-consistent while the underlying error code stays
+        // unchanged.
         msg =
           "Für diese Generierung steht aktuell kein passendes Nutzungskontingent zur Verfügung.";
       } else {
-        msg = serverMsg ?? "Diese Generierung ist derzeit nicht verfügbar.";
+        // Unmapped/unknown entitlement code — never surface the raw server
+        // message; only known codes above get a specific, vetted text.
+        msg = "Diese Generierung ist derzeit nicht verfügbar.";
       }
       showToast(msg, "err");
       // Refresh the authoritative account snapshot instead of locally
@@ -637,7 +656,7 @@ export default function GenerateClient({
     }
 
     if (!res.ok) {
-      showToast("Konnte Job nicht anlegen.", "err");
+      showToast(getJobFailureMessage(), "err");
       return;
     }
 
@@ -652,7 +671,7 @@ export default function GenerateClient({
     // snapshot (probes / Custom Minutes).
     void refreshAccountSummary();
 
-    showToast("Job erstellt.", "ok");
+    showToast("Deine Session wird erstellt.", "ok");
 
     if (!accountSummary?.isAdmin) {
       try {
@@ -675,6 +694,11 @@ export default function GenerateClient({
             } catch { /* ignore */ }
           }
           console.error("Auto-Complete für Job fehlgeschlagen:", completeRes.status);
+          showToast(
+            "Deine Session konnte leider nicht erstellt werden. Bitte versuche es erneut.",
+            "err"
+          );
+          setPolling(false);
           return;
         }
 
@@ -727,6 +751,11 @@ export default function GenerateClient({
         }
       } catch (err) {
         console.error("Fehler beim Auto-Complete:", err);
+        showToast(
+          "Deine Session konnte leider nicht erstellt werden. Bitte versuche es erneut.",
+          "err"
+        );
+        setPolling(false);
       }
     }
   }
@@ -2312,7 +2341,7 @@ function StatusCard({
             fontSize: "0.9rem",
           }}
         >
-          {job.error ?? "Fehlgeschlagen"}
+          {getJobFailureMessage()}
         </p>
       )}
     </SVCard>
@@ -2327,7 +2356,7 @@ function StatusPill({ status, themeCfg }: { status: JobStatus; themeCfg: ThemeCo
       ? "Warteschlange"
       : status === "PROCESSING"
       ? "In Bearbeitung"
-      : "Fehlgeschlagen";
+      : "Nicht erstellt";
 
   const bg = status === "FAILED" ? "rgba(254,202,202,0.9)" : themeCfg.cardBg;
   const color = status === "FAILED" ? "#7f1d1d" : themeCfg.uiSoftText;

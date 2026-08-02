@@ -17,6 +17,26 @@ type Plan = {
   recommended?: boolean;
 };
 
+// Slice B — safe, static user-facing copy for checkout failures. Only maps
+// codes that actually occur in app/api/billing/checkout/route.ts; anything
+// else (including raw server/HTTP details) falls back to the generic text.
+function getCheckoutErrorMessage(code?: string | null): string {
+  switch (code) {
+    case "ALREADY_SUBSCRIBED":
+      return "Du hast bereits ein aktives Abo.";
+    case "ADMIN_NO_CHECKOUT":
+      return "Für Admin-Konten ist kein Checkout erforderlich.";
+    case "INVALID_PLAN":
+      return "Dieser Plan ist aktuell nicht verfügbar.";
+    case "PLAN_NOT_CONFIGURED":
+      return "Dieser Plan kann gerade nicht gebucht werden. Bitte versuche es später erneut.";
+    case "SUBSCRIPTION_STATUS_UNAVAILABLE":
+      return "Dein Abo-Status konnte gerade nicht geprüft werden. Bitte versuche es erneut.";
+    default:
+      return "Der Checkout konnte gerade nicht gestartet werden. Bitte versuche es erneut.";
+  }
+}
+
 const PLANS: Plan[] = [
   {
     id: "starter",
@@ -54,22 +74,22 @@ export default function BillingPage() {
         const err = (await res.json().catch(() => null)) as
           | { message?: string; error?: string }
           | null;
-        setError(
-          err?.message ?? (err?.error ? `Fehler: ${err.error}` : `Fehler: ${res.status}`)
-        );
+        setError(getCheckoutErrorMessage(err?.error));
         return;
       }
 
       const data = (await res.json()) as { ok: boolean; data?: { url?: string } };
       const url = data?.data?.url;
       if (!url) {
-        setError("Keine Checkout-URL erhalten.");
+        setError(getCheckoutErrorMessage());
         return;
       }
       window.location.href = url;
     } catch (e) {
       console.error(e);
-      setError("Netzwerkfehler.");
+      setError(
+        "Verbindungsproblem. Bitte prüfe deine Internetverbindung und versuche es erneut."
+      );
     } finally {
       setLoadingId(null);
     }
