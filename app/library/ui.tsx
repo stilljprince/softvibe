@@ -188,7 +188,7 @@ function delay(ms: number): Promise<void> {
 const PRESET_META: Record<string, { label: string; isStoryType: boolean }> = {
   "sleep-story":   { label: "Sleep Story",   isStoryType: true  },
   "kids-story":    { label: "Kids Story",     isStoryType: true  },
-  "classic-asmr":  { label: "Classic ASMR",  isStoryType: false },
+  "classic-asmr":  { label: "ASMR",  isStoryType: false },
   "meditation":    { label: "Meditation",     isStoryType: false },
 };
 

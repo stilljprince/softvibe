@@ -14,10 +14,15 @@ import type { EntitlementsView } from "@/lib/entitlement-view";
 const PRESETS = [
   { id: "sleep-story",  label: "Sleep Story",  desc: "Calm · Slow" },
   { id: "kids-story",   label: "Kids Story",   desc: "Gentle · Safe" },
-  { id: "classic-asmr", label: "Classic ASMR", desc: "Whisper · Tapping" },
+  { id: "classic-asmr", label: "ASMR", desc: "Whisper · Tapping" },
   { id: "meditation",   label: "Meditation",   desc: "Breath · Soft Tone" },
   { id: "narrative",    label: "Narrative",    desc: "Story · Knowledge" },
 ];
+
+function presetLabel(id?: string | null): string | null {
+  if (!id) return null;
+  return PRESETS.find((p) => p.id === id)?.label ?? id;
+}
 
 // Calm progress copy (Slice C2). Immersive presets get story-flavored
 // wording; ASMR/Meditation get premium-clean wording. No technical stages.
@@ -333,6 +338,26 @@ export default function GenerateClient({
   const { open: menuOpen, rootRef: menuRootRef, onMouseEnter: menuOnMouseEnter, onMouseLeave: menuOnMouseLeave, toggle: toggleMenu, close: closeMenu } = useHeaderMenu();
   const [viewMode, setViewMode] = useState<"list" | "grid">("list");
   const [openJobMenu, setOpenJobMenu] = useState<string | null>(null);
+  const openJobMenuRef = useRef<HTMLDivElement | null>(null);
+
+  // Recent Jobs three-dot menu: close on outside click or Escape.
+  useEffect(() => {
+    if (!openJobMenu) return;
+    function onDocClick(e: MouseEvent) {
+      if (openJobMenuRef.current && !openJobMenuRef.current.contains(e.target as Node)) {
+        setOpenJobMenu(null);
+      }
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpenJobMenu(null);
+    }
+    document.addEventListener("click", onDocClick);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("click", onDocClick);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [openJobMenu]);
 
   // Global player
   const { loadTrack, loadStory } = usePlayer();
@@ -2232,7 +2257,7 @@ export default function GenerateClient({
                 {jobList.map((j) => {
                   const isStory = typeof j.chapterCount === "number" && j.chapterCount > 1 && !!j.storyId;
                   const meta = [
-                    j.preset,
+                    presetLabel(j.preset),
                     j.durationSec ? formatSec(j.durationSec) : null,
                     typeof j.chapterCount === "number" && j.chapterCount > 1 ? `${j.chapterCount} Kap.` : null,
                     isAdmin && j.language ? j.language.toUpperCase() : null,
@@ -2274,7 +2299,7 @@ export default function GenerateClient({
                           ) : null}
                         </div>
                         {/* Three-dot menu — right */}
-                        <div style={{ position: "relative", flexShrink: 0 }}>
+                        <div ref={openJobMenu === j.id ? openJobMenuRef : undefined} style={{ position: "relative", flexShrink: 0 }}>
                           <button
                             type="button"
                             onClick={(e) => { e.stopPropagation(); setOpenJobMenu(openJobMenu === j.id ? null : j.id); }}
@@ -2284,21 +2309,15 @@ export default function GenerateClient({
                             ⋯
                           </button>
                           {openJobMenu === j.id && (
-                            <>
-                              <div
-                                onClick={() => setOpenJobMenu(null)}
-                                style={{ position: "fixed", inset: 0, zIndex: 40 }}
-                              />
-                              <div style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", zIndex: 300, minWidth: 140, borderRadius: 12, ...glassPanel, padding: "6px 0", overflow: "hidden" }}>
-                                <button
-                                  type="button"
-                                  onClick={(e) => { e.stopPropagation(); void deleteJob(j.id); setOpenJobMenu(null); }}
-                                  style={{ width: "100%", padding: "9px 16px", background: "transparent", border: "none", color: "#e11d48", fontSize: "0.85rem", fontWeight: 600, cursor: "pointer", textAlign: "left" as const }}
-                                >
-                                  Löschen
-                                </button>
-                              </div>
-                            </>
+                            <div style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", zIndex: 300, minWidth: 140, borderRadius: 12, ...glassPanel, padding: "6px 0", overflow: "hidden" }}>
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); void deleteJob(j.id); setOpenJobMenu(null); }}
+                                style={{ width: "100%", padding: "9px 16px", background: "transparent", border: "none", color: "#e11d48", fontSize: "0.85rem", fontWeight: 600, cursor: "pointer", textAlign: "left" as const }}
+                              >
+                                Löschen
+                              </button>
+                            </div>
                           )}
                         </div>
                       </div>
@@ -2312,7 +2331,7 @@ export default function GenerateClient({
                 {jobList.map((j) => {
                   const isStory = typeof j.chapterCount === "number" && j.chapterCount > 1 && !!j.storyId;
                   const meta = [
-                    j.preset,
+                    presetLabel(j.preset),
                     j.durationSec ? formatSec(j.durationSec) : null,
                     typeof j.chapterCount === "number" && j.chapterCount > 1 ? `${j.chapterCount} Kap.` : null,
                   ].filter(Boolean).join(" · ");
@@ -2349,7 +2368,7 @@ export default function GenerateClient({
                             <StatusPill status={j.status} themeCfg={themeCfg} />
                           )}
                           {/* Three-dot menu */}
-                          <div style={{ position: "relative", flexShrink: 0 }}>
+                          <div ref={openJobMenu === j.id ? openJobMenuRef : undefined} style={{ position: "relative", flexShrink: 0 }}>
                             <button
                               type="button"
                               onClick={(e) => { e.stopPropagation(); setOpenJobMenu(openJobMenu === j.id ? null : j.id); }}
@@ -2359,21 +2378,15 @@ export default function GenerateClient({
                               ⋯
                             </button>
                             {openJobMenu === j.id && (
-                              <>
-                                <div
-                                  onClick={() => setOpenJobMenu(null)}
-                                  style={{ position: "fixed", inset: 0, zIndex: 40 }}
-                                />
-                                <div style={{ position: "absolute", right: 0, bottom: "calc(100% + 6px)", zIndex: 300, minWidth: 140, borderRadius: 12, ...glassPanel, padding: "6px 0", overflow: "hidden" }}>
-                                  <button
-                                    type="button"
-                                    onClick={(e) => { e.stopPropagation(); void deleteJob(j.id); setOpenJobMenu(null); }}
-                                    style={{ width: "100%", padding: "9px 16px", background: "transparent", border: "none", color: "#e11d48", fontSize: "0.85rem", fontWeight: 600, cursor: "pointer", textAlign: "left" as const }}
-                                  >
-                                    Löschen
-                                  </button>
-                                </div>
-                              </>
+                              <div style={{ position: "absolute", right: 0, bottom: "calc(100% + 6px)", zIndex: 300, minWidth: 140, borderRadius: 12, ...glassPanel, padding: "6px 0", overflow: "hidden" }}>
+                                <button
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); void deleteJob(j.id); setOpenJobMenu(null); }}
+                                  style={{ width: "100%", padding: "9px 16px", background: "transparent", border: "none", color: "#e11d48", fontSize: "0.85rem", fontWeight: 600, cursor: "pointer", textAlign: "left" as const }}
+                                >
+                                  Löschen
+                                </button>
+                              </div>
                             )}
                           </div>
                         </div>
@@ -2470,10 +2483,15 @@ function StatusCard({
           <p style={{ fontWeight: 700, fontSize: "1rem", margin: "0 0 4px", color: themeCfg.uiText }}>
             {headerTitle}
           </p>
+          {/* RP-011A4.1c — Session card metadata (preset label + duration)
+              temporarily hidden for visual calm. Not deleted; re-enable by
+              uncommenting this block. */}
+          {/*
           <div style={{ fontSize: "0.8rem", color: themeCfg.uiSoftText }}>
             {job.preset && <span>{job.preset}</span>}
             {job.durationSec ? <span> · {formatSec(job.durationSec)}</span> : null}
           </div>
+          */}
         </div>
         {job.status === "DONE" && job.resultUrl && onPlay ? (
           <button

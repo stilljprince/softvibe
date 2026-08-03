@@ -5,7 +5,7 @@ import { jsonOk, jsonError, requireAuth } from "@/lib/api";
 export const runtime = "nodejs";
 
 const FALLBACK_PRESETS = [
-  { id: "classic-asmr",  label: "Classic ASMR (Whisper, Tapping)" },
+  { id: "classic-asmr",  label: "ASMR (Whisper, Tapping)" },
   { id: "sleep-story",   label: "Sleep Story (Calm, Slow)" },
   { id: "meditation",    label: "Meditation (Breath, Soft Tone)" },
   { id: "kids-story",    label: "Kids Story (Gentle, Safe)" },

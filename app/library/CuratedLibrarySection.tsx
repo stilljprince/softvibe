@@ -103,7 +103,7 @@ const PRESET_LABELS: Record<string, string> = {
   "sleep-story": "Sleep Story",
   "kids-story": "Kids Story",
   "meditation": "Meditation",
-  "classic-asmr": "Classic ASMR",
+  "classic-asmr": "ASMR",
 };
 
 function labelForPreset(preset: string): string {

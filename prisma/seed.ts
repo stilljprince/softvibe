@@ -3,7 +3,7 @@ import { prisma } from "../lib/prisma";
 
 async function main() {
   const presets = [
-    { slug: "classic-asmr", label: "Classic ASMR (Whisper, Tapping)", defaultDurationSec: 120 },
+    { slug: "classic-asmr", label: "ASMR (Whisper, Tapping)", defaultDurationSec: 120 },
     { slug: "sleep-story",  label: "Sleep Story (Calm, Slow)",       defaultDurationSec: 600 },
     { slug: "meditation",   label: "Meditation (Breath, Soft Tone)", defaultDurationSec: 300 },
   ];
