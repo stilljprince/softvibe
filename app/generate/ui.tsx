@@ -19,6 +19,24 @@ const PRESETS = [
   { id: "narrative",    label: "Narrative",    desc: "Story · Knowledge" },
 ];
 
+// Calm progress copy (Slice C2). Immersive presets get story-flavored
+// wording; ASMR/Meditation get premium-clean wording. No technical stages.
+const IMMERSIVE_PROGRESS_PRESETS = new Set(["sleep-story", "kids-story", "narrative"]);
+
+const IMMERSIVE_PROGRESS_TEXT = [
+  "Deine Geschichte wird vorbereitet …",
+  "Deine Geschichte nimmt langsam Gestalt an …",
+  "Deine Geschichte wird zum Leben erweckt …",
+  "Fast geschafft — deine Geschichte wartet gleich auf dich …",
+];
+
+const CLEAN_PROGRESS_TEXT = [
+  "Deine Session wird vorbereitet …",
+  "Deine Audio-Session wird erstellt …",
+  "Deine Entspannungssession wird finalisiert …",
+  "Fast geschafft …",
+];
+
 // RP-004C — Free Probe duration bounds (user-facing minutes).
 // Kept authoritative on the server; these mirror PROBE_MIN_DURATION_SEC /
 // PROBE_MAX_DURATION_SEC (60..480 s) as the user-facing minute equivalent.
@@ -107,6 +125,64 @@ function getJobFailureMessage(): string {
   return "Deine Session konnte leider nicht erstellt werden. Bitte versuche es erneut.";
 }
 
+type ProgressPhase = "submitting" | "queued" | "processing" | null;
+
+// Calm, perception-based progress (Slice C2). Not a real technical
+// measurement — a single continuous curve keyed off elapsed time since the
+// generation started. It always starts at 0%, rises slowly, and eases
+// toward (but never reaches) a soft ceiling. Phase changes (submitting →
+// queued → processing) never reset or jump the curve, since the elapsed
+// clock keeps running underneath — only a brand-new generation resets it
+// to 0. Status text rotates slowly on its own timer, independent of the
+// percent.
+const CALM_PROGRESS_CEILING = 90;
+const CALM_PROGRESS_TAU_MS = 16000;
+
+function useCalmProgress(phase: ProgressPhase, preset: string) {
+  const [percent, setPercent] = useState(0);
+  const [textIndex, setTextIndex] = useState(0);
+  const startedAtRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!phase) {
+      startedAtRef.current = null;
+      setPercent(0);
+      return;
+    }
+    if (startedAtRef.current === null) {
+      startedAtRef.current = Date.now();
+      setPercent(0);
+    }
+
+    const tick = () => {
+      const startedAt = startedAtRef.current;
+      if (startedAt === null) return;
+      const elapsed = Date.now() - startedAt;
+      const next = CALM_PROGRESS_CEILING * (1 - Math.exp(-elapsed / CALM_PROGRESS_TAU_MS));
+      setPercent(next);
+    };
+
+    tick();
+    const id = setInterval(tick, 600);
+    return () => clearInterval(id);
+  }, [phase]);
+
+  useEffect(() => {
+    if (!phase) {
+      setTextIndex(0);
+      return;
+    }
+    const id = setInterval(() => setTextIndex((i) => i + 1), 16000);
+    return () => clearInterval(id);
+  }, [phase]);
+
+  const phrases = IMMERSIVE_PROGRESS_PRESETS.has(preset)
+    ? IMMERSIVE_PROGRESS_TEXT
+    : CLEAN_PROGRESS_TEXT;
+
+  return { percent, text: phrases[textIndex % phrases.length] };
+}
+
 // Fetches and maps chapter list for a story job.
 // Returns [] on any failure — caller decides how to surface errors.
 async function fetchStoryChapters(storyId: string): Promise<Chapter[]> {
@@ -190,6 +266,42 @@ export default function GenerateClient({
   const [exitScriptConfirm, setExitScriptConfirm] = useState(false);
   const [job, setJob] = useState<Job | null>(null);
   const [polling, setPolling] = useState(false);
+  // Calm progress feedback (Slice C) — true only while the initial /api/jobs
+  // request is in flight, i.e. before a job exists yet.
+  const [submitting, setSubmitting] = useState(false);
+  const progressPhase: ProgressPhase =
+    submitting && !job
+      ? "submitting"
+      : job?.status === "QUEUED"
+      ? "queued"
+      : job?.status === "PROCESSING"
+      ? "processing"
+      : null;
+  const { percent: progressPercent, text: progressText } = useCalmProgress(progressPhase, preset);
+  // Slice C2.2 — once DONE is known, hold the bar visibly at 100% for a
+  // moment before flipping the card to DONE, instead of cutting straight
+  // from ~90% to the finished view. Purely cosmetic: `job` itself is only
+  // updated to the DONE state once the hold elapses.
+  const COMPLETION_HOLD_MS = 1400;
+  const [finishing, setFinishing] = useState(false);
+  const finishingJobIdRef = useRef<string | null>(null);
+  const finishTimerRef = useRef<number | null>(null);
+  function revealCompletedJob(completedJob: Job, onRevealed?: () => void) {
+    if (finishingJobIdRef.current === completedJob.id) return;
+    finishingJobIdRef.current = completedJob.id;
+    setFinishing(true);
+    if (finishTimerRef.current) window.clearTimeout(finishTimerRef.current);
+    finishTimerRef.current = window.setTimeout(() => {
+      setFinishing(false);
+      setJob(completedJob);
+      onRevealed?.();
+    }, COMPLETION_HOLD_MS);
+  }
+  const holdPhrase = (
+    IMMERSIVE_PROGRESS_PRESETS.has(preset) ? IMMERSIVE_PROGRESS_TEXT : CLEAN_PROGRESS_TEXT
+  ).slice(-1)[0];
+  const displayProgressPercent = finishing ? 100 : progressPercent;
+  const displayProgressText = finishing ? holdPhrase : progressText;
   const [jobList, setJobList] = useState<Job[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loadingList, setLoadingList] = useState(false);
@@ -276,6 +388,7 @@ export default function GenerateClient({
     return () => {
       if (retryTimerRef.current) window.clearTimeout(retryTimerRef.current);
       if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current);
+      if (finishTimerRef.current) window.clearTimeout(finishTimerRef.current);
     };
   }, []);
   // ---------- Ende Toast ----------
@@ -555,6 +668,7 @@ export default function GenerateClient({
   }
 
   async function createJob() {
+    setSubmitting(true);
     const body: {
       title: string;
       preset: string;
@@ -589,6 +703,7 @@ export default function GenerateClient({
         credentials: "include",
       });
     } catch {
+      setSubmitting(false);
       showToast(
         "Verbindungsproblem. Bitte prüfe deine Internetverbindung und versuche es erneut.",
         "err",
@@ -617,6 +732,7 @@ export default function GenerateClient({
         Number.isFinite(secsFromHeader) && secsFromHeader > 0
           ? Math.floor(secsFromHeader)
           : fallbackSeconds;
+      setSubmitting(false);
       startRetryCountdown(seconds);
       return;
     }
@@ -648,6 +764,7 @@ export default function GenerateClient({
         // message; only known codes above get a specific, vetted text.
         msg = "Diese Generierung ist derzeit nicht verfügbar.";
       }
+      setSubmitting(false);
       showToast(msg, "err");
       // Refresh the authoritative account snapshot instead of locally
       // mutating the visible entitlement balance.
@@ -656,11 +773,13 @@ export default function GenerateClient({
     }
 
     if (!res.ok) {
+      setSubmitting(false);
       showToast(getJobFailureMessage(), "err");
       return;
     }
 
     const data: Job = await res.json();
+    setSubmitting(false);
     setJob(data);
     // Admins do not auto-complete: polling starts only when "Generate Audio" is clicked.
     // Non-admins: polling starts immediately so the UI tracks the auto-complete call.
@@ -694,11 +813,9 @@ export default function GenerateClient({
             } catch { /* ignore */ }
           }
           console.error("Auto-Complete für Job fehlgeschlagen:", completeRes.status);
-          showToast(
-            "Deine Session konnte leider nicht erstellt werden. Bitte versuche es erneut.",
-            "err"
-          );
+          showToast(getJobFailureMessage(), "err");
           setPolling(false);
+          setJob((prev) => (prev ? { ...prev, status: "FAILED" } : prev));
           return;
         }
 
@@ -706,7 +823,6 @@ export default function GenerateClient({
         const completed = extractItem<Job>(rawComplete);
 
         if (completed) {
-          setJob(completed);
           setPolling(false);
           void loadJobs(0);
           if ((completed as Record<string, unknown>).kidsSafetyApplied) {
@@ -715,25 +831,6 @@ export default function GenerateClient({
 
           const trimmedTitle = title.trim();
           const playerTitle = trimmedTitle.length > 0 ? trimmedTitle : displayJobTitle(completed);
-
-          // Load the finished audio into the global bottom player.
-          // Multi-chapter stories use loadStory(); single tracks use loadTrack().
-          const isCompletedStory =
-            !!completed.storyId && (completed.chapterCount ?? 0) > 1;
-          if (isCompletedStory) {
-            const chapters = await fetchStoryChapters(completed.storyId!);
-            if (chapters.length > 0) {
-              loadStory(completed.storyId!, chapters, undefined, playerTitle);
-            } else {
-              // Auto-complete is silent from the user's perspective; log so it's traceable.
-              console.error(
-                "fetchStoryChapters returned empty list for job",
-                completed.id,
-              );
-            }
-          } else if (completed.resultUrl) {
-            loadTrack(completed.resultUrl, playerTitle, completed.id);
-          }
 
           try {
             await fetch("/api/tracks", {
@@ -748,14 +845,41 @@ export default function GenerateClient({
           } catch (e) {
             console.error("Track-Titel konnte nicht gesetzt werden:", e);
           }
+
+          // Slice C2.2 — let the bar settle at 100% before flipping the card
+          // to DONE and handing off to the player.
+          revealCompletedJob(completed, () => {
+            // Load the finished audio into the global bottom player.
+            // Multi-chapter stories use loadStory(); single tracks use loadTrack().
+            const isCompletedStory =
+              !!completed.storyId && (completed.chapterCount ?? 0) > 1;
+            if (isCompletedStory) {
+              void fetchStoryChapters(completed.storyId!).then((chapters) => {
+                if (chapters.length > 0) {
+                  loadStory(completed.storyId!, chapters, undefined, playerTitle);
+                } else {
+                  // Auto-complete is silent from the user's perspective; log so it's traceable.
+                  console.error(
+                    "fetchStoryChapters returned empty list for job",
+                    completed.id,
+                  );
+                }
+              });
+            } else if (completed.resultUrl) {
+              loadTrack(completed.resultUrl, playerTitle, completed.id);
+            }
+          });
+        } else {
+          console.error("Auto-Complete: Antwort konnte nicht gelesen werden.");
+          showToast(getJobFailureMessage(), "err");
+          setPolling(false);
+          setJob((prev) => (prev ? { ...prev, status: "FAILED" } : prev));
         }
       } catch (err) {
         console.error("Fehler beim Auto-Complete:", err);
-        showToast(
-          "Deine Session konnte leider nicht erstellt werden. Bitte versuche es erneut.",
-          "err"
-        );
+        showToast(getJobFailureMessage(), "err");
         setPolling(false);
+        setJob((prev) => (prev ? { ...prev, status: "FAILED" } : prev));
       }
     }
   }
@@ -805,8 +929,6 @@ export default function GenerateClient({
       const next = extractItem<Job>(fresh);
       if (!next) return;
 
-      setJob(next);
-
       if (next.status === "DONE") {
         const trimmedTitle = title.trim();
         if (trimmedTitle.length > 0) {
@@ -821,9 +943,16 @@ export default function GenerateClient({
             console.error("Konnte Track-Titel nach Abschluss nicht setzen:", e);
           }
         }
+        setPolling(false);
+        void loadJobs(0);
+        // Slice C2.2 — hold at 100% briefly before flipping the card to DONE.
+        revealCompletedJob(next);
+        return;
       }
 
-      if (next.status === "DONE" || next.status === "FAILED") {
+      setJob(next);
+
+      if (next.status === "FAILED") {
         setPolling(false);
         void loadJobs(0);
       }
@@ -839,7 +968,14 @@ export default function GenerateClient({
     });
     if (res.status === 204) {
       setJobList((prev) => prev.filter((j) => j.id !== id));
-      if (job?.id === id) setJob(null);
+      if (job?.id === id) {
+        setJob(null);
+        setFinishing(false);
+        if (finishTimerRef.current) {
+          window.clearTimeout(finishTimerRef.current);
+          finishTimerRef.current = null;
+        }
+      }
       showToast("Gelöscht.", "ok");
     } else {
       showToast("Konnte Job nicht löschen.", "err");
@@ -1769,11 +1905,23 @@ export default function GenerateClient({
                       type="button"
                       onClick={async () => {
                         if (!scriptPreview) return;
-                        await fetch(`/api/jobs/${job.id}/complete`, {
-                          method: "POST",
-                          credentials: "include",
-                        });
-                        setPolling(true);
+                        try {
+                          const completeRes = await fetch(`/api/jobs/${job.id}/complete`, {
+                            method: "POST",
+                            credentials: "include",
+                          });
+                          if (!completeRes.ok) {
+                            console.error("Generate Audio fehlgeschlagen:", completeRes.status);
+                            showToast(getJobFailureMessage(), "err");
+                            setJob((prev) => (prev ? { ...prev, status: "FAILED" } : prev));
+                            return;
+                          }
+                          setPolling(true);
+                        } catch (err) {
+                          console.error("Fehler bei Generate Audio:", err);
+                          showToast(getJobFailureMessage(), "err");
+                          setJob((prev) => (prev ? { ...prev, status: "FAILED" } : prev));
+                        }
                       }}
                       disabled={!scriptPreview || job.status === "DONE"}
                       style={{
@@ -1915,6 +2063,30 @@ export default function GenerateClient({
             </section>
           )}
 
+          {/* ===== Session wird vorbereitet (Slice C — before a job exists) ===== */}
+          {submitting && !job && (
+            <section style={{ marginTop: 56 }}>
+              <h2
+                style={{
+                  fontSize: "0.72rem",
+                  fontWeight: 700,
+                  margin: "0 0 12px",
+                  color: themeCfg.uiSoftText,
+                  letterSpacing: "0.12em",
+                  textTransform: "uppercase",
+                }}
+              >
+                Aktuelle Generierung
+              </h2>
+              <SVCard themeCfg={themeCfg}>
+                <p style={{ fontWeight: 700, fontSize: "1rem", margin: "0 0 14px", color: themeCfg.uiText }}>
+                  {progressText}
+                </p>
+                <CalmProgressBar percent={progressPercent} themeCfg={themeCfg} />
+              </SVCard>
+            </section>
+          )}
+
           {/* ===== Current Job ===== */}
           {job && (
             <section style={{ marginTop: 56 }}>
@@ -1934,6 +2106,8 @@ export default function GenerateClient({
                 job={job}
                 isAdmin={!!accountSummary?.isAdmin}
                 themeCfg={themeCfg}
+                progressPercent={displayProgressPercent}
+                progressText={displayProgressText}
                 title={(() => {
                   const uiTitle = title.trim();
                   if (uiTitle) return uiTitle;
@@ -2270,12 +2444,16 @@ function StatusCard({
   title,
   themeCfg,
   onPlay,
+  progressPercent,
+  progressText,
 }: {
   job: Job;
   isAdmin: boolean;
   title: string;
   themeCfg: ThemeConfig;
   onPlay?: () => void;
+  progressPercent: number;
+  progressText: string;
 }) {
   const headerTitle = isAdmin ? `Job: ${job.id}` : title;
   return (
@@ -2327,9 +2505,12 @@ function StatusCard({
       </div>
 
       {(job.status === "QUEUED" || job.status === "PROCESSING") && (
-        <p style={{ fontSize: "0.85rem", color: themeCfg.uiSoftText, margin: "14px 0 0" }}>
-          Generierung läuft…
-        </p>
+        <div style={{ margin: "14px 0 0" }}>
+          <p style={{ fontSize: "0.85rem", color: themeCfg.uiSoftText, margin: "0 0 10px" }}>
+            {progressText}
+          </p>
+          <CalmProgressBar percent={progressPercent} themeCfg={themeCfg} />
+        </div>
       )}
 
       {job.status === "FAILED" && (
@@ -2345,6 +2526,33 @@ function StatusCard({
         </p>
       )}
     </SVCard>
+  );
+}
+
+// CalmProgressBar — a perception aid, not a technical measurement. Fills
+// left to right only, no loop, no sweep; width eases toward each new
+// value so the motion stays slow and quiet.
+function CalmProgressBar({ percent, themeCfg }: { percent: number; themeCfg: ThemeConfig }) {
+  return (
+    <div
+      style={{
+        width: "100%",
+        height: 4,
+        borderRadius: 999,
+        overflow: "hidden",
+        background: themeCfg.cardBorder,
+      }}
+    >
+      <div
+        style={{
+          height: "100%",
+          width: `${percent}%`,
+          borderRadius: 999,
+          background: themeCfg.progressColor,
+          transition: "width 1.1s cubic-bezier(0.22, 0.61, 0.36, 1)",
+        }}
+      />
+    </div>
   );
 }
 
