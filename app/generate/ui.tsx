@@ -112,6 +112,10 @@ type AccountSummary = {
 
 const PAGE_SIZE = 10;
 
+// Grid view for "Deine letzten Sessions" is disabled for UX calm (list view
+// only). Code kept intact — flip this back to re-enable the toggle.
+const GRID_VIEW_ENABLED = false;
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
 }
@@ -338,6 +342,7 @@ export default function GenerateClient({
   const { open: menuOpen, rootRef: menuRootRef, onMouseEnter: menuOnMouseEnter, onMouseLeave: menuOnMouseLeave, toggle: toggleMenu, close: closeMenu } = useHeaderMenu();
   const [viewMode, setViewMode] = useState<"list" | "grid">("list");
   const [openJobMenu, setOpenJobMenu] = useState<string | null>(null);
+  const [deleteErrorId, setDeleteErrorId] = useState<string | null>(null);
   const openJobMenuRef = useRef<HTMLDivElement | null>(null);
 
   // Recent Jobs three-dot menu: close on outside click or Escape.
@@ -346,10 +351,14 @@ export default function GenerateClient({
     function onDocClick(e: MouseEvent) {
       if (openJobMenuRef.current && !openJobMenuRef.current.contains(e.target as Node)) {
         setOpenJobMenu(null);
+        setDeleteErrorId(null);
       }
     }
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpenJobMenu(null);
+      if (e.key === "Escape") {
+        setOpenJobMenu(null);
+        setDeleteErrorId(null);
+      }
     }
     document.addEventListener("click", onDocClick);
     document.addEventListener("keydown", onKeyDown);
@@ -374,6 +383,11 @@ export default function GenerateClient({
 
   // ---------- Toast ----------
   const [toast, setToast] = useState<{ msg: string; kind?: "ok" | "err" | "info" } | null>(null);
+  // Inline replacement for the pre-job-creation failure toast (network error,
+  // entitlement rejection, generic 4xx/5xx). Rendered in the "Aktuelle
+  // Session" area — no job exists yet at this point, so it cannot piggyback
+  // on job.status === "FAILED".
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [retryLeft, setRetryLeft] = useState<number | null>(null);
   const retryTimerRef = useRef<number | null>(null);
   const hideTimerRef = useRef<number | null>(null);
@@ -388,20 +402,19 @@ export default function GenerateClient({
     }
   }
 
+  // Countdown is surfaced via the disabled Generate button label
+  // ("Warte Xs…", see isSubmitDisabled/retryLeft below) instead of a toast.
   function startRetryCountdown(totalSeconds: number) {
     if (retryTimerRef.current) window.clearTimeout(retryTimerRef.current);
     setRetryLeft(totalSeconds);
-    setToast({ msg: `Zu viele Anfragen. Bitte warte ${totalSeconds}s …`, kind: "info" });
     const tick = () => {
       setRetryLeft((prev) => {
         const next = typeof prev === "number" ? prev - 1 : totalSeconds - 1;
         if (next <= 0) {
-          setToast(null);
           retryTimerRef.current && window.clearTimeout(retryTimerRef.current);
           retryTimerRef.current = null;
           return 0;
         }
-        setToast({ msg: `Zu viele Anfragen. Bitte warte ${next}s …`, kind: "info" });
         retryTimerRef.current = window.setTimeout(tick, 1000);
         return next;
       });
@@ -694,6 +707,7 @@ export default function GenerateClient({
 
   async function createJob() {
     setSubmitting(true);
+    setSubmitError(null);
     const body: {
       title: string;
       preset: string;
@@ -729,10 +743,8 @@ export default function GenerateClient({
       });
     } catch {
       setSubmitting(false);
-      showToast(
-        "Verbindungsproblem. Bitte prüfe deine Internetverbindung und versuche es erneut.",
-        "err",
-        4500
+      setSubmitError(
+        "Verbindungsproblem. Bitte prüfe deine Internetverbindung und versuche es erneut."
       );
       return;
     }
@@ -790,7 +802,7 @@ export default function GenerateClient({
         msg = "Diese Generierung ist derzeit nicht verfügbar.";
       }
       setSubmitting(false);
-      showToast(msg, "err");
+      setSubmitError(msg);
       // Refresh the authoritative account snapshot instead of locally
       // mutating the visible entitlement balance.
       void refreshAccountSummary();
@@ -799,7 +811,7 @@ export default function GenerateClient({
 
     if (!res.ok) {
       setSubmitting(false);
-      showToast(getJobFailureMessage(), "err");
+      setSubmitError(getJobFailureMessage());
       return;
     }
 
@@ -814,8 +826,6 @@ export default function GenerateClient({
     // client-side. refreshAccountSummary() re-reads the resolved entitlement
     // snapshot (probes / Custom Minutes).
     void refreshAccountSummary();
-
-    showToast("Deine Session wird erstellt.", "ok");
 
     if (!accountSummary?.isAdmin) {
       try {
@@ -838,7 +848,6 @@ export default function GenerateClient({
             } catch { /* ignore */ }
           }
           console.error("Auto-Complete für Job fehlgeschlagen:", completeRes.status);
-          showToast(getJobFailureMessage(), "err");
           setPolling(false);
           setJob((prev) => (prev ? { ...prev, status: "FAILED" } : prev));
           return;
@@ -850,9 +859,6 @@ export default function GenerateClient({
         if (completed) {
           setPolling(false);
           void loadJobs(0);
-          if ((completed as Record<string, unknown>).kidsSafetyApplied) {
-            showToast("Dein Inhalt wurde für Kids Story angepasst.", "info", 5000);
-          }
 
           const trimmedTitle = title.trim();
           const playerTitle = trimmedTitle.length > 0 ? trimmedTitle : displayJobTitle(completed);
@@ -896,13 +902,11 @@ export default function GenerateClient({
           });
         } else {
           console.error("Auto-Complete: Antwort konnte nicht gelesen werden.");
-          showToast(getJobFailureMessage(), "err");
           setPolling(false);
           setJob((prev) => (prev ? { ...prev, status: "FAILED" } : prev));
         }
       } catch (err) {
         console.error("Fehler beim Auto-Complete:", err);
-        showToast(getJobFailureMessage(), "err");
         setPolling(false);
         setJob((prev) => (prev ? { ...prev, status: "FAILED" } : prev));
       }
@@ -986,7 +990,8 @@ export default function GenerateClient({
     return () => window.clearInterval(intervalId);
   }, [job, polling, title]);
 
-  async function deleteJob(id: string) {
+  async function deleteJob(id: string): Promise<boolean> {
+    setDeleteErrorId(null);
     const res = await fetch(`/api/jobs/${id}`, {
       method: "DELETE",
       credentials: "include",
@@ -1001,10 +1006,11 @@ export default function GenerateClient({
           finishTimerRef.current = null;
         }
       }
-      showToast("Gelöscht.", "ok");
-    } else {
-      showToast("Konnte Job nicht löschen.", "err");
+      return true;
     }
+    console.error("Konnte Job nicht löschen:", res.status);
+    setDeleteErrorId(id);
+    return false;
   }
 
   useEffect(() => {
@@ -2101,13 +2107,37 @@ export default function GenerateClient({
                   textTransform: "uppercase",
                 }}
               >
-                Aktuelle Generierung
+                Aktuelle Session
               </h2>
               <SVCard themeCfg={themeCfg}>
                 <p style={{ fontWeight: 700, fontSize: "1rem", margin: "0 0 14px", color: themeCfg.uiText }}>
                   {progressText}
                 </p>
                 <CalmProgressBar percent={progressPercent} themeCfg={themeCfg} />
+              </SVCard>
+            </section>
+          )}
+
+          {/* ===== Session-Erstellung fehlgeschlagen (kein Job vorhanden) —
+              inline replacement for the pre-job-creation failure toast. ===== */}
+          {submitError && !submitting && !job && (
+            <section style={{ marginTop: 56 }}>
+              <h2
+                style={{
+                  fontSize: "0.72rem",
+                  fontWeight: 700,
+                  margin: "0 0 12px",
+                  color: themeCfg.uiSoftText,
+                  letterSpacing: "0.12em",
+                  textTransform: "uppercase",
+                }}
+              >
+                Aktuelle Session
+              </h2>
+              <SVCard themeCfg={themeCfg}>
+                <p style={{ color: "#e11d48", fontWeight: 600, margin: 0, fontSize: "0.9rem" }}>
+                  {submitError}
+                </p>
               </SVCard>
             </section>
           )}
@@ -2125,7 +2155,7 @@ export default function GenerateClient({
                   textTransform: "uppercase",
                 }}
               >
-                Aktuelle Generierung
+                Aktuelle Session
               </h2>
               <StatusCard
                 job={job}
@@ -2152,7 +2182,11 @@ export default function GenerateClient({
                             if (chapters.length > 0) {
                               loadStory(job.storyId!, chapters, undefined, playerTitle);
                             } else {
-                              showToast("Kapitel konnten nicht geladen werden.", "err");
+                              // Same silent-log precedent as the auto-complete path above.
+                              console.error(
+                                "fetchStoryChapters returned empty list for job",
+                                job.id,
+                              );
                             }
                           });
                         } else if (job.resultUrl) {
@@ -2186,46 +2220,49 @@ export default function GenerateClient({
                   textTransform: "uppercase",
                 }}
               >
-                Deine letzten Jobs
+                Deine letzten Sessions
               </h2>
 
               {/* Right side: view toggle + library link */}
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                {/* List / Grid toggle */}
-                <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: `1px solid ${themeCfg.cardBorder}` }}>
-                  {(["list", "grid"] as const).map((mode) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      onClick={() => setViewMode(mode)}
-                      title={mode === "list" ? "Listenansicht" : "Kachelansicht"}
-                      style={{
-                        width: 32, height: 28,
-                        border: "none",
-                        background: viewMode === mode ? themeCfg.secondaryButtonBg : "transparent",
-                        color: viewMode === mode ? themeCfg.uiText : themeCfg.uiSoftText,
-                        cursor: "pointer",
-                        display: "inline-flex", alignItems: "center", justifyContent: "center",
-                        transition: "background 120ms ease",
-                      }}
-                    >
-                      {mode === "list" ? (
-                        <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
-                          <rect x="0" y="2" width="16" height="2.5" rx="1.25" />
-                          <rect x="0" y="6.75" width="16" height="2.5" rx="1.25" />
-                          <rect x="0" y="11.5" width="16" height="2.5" rx="1.25" />
-                        </svg>
-                      ) : (
-                        <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
-                          <rect x="0" y="0" width="6.5" height="6.5" rx="1.5" />
-                          <rect x="9.5" y="0" width="6.5" height="6.5" rx="1.5" />
-                          <rect x="0" y="9.5" width="6.5" height="6.5" rx="1.5" />
-                          <rect x="9.5" y="9.5" width="6.5" height="6.5" rx="1.5" />
-                        </svg>
-                      )}
-                    </button>
-                  ))}
-                </div>
+                {/* List / Grid toggle — hidden while GRID_VIEW_ENABLED is false;
+                    list view stays the default and only view. */}
+                {GRID_VIEW_ENABLED && (
+                  <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: `1px solid ${themeCfg.cardBorder}` }}>
+                    {(["list", "grid"] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => setViewMode(mode)}
+                        title={mode === "list" ? "Listenansicht" : "Kachelansicht"}
+                        style={{
+                          width: 32, height: 28,
+                          border: "none",
+                          background: viewMode === mode ? themeCfg.secondaryButtonBg : "transparent",
+                          color: viewMode === mode ? themeCfg.uiText : themeCfg.uiSoftText,
+                          cursor: "pointer",
+                          display: "inline-flex", alignItems: "center", justifyContent: "center",
+                          transition: "background 120ms ease",
+                        }}
+                      >
+                        {mode === "list" ? (
+                          <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                            <rect x="0" y="2" width="16" height="2.5" rx="1.25" />
+                            <rect x="0" y="6.75" width="16" height="2.5" rx="1.25" />
+                            <rect x="0" y="11.5" width="16" height="2.5" rx="1.25" />
+                          </svg>
+                        ) : (
+                          <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                            <rect x="0" y="0" width="6.5" height="6.5" rx="1.5" />
+                            <rect x="9.5" y="0" width="6.5" height="6.5" rx="1.5" />
+                            <rect x="0" y="9.5" width="6.5" height="6.5" rx="1.5" />
+                            <rect x="9.5" y="9.5" width="6.5" height="6.5" rx="1.5" />
+                          </svg>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
 
                 <Link
                   href="/library"
@@ -2249,7 +2286,7 @@ export default function GenerateClient({
 
             {!Array.isArray(jobList) || jobList.length === 0 ? (
               <p style={{ color: themeCfg.uiSoftText, fontSize: "0.9rem" }}>
-                {loadingList ? "Lade…" : "Noch keine Jobs gefunden."}
+                {loadingList ? "Lade…" : "Noch keine Sessions gefunden."}
               </p>
             ) : viewMode === "list" ? (
               /* ── List view ── */
@@ -2302,21 +2339,30 @@ export default function GenerateClient({
                         <div ref={openJobMenu === j.id ? openJobMenuRef : undefined} style={{ position: "relative", flexShrink: 0 }}>
                           <button
                             type="button"
-                            onClick={(e) => { e.stopPropagation(); setOpenJobMenu(openJobMenu === j.id ? null : j.id); }}
+                            onClick={(e) => { e.stopPropagation(); setDeleteErrorId(null); setOpenJobMenu(openJobMenu === j.id ? null : j.id); }}
                             title="Optionen"
                             style={{ width: 32, height: 32, borderRadius: "50%", border: `1px solid ${themeCfg.cardBorder}`, background: "transparent", color: themeCfg.uiSoftText, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: "1.1rem", letterSpacing: "0.05em" }}
                           >
                             ⋯
                           </button>
                           {openJobMenu === j.id && (
-                            <div style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", zIndex: 300, minWidth: 140, borderRadius: 12, ...glassPanel, padding: "6px 0", overflow: "hidden" }}>
+                            <div style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", zIndex: 300, minWidth: 180, borderRadius: 12, ...glassPanel, padding: "6px 0", overflow: "hidden" }}>
                               <button
                                 type="button"
-                                onClick={(e) => { e.stopPropagation(); void deleteJob(j.id); setOpenJobMenu(null); }}
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  const ok = await deleteJob(j.id);
+                                  if (ok) setOpenJobMenu(null);
+                                }}
                                 style={{ width: "100%", padding: "9px 16px", background: "transparent", border: "none", color: "#e11d48", fontSize: "0.85rem", fontWeight: 600, cursor: "pointer", textAlign: "left" as const }}
                               >
                                 Löschen
                               </button>
+                              {deleteErrorId === j.id && (
+                                <p style={{ margin: 0, padding: "0 16px 9px", fontSize: "0.75rem", lineHeight: 1.4, color: "#e11d48" }}>
+                                  Löschen konnte nicht abgeschlossen werden. Bitte versuche es erneut.
+                                </p>
+                              )}
                             </div>
                           )}
                         </div>
