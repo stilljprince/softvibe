@@ -1,24 +1,46 @@
 // app/impressum/page.tsx
+import type { Metadata } from "next";
+import Link from "next/link";
+
 export const runtime = "edge";
+
+export const metadata: Metadata = {
+  title: "Impressum | SoftVibe",
+  description: "Impressum von SoftVibe.",
+};
 
 export default function ImpressumPage() {
   return (
     <main style={{ maxWidth: 860, margin: "40px auto", padding: "0 16px" }}>
-      <h1 style={{ fontSize: "1.6rem", fontWeight: 800, marginBottom: 12 }}>Impressum</h1>
-      <p style={{ opacity: 0.75, marginBottom: 8 }}>
-        Verantwortlich für den Inhalt dieser Website:
-      </p>
+      <header style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 18 }}>
+        <h1 style={{ fontSize: "1.6rem", fontWeight: 800, margin: 0 }}>Impressum</h1>
+        <Link
+          href="/"
+          style={{ marginLeft: "auto", textDecoration: "none", fontWeight: 700, color: "var(--color-accent)" }}
+        >
+          Zurück zur Startseite
+        </Link>
+      </header>
 
-      <div style={{ lineHeight: 1.6 }}>
-        <p><strong>SoftVibe (Platzhalter)</strong></p>
-        <p>Straße Nr.<br />PLZ Ort<br />Land</p>
-        <p>E-Mail: kontakt@softvibe.app</p>
-        <p>USt-ID: DE… (sofern vorhanden)</p>
+      <div
+        style={{
+          background: "var(--color-card)",
+          color: "var(--color-text)",
+          border: "1px solid var(--color-nav-bg)",
+          borderRadius: 16,
+          padding: 20,
+          boxShadow: "0 10px 24px rgba(0,0,0,.06)",
+          lineHeight: 1.7,
+        }}
+      >
+        <p style={{ marginTop: 0 }}>
+          Diese Seite befindet sich aktuell in der finalen rechtlichen Ausarbeitung und wird vor
+          dem öffentlichen Release vervollständigt.
+        </p>
+        <p style={{ marginBottom: 0, opacity: 0.85 }}>
+          SoftVibe befindet sich derzeit in einer privaten Friends-&amp;-Family-Testphase.
+        </p>
       </div>
-
-      <p style={{ opacity: 0.7, marginTop: 16, fontSize: ".9rem" }}>
-        Hinweis: Dies ist eine Beispielseite und ersetzt keine Rechtsberatung.
-      </p>
     </main>
   );
 }

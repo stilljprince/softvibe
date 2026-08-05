@@ -1,17 +1,17 @@
-// app/datenschutz/page.tsx
+// app/widerruf/page.tsx
 import type { Metadata } from "next";
 import Link from "next/link";
 
 export const metadata: Metadata = {
-  title: "Datenschutz | SoftVibe",
-  description: "Datenschutzhinweise von SoftVibe.",
+  title: "Widerrufsbelehrung | SoftVibe",
+  description: "Widerrufsbelehrung von SoftVibe.",
 };
 
-export default function DatenschutzPage() {
+export default function WiderrufPage() {
   return (
     <main style={{ maxWidth: 900, margin: "40px auto", padding: "0 16px" }}>
       <header style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 18 }}>
-        <h1 style={{ fontSize: "1.8rem", fontWeight: 800, margin: 0 }}>Datenschutz</h1>
+        <h1 style={{ fontSize: "1.8rem", fontWeight: 800, margin: 0 }}>Widerrufsbelehrung</h1>
         <Link
           href="/"
           style={{ marginLeft: "auto", textDecoration: "none", fontWeight: 700, color: "var(--color-accent)" }}

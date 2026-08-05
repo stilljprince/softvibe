@@ -1,17 +1,17 @@
-// app/datenschutz/page.tsx
+// app/agb/page.tsx
 import type { Metadata } from "next";
 import Link from "next/link";
 
 export const metadata: Metadata = {
-  title: "Datenschutz | SoftVibe",
-  description: "Datenschutzhinweise von SoftVibe.",
+  title: "Allgemeine Geschäftsbedingungen | SoftVibe",
+  description: "Allgemeine Geschäftsbedingungen von SoftVibe.",
 };
 
-export default function DatenschutzPage() {
+export default function AgbPage() {
   return (
     <main style={{ maxWidth: 900, margin: "40px auto", padding: "0 16px" }}>
       <header style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 18 }}>
-        <h1 style={{ fontSize: "1.8rem", fontWeight: 800, margin: 0 }}>Datenschutz</h1>
+        <h1 style={{ fontSize: "1.8rem", fontWeight: 800, margin: 0 }}>Allgemeine Geschäftsbedingungen</h1>
         <Link
           href="/"
           style={{ marginLeft: "auto", textDecoration: "none", fontWeight: 700, color: "var(--color-accent)" }}

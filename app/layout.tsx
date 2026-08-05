@@ -4,22 +4,25 @@ import "./globals.css";
 import Providers from "./providers";
 import GlobalPlayer from "./components/global-player";
 
+const SITE_DESCRIPTION =
+  "Persönliche Schlafgeschichten, Meditationen, sanfte ASMR-Sessions, Kids Stories und eigene Hörgeschichten — gestaltet für Ruhe, Atmosphäre und Vorstellungskraft.";
+
 export const metadata: Metadata = {
-  title: "SoftVibe",
-  description: "AI-gestützte ASMR-Plattform",
+  title: "SoftVibe — Persönliche Audioerlebnisse",
+  description: SITE_DESCRIPTION,
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"),
   alternates: { canonical: "/" },
   openGraph: {
     type: "website",
-    title: "SoftVibe",
-    description: "Personalisierte, AI-gestützte ASMR & Sleep Audio.",
+    title: "SoftVibe — Persönliche Audioerlebnisse",
+    description: SITE_DESCRIPTION,
     url: "/",
     siteName: "SoftVibe",
   },
   twitter: {
     card: "summary_large_image",
-    title: "SoftVibe",
-    description: "Personalisierte, AI-gestützte ASMR & Sleep Audio.",
+    title: "SoftVibe — Persönliche Audioerlebnisse",
+    description: SITE_DESCRIPTION,
   },
 };
 

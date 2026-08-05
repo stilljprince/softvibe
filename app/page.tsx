@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
@@ -488,9 +489,39 @@ export default function Home() {
             0%, 100% { transform: translateY(0px); }
             50% { transform: translateY(6px); }
           }
+          .sv-hero-cta-pulse {
+            animation: svPulse 3s ease-in-out infinite;
+          }
+          @keyframes svPulse {
+            0%, 100% { box-shadow: 0 14px 35px rgba(0,0,0,0.35); }
+            50% { box-shadow: 0 14px 35px rgba(0,0,0,0.5); }
+          }
           @media (prefers-reduced-motion: reduce) {
-            .sv-scroll-hint {
+            .sv-scroll-hint,
+            .sv-hero-cta-pulse {
               animation: none;
+            }
+          }
+          .sv-feature-card {
+            transition: transform 200ms ease, box-shadow 200ms ease, border-color 200ms ease;
+          }
+          .sv-feature-card:hover,
+          .sv-feature-card:focus-visible {
+            transform: translateY(-2px);
+            box-shadow: 0 14px 40px rgba(0,0,0,0.22);
+            border-color: rgba(148,163,184,0.42);
+          }
+          .sv-feature-card:focus-visible {
+            outline: 2px solid rgba(148,163,184,0.6);
+            outline-offset: 3px;
+          }
+          @media (prefers-reduced-motion: reduce) {
+            .sv-feature-card {
+              transition: none;
+            }
+            .sv-feature-card:hover,
+            .sv-feature-card:focus-visible {
+              transform: none;
             }
           }
         `}</style>
@@ -536,7 +567,7 @@ export default function Home() {
               marginBottom: 10,
             }}
           >
-            AI Sleep · ASMR · Meditation
+            Schlaf · Ruhe · Eigene Geschichten
           </div>
 
           <h1
@@ -561,20 +592,21 @@ export default function Home() {
               lineHeight: 1.7,
             }}
           >
-            Schlafgeschichten mit echter Bedtime-Presence. ASMR, das sich nach dir richtet.
-            Meditation, die nicht wie eine App klingt – sondern wie Ruhe.
+            Persönliche Audiomomente für Schlaf und Ruhe – sanfte ASMR-Sessions, ruhige
+            Meditationen, Geschichten für Kinder und deine eigenen Hörgeschichten, ganz auf
+            dich zugeschnitten.
           </p>
 
           <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
             <button
               type="button"
               onClick={() => go(primaryCta.href)}
+              className="sv-hero-cta-pulse"
               style={{
                 ...pillStyle("primary"),
                 padding: "0.82rem 1.7rem",
                 fontSize: "0.98rem",
                 fontWeight: 800,
-                animation: "svPulse 3s ease-in-out infinite",
               }}
             >
               {primaryCta.label} →
@@ -594,8 +626,21 @@ export default function Home() {
             </button>
           </div>
 
+          {!loggedIn && (
+            <p
+              style={{
+                marginTop: 10,
+                fontSize: "0.78rem",
+                color: themeCfg.uiSoftText,
+                opacity: 0.85,
+              }}
+            >
+              Kostenlos ausprobieren · keine Zahlungsdaten zum Start erforderlich
+            </p>
+          )}
+
           <div style={{ marginTop: 14, display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
-            {["Kein TTS-Feeling", "Studio-Qualität", "Trigger-Kombos", "Sleep-Stories als Kapitel"].map((t) => (
+            {["Persönliche Geschichten", "Sanfte Stimmen", "Einschlafen", "Mentale Auszeiten"].map((t) => (
               <span
                 key={t}
                 style={{
@@ -697,47 +742,75 @@ export default function Home() {
                   fontWeight: 900,
                   color: themeCfg.uiSoftText,
                   marginBottom: 10,
+                  textAlign: "center",
                 }}
               >
                 Features
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))",
+                  gap: 12,
+                }}
+              >
                 {[
                   {
-                    emoji: "🎧",
-                    title: "Personalisiertes ASMR",
-                    text: "Baue Trigger-Kombinationen, die du wirklich willst – ohne endloses Suchen.",
+                    emoji: "🌙",
+                    title: "Schlafgeschichten",
+                    text: "Persönliche Geschichten, die dich Abend für Abend sanft begleiten und dir helfen, den Tag in Ruhe hinter dir zu lassen.",
+                    preset: "sleep-story",
                   },
                   {
-                    emoji: "🌙",
-                    title: "Schlafgeschichten als Kapitel",
-                    text: "Kapitel, Auto-Next und ein Player, der sich wie Ruhe anfühlt.",
+                    emoji: "🎧",
+                    title: "ASMR",
+                    text: "Sanfte Flüsterstimmen und ruhige persönliche Ansprache, die Nähe schaffen und dir helfen, für einen Moment alles hinter dir zu lassen.",
+                    preset: "classic-asmr",
                   },
                   {
                     emoji: "🧘",
-                    title: "Meditation ohne Kitsch",
-                    text: "Klar, ruhig, angenehm – weniger Floskeln, mehr echte Entspannung.",
+                    title: "Meditation",
+                    text: "Geführte Momente zum Durchatmen, Loslassen und Ankommen – ruhig, klar und ohne unnötige Ablenkung.",
+                    preset: "meditation",
+                  },
+                  {
+                    emoji: "🧸",
+                    title: "Geschichten für Kinder",
+                    text: "Liebevoll erzählte Geschichten, die Kinder jederzeit ruhig begleiten und ihre Fantasie auf sanfte Weise wachsen lassen können.",
+                    preset: "kids-story",
+                  },
+                  {
+                    emoji: "✨",
+                    title: "Eigene Geschichten",
+                    text: "Verwandle deine eigenen Ideen in einzigartige Hörgeschichten – von kleinen Abenteuern bis zu ganzen Welten, die es nur für dich gibt.",
+                    preset: "narrative",
                   },
                 ].map((x) => (
-                  <div
+                  <Link
                     key={x.title}
+                    href={`/generate?preset=${x.preset}`}
+                    className="sv-feature-card"
                     style={{
                       display: "flex",
-                      gap: 12,
-                      alignItems: "flex-start",
-                      padding: "12px 14px",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      textAlign: "center",
+                      gap: 8,
+                      padding: "16px 14px",
                       borderRadius: 18,
                       border: "1px solid rgba(148,163,184,0.22)",
                       background: theme === "dark" ? "rgba(15,23,42,0.22)" : "rgba(255,255,255,0.24)",
+                      textDecoration: "none",
+                      color: "inherit",
                     }}
                   >
                     <div style={{ fontSize: 22, lineHeight: 1.1 }}>{x.emoji}</div>
-                    <div>
-                      <div style={{ fontWeight: 900, color: themeCfg.uiText, marginBottom: 4 }}>{x.title}</div>
-                      <div style={{ color: themeCfg.uiSoftText, lineHeight: 1.6 }}>{x.text}</div>
+                    <div style={{ fontWeight: 900, color: themeCfg.uiText }}>{x.title}</div>
+                    <div style={{ color: themeCfg.uiSoftText, lineHeight: 1.6, maxWidth: 260, margin: "0 auto" }}>
+                      {x.text}
                     </div>
-                  </div>
+                  </Link>
                 ))}
               </div>
             </div>
@@ -753,7 +826,7 @@ export default function Home() {
           style={{ padding: "24px 18px 0" }}
         >
           <div style={{ maxWidth: 980, margin: "0 auto", ...sectionStyle(aboutT) }}>
-            <div style={{ ...glassPanel, padding: 22 }}>
+            <div style={{ ...glassPanel, padding: "40px 22px", textAlign: "center" }}>
               <div
                 style={{
                   fontSize: "0.8rem",
@@ -761,16 +834,49 @@ export default function Home() {
                   textTransform: "uppercase",
                   fontWeight: 900,
                   color: themeCfg.uiSoftText,
-                  marginBottom: 10,
+                  marginBottom: 18,
                 }}
               >
                 Über SoftVibe
               </div>
 
-              <p style={{ margin: 0, color: themeCfg.uiSoftText, lineHeight: 1.75, fontSize: "1.02rem" }}>
-                SoftVibe ist gebaut für Menschen, die Schlaf & Ruhe ernst nehmen. Nicht “mehr Content”, sondern das
-                richtige Gefühl: warm, nah, ruhig – und trotzdem sauber produziert.
-              </p>
+              <div
+                style={{
+                  maxWidth: 680,
+                  margin: "0 auto",
+                  color: themeCfg.uiSoftText,
+                  lineHeight: 1.75,
+                  fontSize: "1.02rem",
+                  display: "grid",
+                  gap: 20,
+                }}
+              >
+                <p style={{ margin: 0 }}>
+                  SoftVibe ist eine Plattform für persönliche Audioerlebnisse, die Ruhe,
+                  Vorstellungskraft und Atmosphäre miteinander verbinden.
+                </p>
+                <p style={{ margin: 0 }}>
+                  Ob du leichter einschlafen, nach einem langen Tag abschalten, eine ruhige
+                  Meditation genießen, deinem Kind eine persönliche Geschichte erzählen oder
+                  deiner eigenen Geschichte freien Lauf lassen möchtest – SoftVibe hilft dir dabei,
+                  genau die Session zu erschaffen, die zu diesem Moment passt.
+                </p>
+                <p style={{ margin: 0 }}>
+                  Statt dich durch endlose Kataloge zu wühlen, beschreibst du einfach, was du
+                  hören möchtest. Daraus entstehen individuelle Schlafgeschichten, Meditationen,
+                  sanfte ASMR-Sessions, Geschichten für Kinder oder ganz eigene Hörgeschichten –
+                  persönlich, stimmungsvoll und genau auf dich zugeschnitten.
+                </p>
+                <p style={{ margin: 0 }}>
+                  Dabei bleibt die Technologie bewusst im Hintergrund. SoftVibe soll sich nicht
+                  wie ein KI-Werkzeug anfühlen, sondern wie ein ruhiger Ort, an den du immer
+                  wieder zurückkehren kannst – warm, hochwertig und frei von unnötiger Ablenkung.
+                </p>
+                <p style={{ margin: 0 }}>
+                  Denn manchmal braucht man nicht mehr Auswahl. Man braucht einfach etwas, das
+                  sich anfühlt, als wäre es genau für einen selbst gemacht.
+                </p>
+              </div>
             </div>
           </div>
         </section>
@@ -793,12 +899,13 @@ export default function Home() {
                   fontWeight: 900,
                   color: themeCfg.uiSoftText,
                   marginBottom: 10,
+                  textAlign: "center",
                 }}
               >
                 Kontakt
               </div>
 
-              <p style={{ marginTop: 0, color: themeCfg.uiSoftText, lineHeight: 1.7 }}>
+              <p style={{ marginTop: 0, color: themeCfg.uiSoftText, lineHeight: 1.7, textAlign: "center" }}>
                 Feedback, Wünsche, Bugs – schreib uns. Wir lesen alles.
               </p>
 
@@ -873,8 +980,69 @@ export default function Home() {
 
         <div style={{ height: 26 }} />
 
-        <footer style={{ textAlign: "center", padding: "0 18px", color: themeCfg.uiSoftText, fontSize: "0.85rem" }}>
-          © {new Date().getFullYear()} SoftVibe · <span style={{ opacity: 0.9 }}>ASMR · Meditation · Sleep Stories</span>
+        <footer
+          style={{
+            padding: "28px 18px 18px",
+            color: themeCfg.uiSoftText,
+            fontSize: "0.85rem",
+          }}
+        >
+          <div
+            style={{
+              maxWidth: 980,
+              margin: "0 auto",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 16,
+              textAlign: "center",
+            }}
+          >
+            <div style={{ display: "flex", gap: 14, flexWrap: "wrap", justifyContent: "center" }}>
+              {[
+                { label: "Impressum", href: "/impressum" },
+                { label: "Datenschutz", href: "/datenschutz" },
+                { label: "AGB", href: "/agb" },
+                { label: "Widerruf", href: "/widerruf" },
+              ].map((x) => (
+                <Link
+                  key={x.href}
+                  href={x.href}
+                  style={{ color: themeCfg.uiSoftText, fontSize: "0.8rem", fontWeight: 600, textDecoration: "none", opacity: 0.85 }}
+                >
+                  {x.label}
+                </Link>
+              ))}
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "center" }}>
+              <span style={{ fontSize: "0.72rem", letterSpacing: "0.1em", textTransform: "uppercase", opacity: 0.6 }}>
+                Folge SoftVibe
+              </span>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+                {["Instagram", "TikTok", "YouTube"].map((platform) => (
+                  <span
+                    key={platform}
+                    aria-disabled="true"
+                    style={{
+                      padding: "4px 10px",
+                      borderRadius: 999,
+                      border: `1px solid ${themeCfg.secondaryButtonBorder}`,
+                      fontSize: "0.72rem",
+                      fontWeight: 600,
+                      opacity: 0.5,
+                    }}
+                  >
+                    {platform} · bald verfügbar
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ opacity: 0.9 }}>
+              © {new Date().getFullYear()} SoftVibe · Persönliche Audioerlebnisse für Ruhe und Vorstellungskraft
+            </div>
+          </div>
         </footer>
       </div>
 
