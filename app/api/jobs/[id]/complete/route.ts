@@ -17,12 +17,12 @@ import { buildScriptOpenAI } from "@/lib/script-builder-openai";
 import { buildPreferenceContextBlock } from "@/lib/preferences";
 import { applyV3Prosody } from "@/lib/tts/prosody-v3";
 import { s3KeyForJobPart } from "@/lib/s3";
-import { splitToChunksSafe, getMaxCharsPerRequest } from "@/lib/audio/chunks";
+import { splitToChunksSafe, getMaxCharsPerRequest, TTS_REQUEST_MAX_OVERSHOOT } from "@/lib/audio/chunks";
 import { countWords, logDurationSummary } from "@/lib/duration-metrics";
 console.log("[prosody] typeof applyV3Prosody =", typeof applyV3Prosody);
 
 // 🔹 ElevenLabs-Adapter & Voice-Resolver
-import { elevenlabs, resolveVoiceId } from "@/lib/tts/elevenlabs";
+import { elevenlabs, resolveVoiceId, speakWithPayloadGuard } from "@/lib/tts/elevenlabs";
 import { finalizePlanMinuteUsage } from "@/lib/entitlement/finalization";
 import { releasePlanMinuteReservation } from "@/lib/entitlement/release";
 import { restoreProbeOnTerminalFailure } from "@/lib/entitlement/probe-restoration";
@@ -205,6 +205,23 @@ function stripTtsDirectives(input: string): string {
   return out.length > 0 ? out : input.trim();
 }
 
+
+// Default Story/Track title when the job has no user-supplied title,
+// used by the multi-chunk path across all four multi-chunk-eligible presets.
+function defaultMultiChunkTitle(preset: string): string {
+  switch (preset) {
+    case "sleep-story":
+      return "Sleep Story";
+    case "kids-story":
+      return "Kids Story";
+    case "classic-asmr":
+      return "ASMR";
+    case "meditation":
+      return "Meditation";
+    default:
+      return "SoftVibe Track";
+  }
+}
 
 // Für local speichern analog:
 function localAbsForJobPart(baseDirAbs: string, jobId: string, partIndex: number) {
@@ -686,10 +703,12 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
 
   try {
     // =========================================================
-    // ✅ SLEEP-STORY / KIDS-STORY: MULTI-CHUNK path only when >1 chunk
+    // ✅ SLEEP-STORY / KIDS-STORY / ASMR / MEDITATION: MULTI-CHUNK path
+    // only when >1 chunk. Narrative is excluded — it is not in this list
+    // and stays on the single-shot path in this slice.
     // =========================================================
-    const allChunks = (isSleepStory || isKidsStory)
-      ? splitToChunksSafe(baseText, getMaxCharsPerRequest())
+    const allChunks = (isSleepStory || isKidsStory || safePreset === "classic-asmr" || safePreset === "meditation")
+      ? splitToChunksSafe(baseText, getMaxCharsPerRequest(), TTS_REQUEST_MAX_OVERSHOOT)
       : null;
 
     isMultiChunk = !!(allChunks && allChunks.length > 1);
@@ -709,7 +728,7 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
         const story = await prisma.story.create({
           data: {
             userId: session.user.id as string,
-            title: job.title?.trim() || (isSleepStory ? "Sleep Story" : "Kids Story"),
+            title: job.title?.trim() || defaultMultiChunkTitle(safePreset),
             preset: safePreset,
             language: job.language ?? null,
             scriptText: finalText || null,
@@ -767,19 +786,17 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
             chunkText = softenChapterOpening(chunkText);
           }
 
-          // Sleep story chapters 2+: story-consistent voice-lock warmup.
-          // 1) More aggressive sentence splitting (10-word limit vs standard 16)
-          //    so the first real sentence is short enough to stay in v3's voice lock.
-          // 2) Short, natural, narrative-tone sentence for v3 to stabilise on.
-          //    No meta-language about speaking or narration.
-          // 3) Joined with \n (not \n\n) so warmup and first real sentence share
-          //    the same prosody paragraph — no voice mode re-evaluation.
+          // Sleep story chapters 2+: more aggressive sentence splitting
+          // (10-word limit vs standard 16) so the chapter's own first
+          // sentence is short enough to stay in v3's voice lock.
+          //
+          // RP-011C.2: this used to also prepend a fixed warmup sentence
+          // ("Leise lag die Nacht um sie." / "Softly, everything lay still
+          // and warm.") ahead of the chapter's real content. That was a
+          // hardcoded, repeated filler unrelated to the actual story and
+          // has been removed — chapters now start on their own text.
           if (isSleepStory && partIndex > 0) {
             chunkText = softenChapterOpening(chunkText, 10);
-            const warmup = language === "en"
-              ? "Softly, everything lay still and warm."
-              : "Leise lag die Nacht um sie.";
-            chunkText = warmup + "\n" + chunkText;
           }
 
           let ttsTextPart = isV3
@@ -810,7 +827,10 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
               data: { ttsStartedAt: new Date() },
             });
           }
-          const { audio } = await elevenlabs.speak({
+          // Multi-chunk path only runs for classic-asmr / sleep-story / meditation /
+          // kids-story (narrative is excluded above), so the payload guard always
+          // applies here.
+          const { audio } = await speakWithPayloadGuard({
             text: ttsTextPart,
             voiceId,
             modelId: process.env.ELEVENLABS_MODEL_ID ?? "eleven_v3",
@@ -868,7 +888,7 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
         }
 
         const partUrl = `/api/jobs/${id}/audio?part=${partIndex + 1}`;
-        const baseTitle = job.title?.trim() || (isSleepStory ? "Sleep Story" : "Kids Story");
+        const baseTitle = job.title?.trim() || defaultMultiChunkTitle(safePreset);
         const partTitle = `Chapter ${partIndex + 1}/${chunks.length}`;
 
         console.log("[STORY TRACK]", {
@@ -962,7 +982,7 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
         where: { id },
         data: { ttsStartedAt: new Date() },
       });
-      const { audio } = await elevenlabs.speak({
+      const singleChunkTtsInput = {
         text: ttsText,
         voiceId,
         modelId: process.env.ELEVENLABS_MODEL_ID ?? "eleven_v3",
@@ -971,7 +991,15 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
         style: voiceSettings.style,
         useSpeakerBoost: voiceSettings.use_speaker_boost,
         preset: safePreset,
-      });
+      };
+      // This single-chunk branch is shared with the narrative preset, which the
+      // guard must not touch (RP-011C.2 scope). narrative is already capped at
+      // getMaxCharsPerRequest() pre-prosody and its prosody config adds no tags,
+      // so it stays on the plain elevenlabs.speak() call.
+      const { audio } =
+        safePreset === "narrative"
+          ? await elevenlabs.speak(singleChunkTtsInput)
+          : await speakWithPayloadGuard(singleChunkTtsInput);
 
       console.log("[tts] speak ms =", Date.now() - t0);
 

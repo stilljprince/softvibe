@@ -13,7 +13,7 @@ import { jsonOk, jsonError } from "@/lib/api";
 import { buildScriptOpenAI } from "@/lib/script-builder-openai";
 import { enforceKidsSafety } from "@/lib/script-builder";
 import { resolveVoiceId } from "@/lib/tts/elevenlabs";
-import { splitToChunksSafe, getMaxCharsPerRequest } from "@/lib/audio/chunks";
+import { splitToChunksSafe, getMaxCharsPerRequest, TTS_REQUEST_MAX_OVERSHOOT } from "@/lib/audio/chunks";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -231,8 +231,10 @@ export async function POST(
   const baseText = stripTtsDirectives(finalText);
   const baseTextWordCount = baseText.split(/\s+/).filter(Boolean).length;
 
+  // Mirrors the real TTS path's overshoot ceiling (RP-011C.2 follow-up) so
+  // this preview's chunk count/sizes match what /complete will actually send.
   const maxChars = getMaxCharsPerRequest();
-  const chunks = splitToChunksSafe(baseText, maxChars);
+  const chunks = splitToChunksSafe(baseText, maxChars, TTS_REQUEST_MAX_OVERSHOOT);
   const chunkCount = chunks.length;
   const chunkSizes = chunks.map((c) => c.length);
   const chunkWordCounts = chunks.map(
@@ -249,13 +251,11 @@ export async function POST(
   const wps = wpsForPreset(safePreset, effectiveStyle);
   const estimatedDurationSec = Math.round(wordCount / wps);
 
-  // Warm-up text — injected at TTS time for sleep-story chapters 2+, not stored in script
-  const warmupText =
-    isSleepStory
-      ? language === "en"
-        ? "Softly, everything lay still and warm."
-        : "Leise lag die Nacht um sie."
-      : null;
+  // RP-011C.2: the fixed "Leise lag die Nacht um sie." / "Softly, everything
+  // lay still and warm." warmup sentence that /complete used to inject ahead
+  // of sleep-story chapters 2+ has been removed — nothing is injected at TTS
+  // time anymore, so this preview field is always null.
+  const warmupText = null;
 
   if (isNarrative) {
     console.log(

@@ -1,5 +1,6 @@
 // lib/tts/elevenlabs.ts
 import type { TTSAdapter, TTSSpeakInput, TTSSpeakResult } from "./adapter";
+import { ensureTtsPayloadWithinLimit, getPostProsodyMaxChars } from "@/lib/audio/chunks";
 
 const API_KEY = process.env.ELEVENLABS_API_KEY;
 
@@ -209,6 +210,18 @@ export function whisperPrefixForPreset(preset?: string | null): string {
   return "Whisper softly, very close, calm and gentle. ";
 }
 
+// RP-011C.2: raised the fallback from 120000 to 180000. Three reproducible
+// timeouts were observed on a single 3267-char classic-asmr request at the
+// old 120s default. No lower route/runtime timeout is configured in this
+// repo (no maxDuration export, no vercel.json) that would make this
+// ineffective. Only bounds the ElevenLabs fetch itself.
+const TTS_TIMEOUT_FALLBACK_MS = 180000;
+
+export function getTtsTimeoutMs(): number {
+  const fromEnv = parseInt(process.env.TTS_TIMEOUT_MS ?? "", 10);
+  return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : TTS_TIMEOUT_FALLBACK_MS;
+}
+
 export class ElevenLabsAdapter implements TTSAdapter {
   async speak(input: TTSSpeakInput): Promise<TTSSpeakResult> {
     if (!API_KEY) {
@@ -242,7 +255,7 @@ export class ElevenLabsAdapter implements TTSAdapter {
 console.log("[tts] modelId=", modelId, "voiceId=", voiceId, "len=", finalText.length);
 console.log("[tts] stability(normalized) =", normalizedStability);
 
-    const ttsTimeoutMs = parseInt(process.env.TTS_TIMEOUT_MS ?? "120000", 10);
+    const ttsTimeoutMs = getTtsTimeoutMs();
 
     const res = await fetch(
       `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
@@ -275,3 +288,50 @@ console.log("[tts] stability(normalized) =", normalizedStability);
 }
 
 export const elevenlabs = new ElevenLabsAdapter();
+
+// RP-011C.2 — Post-Prosody TTS Payload Guard.
+//
+// Wraps elevenlabs.speak() with a final length check on input.text — the
+// text as it will actually be sent, i.e. AFTER splitToChunksSafe() and
+// AFTER preset/voice prosody transformations (applyV3Prosody and any other
+// per-chunk text processing) have already run in the caller. Those
+// transformations can grow a chunk past its pre-prosody size (see
+// lib/audio/chunks.ts for the reproduced production incident).
+//
+// - Within getPostProsodyMaxChars(): behaves exactly like elevenlabs.speak().
+// - Over the limit: splits the text further (reusing splitToChunksSafe via
+//   ensureTtsPayloadWithinLimit — no separate splitting logic), issues one
+//   ElevenLabs request per piece in original order, and concatenates the
+//   resulting MP3 buffers into a single result. Callers that only consume
+//   `audio` (every current call site) see no shape difference.
+//
+// No text is lost or duplicated: ensureTtsPayloadWithinLimit splits the same
+// string it is given, in place, with the same guarantees as the pre-prosody
+// chunker.
+export async function speakWithPayloadGuard(
+  input: TTSSpeakInput
+): Promise<TTSSpeakResult> {
+  const pieces = ensureTtsPayloadWithinLimit(input.text);
+  if (pieces.length <= 1) {
+    return elevenlabs.speak(input);
+  }
+
+  console.warn(
+    "[tts-guard] post-prosody payload exceeded limit, splitting further:",
+    "originalLen=", input.text.length,
+    "pieces=", pieces.length,
+    "maxLen=", getPostProsodyMaxChars()
+  );
+
+  const buffers: Buffer[] = [];
+  let contentType = "audio/mpeg";
+  let requestId: string | undefined;
+  for (const piece of pieces) {
+    const result = await elevenlabs.speak({ ...input, text: piece });
+    buffers.push(Buffer.from(result.audio));
+    contentType = result.contentType;
+    requestId = result.requestId;
+  }
+
+  return { audio: Buffer.concat(buffers), contentType, requestId };
+}

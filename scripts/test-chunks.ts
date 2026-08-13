@@ -11,7 +11,11 @@
 //   3. normal final chunk unchanged
 //   4. paragraph boundaries preserved through the merge join
 
-import { splitToChunksSafe } from "../lib/audio/chunks";
+import {
+  splitToChunksSafe,
+  getMaxCharsPerRequest,
+  TTS_REQUEST_MAX_OVERSHOOT,
+} from "../lib/audio/chunks";
 
 let passed = 0;
 let failed = 0;
@@ -117,18 +121,164 @@ function assertEq(actual: unknown, expected: unknown, label: string) {
 }
 
 // ---------------------------------------------------------------------------
-// Sanity — default-param call still works and a natural mini-tail is left
-// alone when it cannot be safely merged.
+// Test 5 — getMaxCharsPerRequest() default fallback is 3100 (RP-011C.2
+// follow-up: 3500 was reduced further after runtime QA showed the post-
+// prosody guard was still triggering too often on normal large chunks).
 // ---------------------------------------------------------------------------
 {
-  const text =
-    "S1. " + "X".repeat(2300) + "\n\n" + "Y".repeat(700);
+  const original = process.env.ELEVENLABS_MAX_CHARS_PER_REQUEST;
+  delete process.env.ELEVENLABS_MAX_CHARS_PER_REQUEST;
+  assertEq(getMaxCharsPerRequest(), 3100, "5. default fallback is 3100");
+  if (original !== undefined) process.env.ELEVENLABS_MAX_CHARS_PER_REQUEST = original;
+}
 
-  // Default maxLen = 2500. paraPos ≈ 2304. parts = [2304, 700].
-  // tail = 700 < 1000 (threshold) -> mini-tail. combined = 3006 > 2500.
-  // Leave alone -> 2 chunks.
+// ---------------------------------------------------------------------------
+// Test 6 — a valid env override is still respected.
+// ---------------------------------------------------------------------------
+{
+  const original = process.env.ELEVENLABS_MAX_CHARS_PER_REQUEST;
+  process.env.ELEVENLABS_MAX_CHARS_PER_REQUEST = "3200";
+  assertEq(getMaxCharsPerRequest(), 3200, "6. valid env override respected");
+  if (original === undefined) delete process.env.ELEVENLABS_MAX_CHARS_PER_REQUEST;
+  else process.env.ELEVENLABS_MAX_CHARS_PER_REQUEST = original;
+}
+
+// ---------------------------------------------------------------------------
+// Test 7 — an invalid env override falls back safely to 3100.
+// ---------------------------------------------------------------------------
+{
+  const original = process.env.ELEVENLABS_MAX_CHARS_PER_REQUEST;
+  process.env.ELEVENLABS_MAX_CHARS_PER_REQUEST = "not-a-number";
+  assertEq(getMaxCharsPerRequest(), 3100, "7. invalid env override falls back to 3100");
+  if (original === undefined) delete process.env.ELEVENLABS_MAX_CHARS_PER_REQUEST;
+  else process.env.ELEVENLABS_MAX_CHARS_PER_REQUEST = original;
+}
+
+// ---------------------------------------------------------------------------
+// Test 8 — a text just under the 3100 default stays a single chunk.
+// ---------------------------------------------------------------------------
+{
+  const original = process.env.ELEVENLABS_MAX_CHARS_PER_REQUEST;
+  delete process.env.ELEVENLABS_MAX_CHARS_PER_REQUEST;
+  const text = "A".repeat(3099);
   const out = splitToChunksSafe(text);
-  assertEq(out.length, 2, "sanity: default-param natural mini-tail preserved");
+  assertEq(out.length, 1, "8. text just under 3100 stays a single chunk");
+  if (original !== undefined) process.env.ELEVENLABS_MAX_CHARS_PER_REQUEST = original;
+}
+
+// ---------------------------------------------------------------------------
+// Test 9 — a text over 3100 splits at a safe sentence boundary, no chunk
+// exceeds maxLen * maxOvershoot, and no text is lost or duplicated.
+// ---------------------------------------------------------------------------
+{
+  const original = process.env.ELEVENLABS_MAX_CHARS_PER_REQUEST;
+  delete process.env.ELEVENLABS_MAX_CHARS_PER_REQUEST;
+  const sentence = "This is a calm sentence for testing. ";
+  const text = sentence.repeat(200); // ~7600 chars, well past the 3100 default
+  const out = splitToChunksSafe(text);
+  const maxAllowed = Math.floor(3100 * 1.2);
+  const allWithinOvershoot = out.every((c) => c.length <= maxAllowed);
+  assertEq(out.length > 1, true, "9a. text over 3100 is split into multiple chunks");
+  assertEq(allWithinOvershoot, true, "9b. no chunk exceeds maxLen * maxOvershoot");
+  const rejoined = out.join(" ").replace(/\s+/g, " ").trim();
+  const originalNormalized = text.replace(/\s+/g, " ").trim();
+  assertEq(rejoined, originalNormalized, "9c. no text lost or duplicated across chunks");
+  if (original !== undefined) process.env.ELEVENLABS_MAX_CHARS_PER_REQUEST = original;
+}
+
+// ---------------------------------------------------------------------------
+// Test 10 — mini-tail behavior remains stable at the 3100 scale (tiny final
+// chunk merges back when merging still respects the 3100 limit).
+// ---------------------------------------------------------------------------
+{
+  const maxLen = 3100;
+  const text = "A".repeat(2700) + "\n\n" + "B".repeat(300);
+  // Combined length (3002) is already <= maxLen(3100), so this returns as a
+  // single chunk unchanged; tail = 300 < threshold(1240) and
+  // prev + 2 + tail = 3002 <= 3100 -> would MERGE even if it had split.
+  const out = splitToChunksSafe(text, maxLen);
+  assertEq(
+    out,
+    ["A".repeat(2700) + "\n\n" + "B".repeat(300)],
+    "10. mini-tail merge behavior stable at 3100 scale"
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Test 11 — TTS-strict overshoot regression (RP-011C.2 follow-up, adapted to
+// the new 3100 target).
+//
+// Reproduces the real production incident shape: no paragraph/sentence/
+// clause boundary before maxLen, and the next sentence end lands ~3172
+// chars in — inside the default's ~3720 extension window but past the
+// strict TTS window (~3162). Default overshoot must still reach the late
+// sentence end; TTS-strict overshoot must reject it and fall back to a
+// word boundary.
+// ---------------------------------------------------------------------------
+{
+  const maxLen = 3100;
+  const filler = "lorem ".repeat(700); // 4200 chars, no punctuation at all
+  const lateSentence = "This sentence finally ends here. ";
+  // Padding after the sentence end must stay >= minChunkLen (200) or the
+  // tiny-trailing-chunk merge would silently undo the split we're testing.
+  const tailPadding = "and more gentle words follow along quietly ".repeat(6);
+  const text = filler.slice(0, 3140) + lateSentence + tailPadding;
+
+  const defaultOut = splitToChunksSafe(text, maxLen);
+  assertEq(
+    defaultOut[0].length > maxLen &&
+      defaultOut[0].length <= Math.floor(maxLen * 1.2),
+    true,
+    "11a. default overshoot (1.2) still reaches the late sentence end (~3172 chars)"
+  );
+
+  const strictOut = splitToChunksSafe(text, maxLen, TTS_REQUEST_MAX_OVERSHOOT);
+  assertEq(
+    strictOut[0].length <= Math.floor(maxLen * TTS_REQUEST_MAX_OVERSHOOT),
+    true,
+    "11b. TTS-strict overshoot rejects the late sentence end, chunk stays <= ~3162"
+  );
+  assertEq(
+    strictOut[0].length <= maxLen,
+    true,
+    "11c. TTS-strict overshoot falls back to a word boundary at/under maxLen"
+  );
+
+  const rejoined = strictOut.join(" ").replace(/\s+/g, " ").trim();
+  const originalNormalized = text.replace(/\s+/g, " ").trim();
+  assertEq(
+    rejoined,
+    originalNormalized,
+    "11d. no text lost or duplicated under TTS-strict overshoot"
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Test 12 — TTS-strict overshoot ceiling holds under the same repeated-
+// sentence stress case as Test 9 (default behavior), just with the tighter
+// TTS-specific overshoot. Sentence boundaries are still preferred; the
+// chunk just can't grow anywhere near the old ~4400-4800 range.
+// ---------------------------------------------------------------------------
+{
+  const sentence = "This is a calm sentence for testing. ";
+  const text = sentence.repeat(200); // ~7600 chars, well past the 3100 default
+  const maxLen = 3100;
+  const out = splitToChunksSafe(text, maxLen, TTS_REQUEST_MAX_OVERSHOOT);
+  const maxAllowed = Math.floor(maxLen * TTS_REQUEST_MAX_OVERSHOOT);
+  const allWithinStrictOvershoot = out.every((c) => c.length <= maxAllowed);
+  assertEq(out.length > 1, true, "12a. text over 3100 is still split into multiple chunks");
+  assertEq(
+    allWithinStrictOvershoot,
+    true,
+    "12b. no chunk exceeds maxLen * TTS_REQUEST_MAX_OVERSHOOT (~3162)"
+  );
+  const rejoined = out.join(" ").replace(/\s+/g, " ").trim();
+  const originalNormalized = text.replace(/\s+/g, " ").trim();
+  assertEq(
+    rejoined,
+    originalNormalized,
+    "12c. no text lost or duplicated under TTS-strict overshoot"
+  );
 }
 
 if (failed > 0) {

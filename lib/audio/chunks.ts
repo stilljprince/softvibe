@@ -20,7 +20,16 @@
 //     AND merging it back into the previous chunk still respects maxLen, merge.
 //     Otherwise leave it — natural endings stay natural, the hard limit wins.
 
-const FALLBACK_MAX_CHARS = 2500;
+const FALLBACK_MAX_CHARS = 3100;
+
+// Real ElevenLabs TTS requests must stay much closer to maxLen than the
+// general-purpose default (1.2) allows. At maxLen=4000, the default let a
+// sentence-end extension reach up to ~4800 chars — real production requests
+// hit 4461-4777 chars this way and reproducibly timed out. Pass this to
+// splitToChunksSafe for any real TTS request so the extension window stays
+// small (~4040-4080 at maxLen=4000) while still preferring a sentence end
+// over a mid-sentence cut. (RP-011C.2 follow-up.)
+export const TTS_REQUEST_MAX_OVERSHOOT = 1.02;
 
 export function getMaxCharsPerRequest(): number {
   const fromEnv = parseInt(
@@ -150,4 +159,48 @@ export function splitToChunksSafe(
   }
 
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// RP-011C.2 — Post-Prosody TTS Payload Guard
+//
+// splitToChunksSafe() bounds chunk length BEFORE preset/voice prosody
+// transformations run (see lib/tts/prosody-v3.ts, applied downstream in the
+// TTS pipeline). Those transformations insert "[tag]" markers per sentence
+// and paragraph, and can grow a chunk well past its pre-prosody size. Real
+// production QA reproduced this: a classic-asmr chunk measured 3800 chars
+// pre-prosody but 4488 chars in the actual ElevenLabs request, close to the
+// TTS timeout ceiling.
+//
+// This is a second, smaller ceiling checked against the FINAL text right
+// before the ElevenLabs request, reusing splitToChunksSafe so there is no
+// duplicate splitting logic anywhere in the codebase.
+const POST_PROSODY_FALLBACK_MAX_CHARS = 4000;
+
+export function getPostProsodyMaxChars(): number {
+  const fromEnv = parseInt(
+    process.env.TTS_POST_PROSODY_MAX_CHARS ?? "",
+    10
+  );
+  return Number.isFinite(fromEnv) && fromEnv > 0
+    ? fromEnv
+    : POST_PROSODY_FALLBACK_MAX_CHARS;
+}
+
+// Applies the post-prosody guard to a single, fully-prepared TTS payload
+// (post-chunking, post-prosody, post any other text transformation).
+//
+//   - Empty input -> [].
+//   - Within maxLen -> [text] unchanged (trimmed), no split.
+//   - Over maxLen -> split further via splitToChunksSafe (same punctuation-
+//     aware splitter, same strict TTS overshoot), preserving order with no
+//     text loss or duplication.
+export function ensureTtsPayloadWithinLimit(
+  text: string,
+  maxLen: number = getPostProsodyMaxChars()
+): string[] {
+  const clean = (text ?? "").trim();
+  if (!clean) return [];
+  if (clean.length <= maxLen) return [clean];
+  return splitToChunksSafe(clean, maxLen, TTS_REQUEST_MAX_OVERSHOOT);
 }
