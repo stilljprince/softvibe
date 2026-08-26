@@ -22,7 +22,7 @@ import { countWords, logDurationSummary } from "@/lib/duration-metrics";
 console.log("[prosody] typeof applyV3Prosody =", typeof applyV3Prosody);
 
 // 🔹 ElevenLabs-Adapter & Voice-Resolver
-import { elevenlabs, resolveVoiceId, speakWithPayloadGuard } from "@/lib/tts/elevenlabs";
+import { resolveVoiceId, speakWithPayloadGuard } from "@/lib/tts/elevenlabs";
 import { finalizePlanMinuteUsage } from "@/lib/entitlement/finalization";
 import { releasePlanMinuteReservation } from "@/lib/entitlement/release";
 import { restoreProbeOnTerminalFailure } from "@/lib/entitlement/probe-restoration";
@@ -218,6 +218,8 @@ function defaultMultiChunkTitle(preset: string): string {
       return "ASMR";
     case "meditation":
       return "Meditation";
+    case "narrative":
+      return "Narrative";
     default:
       return "SoftVibe Track";
   }
@@ -703,11 +705,12 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
 
   try {
     // =========================================================
-    // ✅ SLEEP-STORY / KIDS-STORY / ASMR / MEDITATION: MULTI-CHUNK path
-    // only when >1 chunk. Narrative is excluded — it is not in this list
-    // and stays on the single-shot path in this slice.
+    // ✅ SLEEP-STORY / KIDS-STORY / ASMR / MEDITATION / NARRATIVE: MULTI-CHUNK
+    // path only when >1 chunk. Narrative's finalText is unchanged from its own
+    // pipeline; it is split here using the same generic chunker as every other
+    // preset (RP-011C.3).
     // =========================================================
-    const allChunks = (isSleepStory || isKidsStory || safePreset === "classic-asmr" || safePreset === "meditation")
+    const allChunks = (isSleepStory || isKidsStory || safePreset === "classic-asmr" || safePreset === "meditation" || safePreset === "narrative")
       ? splitToChunksSafe(baseText, getMaxCharsPerRequest(), TTS_REQUEST_MAX_OVERSHOOT)
       : null;
 
@@ -827,9 +830,8 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
               data: { ttsStartedAt: new Date() },
             });
           }
-          // Multi-chunk path only runs for classic-asmr / sleep-story / meditation /
-          // kids-story (narrative is excluded above), so the payload guard always
-          // applies here.
+          // Multi-chunk path runs for classic-asmr / sleep-story / meditation /
+          // kids-story / narrative — the payload guard always applies here.
           const { audio } = await speakWithPayloadGuard({
             text: ttsTextPart,
             voiceId,
@@ -992,14 +994,9 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
         useSpeakerBoost: voiceSettings.use_speaker_boost,
         preset: safePreset,
       };
-      // This single-chunk branch is shared with the narrative preset, which the
-      // guard must not touch (RP-011C.2 scope). narrative is already capped at
-      // getMaxCharsPerRequest() pre-prosody and its prosody config adds no tags,
-      // so it stays on the plain elevenlabs.speak() call.
-      const { audio } =
-        safePreset === "narrative"
-          ? await elevenlabs.speak(singleChunkTtsInput)
-          : await speakWithPayloadGuard(singleChunkTtsInput);
+      // Single-chunk path is shared by every preset, narrative included
+      // (RP-011C.3) — same payload guard for short and long TTS calls.
+      const { audio } = await speakWithPayloadGuard(singleChunkTtsInput);
 
       console.log("[tts] speak ms =", Date.now() - t0);
 

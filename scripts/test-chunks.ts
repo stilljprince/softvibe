@@ -281,6 +281,42 @@ function assertEq(actual: unknown, expected: unknown, label: string) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Test 13 — Narrative-shaped finalText (RP-011C.3): a longer multi-paragraph
+// narrative merges from several internal segments into one flowing text
+// (as the narrative pipeline already does before this point). Verifies the
+// generic chunker — now also used for narrative — splits above 3100 chars,
+// respects the strict TTS overshoot, preserves paragraph/sentence boundaries,
+// and loses/duplicates no text on rejoin.
+// ---------------------------------------------------------------------------
+{
+  const original = process.env.ELEVENLABS_MAX_CHARS_PER_REQUEST;
+  delete process.env.ELEVENLABS_MAX_CHARS_PER_REQUEST;
+
+  const paragraph =
+    "The old lighthouse keeper walked slowly along the quiet shore, listening " +
+    "to the gentle rhythm of the waves. Every evening he told himself the same " +
+    "calm story about the sea, and every evening the story felt a little " +
+    "different, softer, kinder, more like a lullaby than a memory.\n\n";
+  const text = paragraph.repeat(20); // well past the 3100 default
+
+  const maxLen = getMaxCharsPerRequest();
+  const out = splitToChunksSafe(text, maxLen, TTS_REQUEST_MAX_OVERSHOOT);
+  const maxAllowed = Math.floor(maxLen * TTS_REQUEST_MAX_OVERSHOOT);
+
+  assertEq(out.length > 1, true, "13a. narrative-shaped finalText over 3100 is split into multiple chunks");
+  assertEq(
+    out.every((c) => c.length <= maxAllowed),
+    true,
+    "13b. every narrative chunk respects the strict TTS overshoot ceiling"
+  );
+  const rejoined = out.join(" ").replace(/\s+/g, " ").trim();
+  const originalNormalized = text.replace(/\s+/g, " ").trim();
+  assertEq(rejoined, originalNormalized, "13c. narrative rejoin has no text loss or duplication");
+
+  if (original !== undefined) process.env.ELEVENLABS_MAX_CHARS_PER_REQUEST = original;
+}
+
 if (failed > 0) {
   console.error(`\n${failed} test(s) failed.`);
   process.exit(1);

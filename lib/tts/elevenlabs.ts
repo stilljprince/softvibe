@@ -37,15 +37,6 @@ function warnNarrativeOnce(key: string, message: string) {
   console.warn(message);
 }
 
-// Narrative voice defaults: Atlas V6 (male) / Lumen V2 (female).
-// These are the same well-tested calm narrator voices already used in production,
-// so the preset has a sensible default even before deployment-specific env-vars
-// are configured.
-const NARRATIVE_DEFAULT_MALE_ID = "Atlas V6";
-const NARRATIVE_DEFAULT_FEMALE_ID = "Lumen V2";
-
-
-
 
 
 // Falls kein API-Key gesetzt ist, nur warnen – Fehler kommt erst bei speak()
@@ -162,19 +153,24 @@ export function resolveVoiceId(
     return DEFAULT_VOICE;
   }
 
-  // ✅ NARRATIVE: gendered voices (Atlas V6 / Lumen V2) with layered fallbacks.
-  // Mirrors the kids-story dispatch — explicit env-var → cross-gender fallback →
-  // built-in default voice ID (so the preset always resolves to something).
+  // ✅ NARRATIVE: gendered voices with layered fallbacks. Mirrors the
+  // kids-story dispatch — explicit env-var → cross-gender narrative fallback →
+  // kids-story voice for the same gender → cross-gender kids-story fallback →
+  // DEFAULT_VOICE. No narrative-specific ElevenLabs voice exists yet, so it
+  // borrows the already-configured kids-story UIDs instead of an invalid
+  // built-in name.
   if (preset === "narrative") {
     const femaleVoice = process.env.ELEVENLABS_VOICE_NARRATIVE_FEMALE_ID?.trim();
     const maleVoice = process.env.ELEVENLABS_VOICE_NARRATIVE_MALE_ID?.trim();
+    const kidsFemaleVoice = process.env.ELEVENLABS_VOICE_KIDS_STORY_FEMALE_ID?.trim();
+    const kidsMaleVoice = process.env.ELEVENLABS_VOICE_KIDS_STORY_MALE_ID?.trim();
     const wantMale = voiceGender === "male";
 
     const primary = wantMale ? maleVoice : femaleVoice;
     if (primary) return primary;
 
-    const alt = wantMale ? femaleVoice : maleVoice;
-    if (alt) {
+    const narrativeAlt = wantMale ? femaleVoice : maleVoice;
+    if (narrativeAlt) {
       const missingVar = wantMale
         ? "ELEVENLABS_VOICE_NARRATIVE_MALE_ID"
         : "ELEVENLABS_VOICE_NARRATIVE_FEMALE_ID";
@@ -182,14 +178,32 @@ export function resolveVoiceId(
         `cross:${missingVar}`,
         `[TTS] ${missingVar} is not set – falling back to the other narrative voice.`
       );
-      return alt;
+      return narrativeAlt;
+    }
+
+    const kidsPrimary = wantMale ? kidsMaleVoice : kidsFemaleVoice;
+    if (kidsPrimary) {
+      warnNarrativeOnce(
+        `kids-primary:${wantMale ? "male" : "female"}`,
+        "[TTS] Neither ELEVENLABS_VOICE_NARRATIVE_FEMALE_ID nor ELEVENLABS_VOICE_NARRATIVE_MALE_ID is set – falling back to the kids-story voice for this gender."
+      );
+      return kidsPrimary;
+    }
+
+    const kidsAlt = wantMale ? kidsFemaleVoice : kidsMaleVoice;
+    if (kidsAlt) {
+      warnNarrativeOnce(
+        `kids-alt:${wantMale ? "male" : "female"}`,
+        "[TTS] Narrative and matching kids-story voice envs are not set – falling back to the other kids-story voice."
+      );
+      return kidsAlt;
     }
 
     warnNarrativeOnce(
       "default",
-      "[TTS] Neither ELEVENLABS_VOICE_NARRATIVE_FEMALE_ID nor ELEVENLABS_VOICE_NARRATIVE_MALE_ID is set – falling back to built-in narrative voice defaults."
+      "[TTS] Neither narrative nor kids-story voice envs are set – falling back to DEFAULT_VOICE for narrative."
     );
-    return wantMale ? NARRATIVE_DEFAULT_MALE_ID : NARRATIVE_DEFAULT_FEMALE_ID;
+    return DEFAULT_VOICE;
   }
 
   return DEFAULT_VOICE;
@@ -198,6 +212,11 @@ export function resolveVoiceId(
 // Test-only helper. Lets the smoke test reset warn-once flags between cases.
 export function __resetKidsStoryWarnedForTests() {
   kidsStoryWarned.clear();
+}
+
+// Test-only helper. Lets the smoke test reset narrative warn-once flags between cases.
+export function __resetNarrativeWarnedForTests() {
+  narrativeWarned.clear();
 }
 /**
  * 🔹 NEU (optional): sehr kurzer “Whisper-Cue” Prefix.

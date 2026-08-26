@@ -14,12 +14,13 @@ async function main() {
   process.env.ELEVENLABS_VOICE_ASMR_WHISPER_MALE_ID = "ASMR_WHISPER_M_ID";
   delete process.env.ELEVENLABS_VOICE_KIDS_STORY_FEMALE_ID;
   delete process.env.ELEVENLABS_VOICE_KIDS_STORY_MALE_ID;
+  delete process.env.ELEVENLABS_VOICE_NARRATIVE_FEMALE_ID;
+  delete process.env.ELEVENLABS_VOICE_NARRATIVE_MALE_ID;
 
-  const { resolveVoiceId, __resetKidsStoryWarnedForTests } = await import(
-    "../lib/tts/elevenlabs"
-  );
+  const { resolveVoiceId, __resetKidsStoryWarnedForTests, __resetNarrativeWarnedForTests } =
+    await import("../lib/tts/elevenlabs");
 
-  await runCases(resolveVoiceId, __resetKidsStoryWarnedForTests);
+  await runCases(resolveVoiceId, __resetKidsStoryWarnedForTests, __resetNarrativeWarnedForTests);
 }
 
 type ResolveFn = (
@@ -59,7 +60,18 @@ function setKidsEnv(female?: string, male?: string) {
   else delete process.env.ELEVENLABS_VOICE_KIDS_STORY_MALE_ID;
 }
 
-async function runCases(resolveVoiceId: ResolveFn, __resetKidsStoryWarnedForTests: ResetFn) {
+function setNarrativeEnv(female?: string, male?: string) {
+  if (female) process.env.ELEVENLABS_VOICE_NARRATIVE_FEMALE_ID = female;
+  else delete process.env.ELEVENLABS_VOICE_NARRATIVE_FEMALE_ID;
+  if (male) process.env.ELEVENLABS_VOICE_NARRATIVE_MALE_ID = male;
+  else delete process.env.ELEVENLABS_VOICE_NARRATIVE_MALE_ID;
+}
+
+async function runCases(
+  resolveVoiceId: ResolveFn,
+  __resetKidsStoryWarnedForTests: ResetFn,
+  __resetNarrativeWarnedForTests: ResetFn
+) {
   let passed = 0;
   let failed = 0;
   const failures: string[] = [];
@@ -291,6 +303,131 @@ async function runCases(resolveVoiceId: ResolveFn, __resetKidsStoryWarnedForTest
       assertEqual(resolveVoiceId(null), "DEFAULT_VOICE_ID", "null preset");
       assertEqual(resolveVoiceId(undefined), "DEFAULT_VOICE_ID", "undefined preset");
       assertEqual(resolveVoiceId("something-else"), "DEFAULT_VOICE_ID", "unknown preset");
+    },
+  },
+  {
+    name: "narrative + female resolves to NARRATIVE FEMALE env when set",
+    run: () => {
+      setNarrativeEnv("NARRATIVE_F_ID", "NARRATIVE_M_ID");
+      setKidsEnv("KIDS_F_ID", "KIDS_M_ID");
+      __resetNarrativeWarnedForTests();
+      const { result, warnings } = captureWarn(() =>
+        resolveVoiceId("narrative", "soft", "female")
+      );
+      assertEqual(result, "NARRATIVE_F_ID", "narrative female voice");
+      assertEqual(warnings.length, 0, "no warning when narrative env is set");
+    },
+  },
+  {
+    name: "narrative + male resolves to NARRATIVE MALE env when set",
+    run: () => {
+      setNarrativeEnv("NARRATIVE_F_ID", "NARRATIVE_M_ID");
+      setKidsEnv("KIDS_F_ID", "KIDS_M_ID");
+      __resetNarrativeWarnedForTests();
+      const { result, warnings } = captureWarn(() =>
+        resolveVoiceId("narrative", "soft", "male")
+      );
+      assertEqual(result, "NARRATIVE_M_ID", "narrative male voice");
+      assertEqual(warnings.length, 0, "no warning when narrative env is set");
+    },
+  },
+  {
+    name: "narrative female missing, narrative male set → cross-gender narrative fallback",
+    run: () => {
+      setNarrativeEnv(undefined, "NARRATIVE_M_ID");
+      setKidsEnv("KIDS_F_ID", "KIDS_M_ID");
+      __resetNarrativeWarnedForTests();
+      const { result, warnings } = captureWarn(() =>
+        resolveVoiceId("narrative", "soft", "female")
+      );
+      assertEqual(result, "NARRATIVE_M_ID", "cross-gender narrative fallback to male");
+      assertEqual(warnings.length, 1, "one warning on narrative female-missing path");
+      if (!warnings[0].includes("ELEVENLABS_VOICE_NARRATIVE_FEMALE_ID")) {
+        throw new Error(`warning should name NARRATIVE FEMALE env, got: ${warnings[0]}`);
+      }
+    },
+  },
+  {
+    name: "narrative male missing, narrative female set → cross-gender narrative fallback",
+    run: () => {
+      setNarrativeEnv("NARRATIVE_F_ID", undefined);
+      setKidsEnv("KIDS_F_ID", "KIDS_M_ID");
+      __resetNarrativeWarnedForTests();
+      const { result, warnings } = captureWarn(() =>
+        resolveVoiceId("narrative", "soft", "male")
+      );
+      assertEqual(result, "NARRATIVE_F_ID", "cross-gender narrative fallback to female");
+      assertEqual(warnings.length, 1, "one warning on narrative male-missing path");
+      if (!warnings[0].includes("ELEVENLABS_VOICE_NARRATIVE_MALE_ID")) {
+        throw new Error(`warning should name NARRATIVE MALE env, got: ${warnings[0]}`);
+      }
+    },
+  },
+  {
+    name: "both narrative envs missing, kids female set → kids-story female fallback",
+    run: () => {
+      setNarrativeEnv(undefined, undefined);
+      setKidsEnv("KIDS_F_ID", undefined);
+      __resetNarrativeWarnedForTests();
+      const { result, warnings } = captureWarn(() =>
+        resolveVoiceId("narrative", "soft", "female")
+      );
+      assertEqual(result, "KIDS_F_ID", "kids-story female fallback for narrative");
+      assertEqual(warnings.length, 1, "one warning on narrative-missing, kids-primary path");
+    },
+  },
+  {
+    name: "both narrative envs missing, kids male set → kids-story male fallback",
+    run: () => {
+      setNarrativeEnv(undefined, undefined);
+      setKidsEnv(undefined, "KIDS_M_ID");
+      __resetNarrativeWarnedForTests();
+      const { result, warnings } = captureWarn(() =>
+        resolveVoiceId("narrative", "soft", "male")
+      );
+      assertEqual(result, "KIDS_M_ID", "kids-story male fallback for narrative");
+      assertEqual(warnings.length, 1, "one warning on narrative-missing, kids-primary path");
+    },
+  },
+  {
+    name: "narrative + kids female both missing, kids male set → cross-gender kids fallback",
+    run: () => {
+      setNarrativeEnv(undefined, undefined);
+      setKidsEnv(undefined, "KIDS_M_ID");
+      __resetNarrativeWarnedForTests();
+      const { result, warnings } = captureWarn(() =>
+        resolveVoiceId("narrative", "soft", "female")
+      );
+      assertEqual(result, "KIDS_M_ID", "cross-gender kids-story fallback for narrative female");
+      assertEqual(warnings.length, 1, "one warning on kids-alt path");
+    },
+  },
+  {
+    name: "all narrative and kids envs missing → DEFAULT_VOICE, never Lumen V2 or Atlas V6",
+    run: () => {
+      setNarrativeEnv(undefined, undefined);
+      setKidsEnv(undefined, undefined);
+      __resetNarrativeWarnedForTests();
+      const female = captureWarn(() => resolveVoiceId("narrative", "soft", "female"));
+      const male = captureWarn(() => resolveVoiceId("narrative", "soft", "male"));
+      assertEqual(female.result, "DEFAULT_VOICE_ID", "narrative female default fallback");
+      assertEqual(male.result, "DEFAULT_VOICE_ID", "narrative male default fallback");
+      if (female.result === "Lumen V2" || male.result === "Atlas V6") {
+        throw new Error("narrative resolved to an invalid voice name fallback");
+      }
+    },
+  },
+  {
+    name: "narrative explicitVoiceId override wins over all narrative/kids fallbacks",
+    run: () => {
+      setNarrativeEnv("NARRATIVE_F_ID", "NARRATIVE_M_ID");
+      setKidsEnv("KIDS_F_ID", "KIDS_M_ID");
+      __resetNarrativeWarnedForTests();
+      assertEqual(
+        resolveVoiceId("narrative", "soft", "female", "OVERRIDE_ID"),
+        "OVERRIDE_ID",
+        "override beats narrative female env"
+      );
     },
   },
   ];
