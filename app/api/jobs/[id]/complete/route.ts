@@ -13,7 +13,7 @@ import { headers as nextHeaders } from "next/headers";
 import { jsonOk, jsonError } from "@/lib/api";
 import { makeTitleFromPrompt } from "@/lib/title";
 import { buildScriptV2, enforceKidsSafety } from "@/lib/script-builder";
-import { buildScriptOpenAI } from "@/lib/script-builder-openai";
+import { generateCreativeScript } from "@/lib/creative-engine-router";
 import { buildPreferenceContextBlock } from "@/lib/preferences";
 import { applyV3Prosody } from "@/lib/tts/prosody-v3";
 import { s3KeyForJobPart } from "@/lib/s3";
@@ -587,7 +587,7 @@ if (job.scriptOverride && job.scriptOverride.trim() !== "") {
 
   let out;
   try {
-    out = await buildScriptOpenAI({
+    out = await generateCreativeScript({
       preset: safePreset,
       userPrompt: (job.prompt ?? "").trim(),
       targetDurationSec: typeof job.durationSec === "number" ? job.durationSec : undefined,

@@ -10,7 +10,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth/config";
 import { prisma } from "@/lib/prisma";
 import { jsonOk, jsonError } from "@/lib/api";
-import { buildScriptOpenAI } from "@/lib/script-builder-openai";
+import { generateCreativeScript } from "@/lib/creative-engine-router";
 import { enforceKidsSafety } from "@/lib/script-builder";
 import { resolveVoiceId } from "@/lib/tts/elevenlabs";
 import { splitToChunksSafe, getMaxCharsPerRequest, TTS_REQUEST_MAX_OVERSHOOT } from "@/lib/audio/chunks";
@@ -159,7 +159,7 @@ export async function POST(
       );
     }
     const builderT0 = Date.now();
-    const out = await buildScriptOpenAI({
+    const out = await generateCreativeScript({
       preset: safePreset,
       userPrompt: (job.prompt ?? "").trim(),
       targetDurationSec:
