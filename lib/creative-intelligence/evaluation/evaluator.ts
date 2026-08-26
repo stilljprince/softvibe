@@ -406,8 +406,8 @@ const CRITERION_CHECKS: Record<EvaluationCriterionId, CriterionCheck> = {
   },
 
   ai_writing_patterns: (input) => {
-    const module = findModule(input.context, "avoid_ai_writing_patterns");
-    const antiPatterns = module?.antiPatterns ?? [];
+    const resolvedModule = findModule(input.context, "avoid_ai_writing_patterns");
+    const antiPatterns = resolvedModule?.antiPatterns ?? [];
     // context.guidance.evaluation carries the evaluation-stage knowledge
     // statements the Context Builder already resolved for this preset --
     // surfaced here for transparency, not used as a second match source.

@@ -54,8 +54,8 @@ export function buildCreativeContext(params: BuildCreativeContextParams): Creati
 
   const dedupedModules = new Map<string, KnowledgeModule>();
   for (const modules of modulesByStage.values()) {
-    for (const module of modules) {
-      if (!dedupedModules.has(module.id)) dedupedModules.set(module.id, module);
+    for (const knowledgeModule of modules) {
+      if (!dedupedModules.has(knowledgeModule.id)) dedupedModules.set(knowledgeModule.id, knowledgeModule);
     }
   }
   const modules = Array.from(dedupedModules.values()).sort(
