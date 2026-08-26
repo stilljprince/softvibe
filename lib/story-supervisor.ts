@@ -91,6 +91,22 @@ export async function evaluateStoryQuality(
       : parseInt(process.env.OPENAI_SUPERVISOR_TIMEOUT_MS ?? "90000", 10);
 
   const wordCount = finalText.split(/\s+/).filter(Boolean).length;
+  const isNarrative = input.preset === "narrative";
+
+  const narrativeDimensionsBlock = isNarrative
+    ? [
+        ``,
+        `This is a "narrative" preset script — a story meant to feel like a quality audiobook or a film without pictures, not a sleep aid. In addition to the dimensions above, evaluate these Narrative-specific dimensions and weight them heavily in the overallScore. A story with good atmosphere and good language but little plot and little character change must NOT score in the "accept" range:`,
+        `• Plot Progression: does the story materially advance, or does it spend most of its runtime inside one low-stakes static situation? Do actions produce real consequences?`,
+        `• Premise Fulfillment: does the finished story actually deliver the central premise the user asked for — or was a major requested transformation quietly replaced by a smaller adjacent event (e.g. the user asked for a life-changing transformation and the story mostly covers a single afternoon of paperwork)?`,
+        `• Character Development: does the protagonist meaningfully change, learn, decide, adapt, fail, recover, commit, or otherwise develop — or do they end the story in essentially the position they started in?`,
+        `• Conflict / Stakes: is there meaningful pressure, or something that can genuinely be gained or lost? Does the conflict evolve across the story, or does it stay purely atmospheric?`,
+        `• Temporal / Situational Progression: does the scale of time and situation the story covers fit the premise? If the premise implies a longer transformation, does the story cover enough real ground — days, weeks, months, as the premise requires — to make that transformation credible, rather than compressing it into a single scene?`,
+        `• Ending / Payoff: does the ending resolve or meaningfully fulfill the central narrative promise, landing as the consequence of what happened rather than simply stopping or trailing off?`,
+        ``,
+        `A quiet, low-drama narrative story is not automatically weak — a calm character study can score well if it still progresses and its protagonist changes. Do not require loud drama, thriller pacing, or constant action. But a story that is atmospheric, well-written, and calm while remaining plotless and static on the dimensions above should land in "minor_issues" or "rewrite_recommended", not "accept" — name the specific missing plot, character, or premise dimension in issues rather than scoring around it.`,
+      ].join("\n")
+    : "";
 
   const system = [
     `You are a senior story editor performing a READ-ONLY quality review of a finished script that will be read aloud as a relaxation / sleep audio piece.`,
@@ -103,6 +119,7 @@ export async function evaluateStoryQuality(
     `• Closure: is there a clean ending — not premature, not over-extended?`,
     `• Tone: is the language calm, warm, and TTS-friendly?`,
     `• Listener experience: would a listener trying to relax or fall asleep find this rewarding?`,
+    narrativeDimensionsBlock,
     ``,
     `Be concrete. Be honest. This is a quality signal, not a marketing summary.`,
     `Do NOT propose edits in prose form. Do NOT include a rewritten version of the script. Do NOT include any text outside the JSON envelope.`,

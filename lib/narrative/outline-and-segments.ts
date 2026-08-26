@@ -147,6 +147,17 @@ export function buildStoryOutlinePrompts(input: BuildStoryOutlineInput): {
     `- Secondary questions may remain open. Bittersweet, ambiguous, or quiet endings are welcome. Not every detail needs explaining. But the close should not feel like a cliffhanger or a setup for the next story.`,
     `- Do NOT plan endings that introduce new central mysteries near the close, reveal a larger problem after the original pressure has been addressed, or telegraph that the real story begins after the runtime ends.`,
     ``,
+    `CRITICAL — DRAMATURGICAL PROGRESSION (the story must actually move):`,
+    `- Identify the central promise of the brief: what does the listener expect this story to deliver by the end?`,
+    `- Identify what materially changes between the beginning and the end — a situation, a relationship, a status, a location, a belief, a capability. A story that ends where it began has not been told.`,
+    `- Give the protagonist something concrete they want or need — not only a mood or a feeling.`,
+    `- Establish real pressure, internal and/or external, that makes staying still costly.`,
+    `- Plan for decisions the protagonist makes and consequences that follow from them. Things should happen because of what the protagonist chooses, not merely to them.`,
+    `- Do not plan a story that stays in one static situation unless the premise genuinely demands it (a heist in one night, a rescue in one storm can rightly stay contained if that single span already holds planning, conflict, complication, and consequence). A brief that describes growth, recovery, ambition, or transformation usually needs more room — days, weeks, months, or longer — to earn that change credibly.`,
+    `- Choose a time span, and location changes where they materially help, that fit the scale of what the premise promises. A brief describing a life-changing transformation should not collapse into a single afternoon or a single errand.`,
+    `- The ending state must clearly answer or fulfill the central premise — not a small proxy for it, not a symbolic stand-in, and not a partial gesture a listener would feel left the actual promise unmet.`,
+    `- If the brief names a specific transformation the story is about (a person changing their life, escaping a place, building something, ending something), that transformation must stay visible and central in primaryStoryQuestion and the rest of the bible. Never quietly reduce it to a smaller adjacent action — e.g. do not let "he changes his life through self-employment" collapse into "will he file the paperwork?" or "will he move out?" A concrete step may be part of the story; it is not the story.`,
+    ``,
     `CRITICAL — REVELATION FLOW AND CAST DESIGN:`,
     `- Prefer a clear and easy-to-follow flow of revelations. Avoid introducing too many separate information carriers or explanation-heavy characters in a short span of time.`,
     `- When possible, let important discoveries flow through a smaller number of people, while supporting characters contribute through emotion, companionship, conflict, atmosphere, or everyday life rather than additional exposition.`,
@@ -161,7 +172,7 @@ export function buildStoryOutlinePrompts(input: BuildStoryOutlineInput): {
     `- pressureSources: 2–4 specific forces pressing on the protagonist — relational, internal, external, environmental, social. Not abstract themes ("loss", "love"); concrete pressure ("the sister who hasn't called back", "the rent due Friday").`,
     `- importantRelationships: relevant character pairs and the texture of the bond — affection, debt, suspicion, rivalry, complicity. Use the same names from protagonist/supporting fields.`,
     `- unresolvedQuestions: 0–4 questions the listener might carry into the story. These need NOT all be answered. They give the writer room to maneuver.`,
-    `- primaryStoryQuestion: ONE concrete central question/tension that the whole story is fundamentally about. The final stretch should answer it, settle it, transform it, or let it land emotionally. Specific, not abstract. Examples of shape: "Will Mara return her brother's call before she leaves the city?" "What does the lighthouse keeper do with the letter she can no longer read?" — not "Will she find herself?"`,
+    `- primaryStoryQuestion: ONE concrete central question/tension that the whole story is fundamentally about, and that carries the brief's central promise forward rather than substituting a smaller adjacent one. The final stretch should answer it, settle it, transform it, or let it land emotionally. Specific, not abstract. Examples of shape: "Will Mara return her brother's call before she leaves the city?" "What does the lighthouse keeper do with the letter she can no longer read?" — not "Will she find herself?"`,
     `- endingTone: one of the allowed values, chosen because it fits this story — not as a structural slot.`,
     `- trajectoryShape: one of the allowed shapes, chosen because it matches how pressure naturally moves in THIS story.`,
     `- endingApproach: one of the allowed approaches, chosen because it fits the kind of closure THIS story is aiming for. This is an inspiration the writer leans into in the final stretch, not a fixed plot formula.`,
@@ -623,6 +634,31 @@ const NARRATIVE_MOMENTUM_NOTE = [
   `- Do not insert events for their own sake. Let the story feel lived and unfolding, not merely contemplated.`,
 ].join("\n");
 
+// RP-011C.4: every segment must leave the story measurably further along than
+// it found it. No rigid event count, no mandatory beat — but at least one
+// concrete narrative dimension must have moved by the segment's end. This is
+// the check against segments that exist mainly to extend the same room, the
+// same activity, or the same feeling in slightly different words.
+const STORY_MUST_MOVE_NOTE = [
+  `STORY MUST MOVE (apply to every segment — a requirement, not a suggestion):`,
+  `- By the end of this segment, at least one of the following must have genuinely changed from where it stood at the start: the situation, what the protagonist knows, a relationship, the protagonist's goal, the risk they face, the pressure on them, an opportunity, their commitment to a course of action, a consequence now in motion, the protagonist's behavior, or their emotional/psychological position.`,
+  `- A segment must not exist primarily to describe the same room or setting further, extend the same activity without a new turn, restate the same feeling in different words, or re-establish objects or details already on the page. If a passage does only that, it has not moved the story.`,
+  `- Atmosphere, reflection, and sensory detail remain welcome inside a segment that is already moving — they deepen a real movement. They cannot substitute for one.`,
+].join("\n");
+
+// RP-011C.4: explicitly permits and encourages the kind of runtime that
+// spans real story-time rather than one continuous real-time scene. Without
+// this, longer durations tended to produce more words about the same moment
+// rather than a story that covers more ground. No mandatory number of time
+// jumps or location changes — the premise decides whether they are needed.
+const TIME_PLACE_PROGRESSION_NOTE = [
+  `TIME AND PLACE ARE FREE TO MOVE (apply when the story benefits from it):`,
+  `- Time jumps, location changes, scene compression, montage-like progression, and selective narration are all welcome tools. Do not narrate every intermediate minute or every intermediate day.`,
+  `- Select the moments that materially change the story and skip or compress the ones that do not. A gap of hours, days, weeks, or months can be crossed in a sentence when nothing that happened in between matters to the story.`,
+  `- When the premise spans growth, recovery, ambition, a career, a relationship, travel, an investigation, a preparation, an escape, or another process that naturally takes time, let the story advance through the time that process actually needs — do not compress a multi-month change into a single sitting just to stay in one place.`,
+  `- There is no minimum number of time jumps or location changes required. Some premises rightly stay in one place across one night; most premises about change benefit from covering more ground. Let the premise decide.`,
+].join("\n");
+
 // Pass C3D: principle-based guidance to keep the factual chain of events
 // understandable at the center of the story while preserving ambiguity at the
 // edges. Deliberately principle-only — no act structures, no percentages, no
@@ -661,8 +697,25 @@ const WORD_TARGET_DISCIPLINE_NOTE = [
   `WORD TARGET DISCIPLINE (gentle pacing guidance — preserve literary quality):`,
   `- Treat the segment wordTarget as a real budget, not a loose suggestion. Lean toward landing AT OR JUST UNDER the target; do not aim for the upper band. Modest overage is acceptable only when a natural scene genuinely requires it.`,
   `- Do not expand beyond target through extra beats, repeated atmospheric variations, additional sensory passes over the same setting, or further reflective layers once the meaningful movement has been shown.`,
-  `- If the segment wants to grow too large, do not summarize or rush. Instead, choose fewer, stronger scene beats and let each one carry more implication. Prefer one well-shaped interaction, object, gesture, or setting turn over several similar ones.`,
-  `- Preserve the calm, literary, atmospheric voice. This is not a request for faster pacing or thinner prose; it is a request for cleaner scene selection.`,
+  `- Prioritize meaningful events over decorative detail when the budget is tight. One meaningful action-and-consequence pair is worth more than several descriptive variations of the same moment.`,
+  `- If the segment wants to grow too large, do NOT solve this by staying in the same scene and describing it more deeply. Compress or summarize low-value transitions and low-value stretches of time instead — a walk, a wait, a routine chore can be crossed in a sentence. Preserve story movement before preserving secondary atmosphere: cut or shrink the atmosphere pass before cutting the beat that moves the story forward.`,
+  `- Preserve the calm, literary, atmospheric voice on the beats that matter. This is not a request for faster pacing everywhere or thinner prose everywhere; it is a request to spend the budget on what moves the story and to compress what does not.`,
+].join("\n");
+
+// RP-011C.4: sparse figurative language for the longform segment writer,
+// mirroring the discipline already present in the short-form Narrative
+// Story builder (lib/script-builder-narrative-story.ts). Longform segments
+// previously had no such restraint, which let metaphor/simile/personification
+// density climb unchecked across a full-length draft.
+const FIGURATIVE_LANGUAGE_RESTRAINT_NOTE = [
+  `FIGURATIVE LANGUAGE RESTRAINT (apply throughout — imagery stays, density drops):`,
+  `- Metaphors should be sparse. Similes should be sparse. Personification should be rare.`,
+  `- Do not decorate every paragraph. Prefer concrete actions and precise nouns and verbs over poetic comparison.`,
+  `- Avoid figurative language that adds no information and exists mainly to make the prose sound literary.`,
+  `- Do not repeatedly personify rooms, houses, weather, darkness, silence, or objects. If it happens once, do not repeat the device on the next object or room.`,
+  `- One or two precise, concrete details are usually stronger than a paragraph of atmospheric description. Avoid purple prose and avoid repeating the same sensory inventory (the same smells, sounds, textures) across scenes.`,
+  `- Bildhaftigkeit stays allowed — this is a restraint on density, not a ban on imagery. A well-placed image still lands; it should not be the default unit of every sentence.`,
+  `- Between atmosphere and story: story clarity, plot progression, character movement, and emotional truth come first. Sensory and atmospheric detail supports them and may be trimmed when it is redundant, repetitive, purely decorative, or slowing the story down.`,
 ].join("\n");
 
 // Continuity guidance for non-opening segments. Aimed at reducing the
@@ -686,10 +739,12 @@ const CONTINUITY_NOTE = [
 // percentages, no mandatory beats.
 const FINAL_SEGMENT_CONTRACTION_NOTE = [
   `NATURAL CONTRACTION OF THE CLOSE (apply in the closing stretch — a sensibility, not a counter):`,
-  `- The ending should naturally contract, not expand. Lean toward landing at or just under the segment target — let the close arrive when the prose naturally rests, even if that comes slightly early.`,
-  `- Once the central question has been answered, settled, transformed, or has landed emotionally, do not add new atmosphere, new locations, new ambient passages, or further reflective passes.`,
+  `- Do not overstay after the resolution has landed. Lean toward landing at or just under the segment target — let the close arrive when the prose naturally rests, even if that comes slightly early.`,
+  `- But do not cut BEFORE the payoff the story has promised is actually shown. If the premise promises a transformation, show enough of the changed end state — the new situation, the new capability, the new relationship, the new circumstance — for the transformation to feel earned, not merely announced or implied a beat before it happens.`,
+  `- A quiet ending is welcome. An incomplete one is not. The soft landing comes AFTER the narrative payoff has been shown, not instead of it.`,
+  `- Once the central question has been answered, settled, transformed, or has landed emotionally AND the payoff has actually been shown in scene, do not add new atmosphere, new locations, new ambient passages, or further reflective passes.`,
   `- Avoid afterglow scenes that linger past the natural close — extended reflections, additional emotional summaries, repeated arrivals of meaning, or further variations on the same final image.`,
-  `- Do not extend with further small movements just to fill space. End where the story naturally ends.`,
+  `- Do not extend with further small movements just to fill space. End where the story naturally ends — after the payoff has landed, not before.`,
 ].join("\n");
 
 // Final-segment contraction factor. The closing stretch should land naturally
@@ -815,11 +870,17 @@ export function buildStorySegmentPrompts(input: GenerateStorySegmentInput): {
     ``,
     NARRATIVE_MOMENTUM_NOTE,
     ``,
+    STORY_MUST_MOVE_NOTE,
+    ``,
+    TIME_PLACE_PROGRESSION_NOTE,
+    ``,
     CLARITY_AT_THE_CENTER_NOTE,
     ``,
     SUBTEXT_NOTE,
     ``,
     WORD_TARGET_DISCIPLINE_NOTE,
+    ``,
+    FIGURATIVE_LANGUAGE_RESTRAINT_NOTE,
     ``,
   ];
 
