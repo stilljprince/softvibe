@@ -46,3 +46,6 @@ next-env.d.ts
 # Contains the runtime-generated private copy of the QA soundbed and
 # must never be served by Next.js static asset handling.
 /.storage/qa-library/
+
+# RP-011C.8.7.3 — generated output from scripts/run-narrative-benchmark.ts
+/benchmark-output/

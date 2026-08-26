@@ -16,7 +16,8 @@
     "seed:library:qa": "tsx scripts/seed-library-qa.ts seed",
     "seed:library:qa:cleanup": "tsx scripts/seed-library-qa.ts cleanup",
     "backfill:track-titles": "node scripts/backfill-track-titles.cjs",
-    "normalize:track-titles": "node scripts/normalize-track-titles.cjs"
+    "normalize:track-titles": "node scripts/normalize-track-titles.cjs",
+    "benchmark": "tsx scripts/run-narrative-benchmark.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.922.0",
