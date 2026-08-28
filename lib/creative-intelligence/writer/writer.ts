@@ -24,6 +24,11 @@
 
 import { resolveWriterTemplate } from "./templates";
 import { buildWriterPrompt } from "./prompts";
+import {
+  NARRATIVE_LENGTH_GOVERNANCE_CONFIG,
+  resolveRemainingWordBudget,
+  resolveWordBudget,
+} from "../guidance/duration-budget";
 import type {
   GeneratedScene,
   ProviderBackedSceneWriter,
@@ -118,15 +123,31 @@ export const writeStoryWithProvider: ProviderBackedStoryWriter = async (params) 
   // character/setting/focus established early on doesn't drift by the time
   // later scenes are written independently.
   const previousScenesText: string[] = [];
-  for (const scene of scenes) {
+  // RP-011C.8D: static even split (guidance/builder.ts already put
+  // wordsPerScene into each scene's targetWordCount) recomputed here only to
+  // get totalWords/wordsPerScene for the dynamic remaining-budget recompute
+  // below. Narrative only -- see NARRATIVE_LENGTH_GOVERNANCE_CONFIG.
+  const wordBudget = intent.preset === "narrative" ? resolveWordBudget(intent, scenes.length) : undefined;
+
+  for (let index = 0; index < scenes.length; index++) {
+    const scene = scenes[index];
     const sceneGuidance = guidance.find((g) => g.sceneId === scene.id);
     if (!sceneGuidance) {
       throw new Error(`writeStoryWithProvider: no GenerationGuidance found for scene ${scene.id}`);
     }
+    const lengthGovernance = wordBudget
+      ? resolveRemainingWordBudget({
+          totalWords: wordBudget.totalWords,
+          wordsPerScene: wordBudget.wordsPerScene,
+          previousScenesText,
+          remainingSceneCount: scenes.length - index,
+          config: NARRATIVE_LENGTH_GOVERNANCE_CONFIG,
+        })
+      : undefined;
     // Sequential, not Promise.all -- keeps output order deterministic and
     // avoids firing concurrent provider calls per story. Sequential
-    // execution is also what makes carrying previousScenesText forward
-    // possible.
+    // execution is also what makes carrying previousScenesText forward (and
+    // recomputing lengthGovernance from actual word counts) possible.
     const generated = await writeSceneWithProvider({
       scene,
       guidance: sceneGuidance,
@@ -136,6 +157,7 @@ export const writeStoryWithProvider: ProviderBackedStoryWriter = async (params) 
       intent,
       createdAt,
       previousScenesText: previousScenesText.length > 0 ? [...previousScenesText] : undefined,
+      lengthGovernance,
     });
     results.push(generated);
     previousScenesText.push(generated.text);

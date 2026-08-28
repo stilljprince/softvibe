@@ -22,14 +22,15 @@ import type { CreativePreset } from "@/lib/creative-intelligence/core/constants"
 
 export type CreativeEngine = "legacy" | "creative-intelligence";
 
-// First production cutover (RP-011C.7D.1). Single source of truth — no
-// duplicated preset switches anywhere else.
+// RP-011C.8J narrative cutover: all five production presets now route to
+// Creative Intelligence. Single source of truth — no duplicated preset
+// switches anywhere else.
 const CREATIVE_ENGINE_ROUTING: Record<ScriptPreset, CreativeEngine> = {
   "classic-asmr": "creative-intelligence",
   "sleep-story": "creative-intelligence",
   meditation: "creative-intelligence",
   "kids-story": "creative-intelligence",
-  narrative: "legacy",
+  narrative: "creative-intelligence",
 };
 
 // ScriptPreset (lib/script-builder.ts) and Creative Intelligence's
@@ -56,8 +57,9 @@ export type GenerateCreativeScriptInput = {
   // Relevant to the Legacy branch only (classic-asmr word-target
   // calibration); Creative Intelligence does not read it.
   voiceStyle?: "soft" | "whisper" | null;
-  // Legacy narrative submode. Only ever meaningful when preset ===
-  // "narrative", which always routes to Legacy.
+  // Legacy narrative submode. Relevant to the Legacy branch only; Creative
+  // Intelligence does not read it. No production preset currently routes to
+  // Legacy, but the field stays wired for the (typed) Legacy branch below.
   narrativeMode?: "story" | "quiet-knowledge" | null;
   language: "de" | "en";
   preferenceContext?: string;

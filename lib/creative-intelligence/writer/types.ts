@@ -20,6 +20,7 @@
 import type { CreativeContext } from "../context/types";
 import type { CreativeIntent, SceneBlueprint, StoryBlueprint } from "../core/types";
 import type { GenerationGuidance } from "../guidance/types";
+import type { RemainingWordBudget } from "../guidance/duration-budget";
 import type { CreativeTextProvider } from "./provider";
 
 export type GeneratedSceneMetadata = {
@@ -82,6 +83,12 @@ export type WriteSceneWithProviderParams = WriteSceneParams & {
   // the same way the Writer already reads intent.creativeDirection verbatim
   // instead of a parsed-out field. Undefined/empty for the first scene.
   previousScenesText?: string[];
+  // RP-011C.8D: remaining-word-budget awareness, recomputed by
+  // writeStoryWithProvider from the actual word count of previousScenesText
+  // (see guidance/duration-budget.ts resolveRemainingWordBudget). Narrative
+  // only today -- undefined for every other preset and for narrative when
+  // the intent carries no requested duration.
+  lengthGovernance?: RemainingWordBudget;
 };
 
 export type WriteStoryWithProviderParams = WriteStoryParams & {

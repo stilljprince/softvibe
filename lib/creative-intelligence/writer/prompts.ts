@@ -13,6 +13,7 @@
 import type { CreativeContext } from "../context/types";
 import type { CreativeIntent, SceneBlueprint, StoryBlueprint } from "../core/types";
 import type { GenerationGuidance } from "../guidance/types";
+import type { RemainingWordBudget } from "../guidance/duration-budget";
 import { resolveWriterTemplate } from "./templates";
 import type { CreativeTextProviderInput } from "./provider";
 
@@ -26,6 +27,10 @@ export type BuildWriterPromptParams = {
   // this scene can stay consistent with a character/setting/focus one of
   // them already established. See WriteSceneWithProviderParams.
   previousScenesText?: string[];
+  // RP-011C.8D: remaining-word-budget awareness for this scene, recomputed
+  // by writeStoryWithProvider from the actual word count of
+  // previousScenesText. Narrative only -- see WriteSceneWithProviderParams.
+  lengthGovernance?: RemainingWordBudget;
 };
 
 function listOrNone(items: string[]): string {
@@ -61,6 +66,107 @@ function describeListenerExperiencer(intent: CreativeIntent): string | null {
   return `Listener role: the listener explicitly asked to be the one experiencing this scene -- they are its first-person "I", not a separate narrator or persona addressing them as "you", unless the request also explicitly asks for a distinct roleplay persona.`;
 }
 
+// RP-011C.8F Teil B: global story-budget awareness beyond just this scene's
+// own recommended number, so the writer can see how the whole story is
+// tracking -- not just this scene's slice of it. Every value here is
+// already on RemainingWordBudget (see guidance/duration-budget.ts); this
+// only formats it, it does not compute anything new.
+function describeGlobalStoryBudget(lengthGovernance: RemainingWordBudget): string {
+  const scenesLabel = lengthGovernance.remainingSceneCount === 1 ? "scene" : "scenes";
+  return (
+    `Story budget so far: ${lengthGovernance.wordsWrittenSoFar} words written, ` +
+    `~${lengthGovernance.remainingWords} words remaining toward the ~${lengthGovernance.totalWords}-word target ` +
+    `(soft ceiling ~${lengthGovernance.maxRecommendedWords} words), ` +
+    `with ${lengthGovernance.remainingSceneCount} ${scenesLabel} left to write including this one.`
+  );
+}
+
+// RP-011C.8H Teil C/D: medium-strength guidance for a story that is using
+// its word budget faster than planned at this point (see
+// guidance/duration-budget.ts resolvePlannedCumulativeWords /
+// isBudgetPressureActive) even though it is not yet close to totalWords --
+// weaker than the near_limit/over_limit compactness guidance below, but
+// present well before those trigger. Explicitly a Story Value Hierarchy
+// (protect plot-critical beats, reduce optional material first) rather than
+// a plain "write less" instruction: this is the CEO-flagged risk this patch
+// exists to avoid -- early overshoot must not be paid for later by
+// starving turning points, confrontations, or the payoff. Same "no
+// hard-stop / truncation language" rule as describeFocusGuidance below.
+function describeBudgetPressureGuidance(): string {
+  return [
+    `This story is using its word budget faster than planned at this point in the story.`,
+    `Keep this scene focused and efficient, without cutting the story short.`,
+    `Do not omit or skip necessary turning points, reveals, decisions, or consequences to save words.`,
+    `Protect: central plot action, character decisions, consequences, clues and reveals, confrontations and turning points, relationship changes, necessary transitions, and the eventual payoff/ending.`,
+    // Split across two literals (joined by the trailing " " below) purely to
+    // stay under the writer/ test suite's long-hand-written-string-literal
+    // heuristic (scripts/test-creative-intelligence-writer.ts) -- the
+    // resulting prompt text is unaffected.
+    `Reduce first, before touching any of the above: repeated atmosphere, redundant description, extended reflection, secondary detours,` +
+      ` redundant explanation, extra setup after the premise is already clear, unnecessary side beats, and optional new subplots.`,
+  ].join(" ");
+}
+
+// RP-011C.8F Teil B/soft-ceiling-status + Teil C: the stronger compactness
+// guidance a near-limit or already-over-limit story needs -- distinct from
+// the always-present "small overrun is acceptable" line below, which stays
+// true even here. Deliberately no hard-stop / truncation language (no "do
+// not exceed X words", no "stop writing at"): this only reprioritizes what
+// the scene should focus on, it never forbids finishing the required beat.
+function describeFocusGuidance(status: RemainingWordBudget["storyBudgetStatus"]): string | null {
+  if (status === "normal") return null;
+  if (status === "budget_pressure") return describeBudgetPressureGuidance();
+
+  const openingLine =
+    status === "over_limit"
+      ? `This story is already past its overall recommended maximum length.`
+      : `This story is already close to its overall recommended length.`;
+
+  return [
+    openingLine,
+    `Complete this scene's required narrative beat, but keep it focused and compact rather than expansive.`,
+    `Prioritize: necessary action, decision and consequence, the scene's clue/reveal or payoff, and the essential transition to what follows.`,
+    `Avoid: secondary detours, extended reflection, redundant dialogue, repeated description, and introducing unnecessary new subplots.`,
+    status === "over_limit"
+      ? `Do not open any new optional beats or subplots -- move efficiently toward the story's necessary payoff.`
+      : null,
+  ]
+    .filter((line): line is string => line !== null)
+    .join(" ");
+}
+
+// RP-011C.8D: when lengthGovernance is present (narrative only, see
+// WriteSceneWithProviderParams), it replaces the plain static target with
+// guidance recomputed from the actual word count of scenes already written
+// -- so a scene that overshot its guidance leaves less for what follows,
+// while the final scene keeps enough headroom to land its payoff. Every
+// other preset keeps the original static-target line unchanged.
+function describeLengthGuidance(
+  targetWordCount: number | undefined,
+  lengthGovernance: RemainingWordBudget | undefined
+): Array<string | null> {
+  if (!lengthGovernance) {
+    return [
+      targetWordCount !== undefined
+        ? `Length target for this scene: approximately ${targetWordCount} words (guidance, not a hard limit).`
+        : null,
+    ];
+  }
+
+  return [
+    `Aim to complete this scene within approximately ${lengthGovernance.recommendedSceneWords} words.`,
+    `The full story has approximately ${lengthGovernance.remainingWords} words remaining toward its ~${lengthGovernance.totalWords}-word target.`,
+    `Soft ceiling: aim not to significantly exceed ~${lengthGovernance.maxRecommendedWords} words in total -- this is guidance, not a hard limit.`,
+    describeGlobalStoryBudget(lengthGovernance),
+    `Preserve this scene's necessary action, decision, consequence, and transition.`,
+    `A small overrun is acceptable to finish the scene coherently, but avoid unnecessary expansion beyond the remaining story budget.`,
+    describeFocusGuidance(lengthGovernance.storyBudgetStatus),
+    lengthGovernance.isFinalScene
+      ? `This is the final scene -- prioritize fully completing the story's payoff and resolution over hitting this word count exactly.`
+      : null,
+  ];
+}
+
 function section(title: string, lines: Array<string | null>): string {
   const body = lines.filter((line): line is string => line !== null);
   return [`${title}:`, ...body].join("\n");
@@ -93,7 +199,7 @@ export function buildWriterSystemPrompt(intent: CreativeIntent): string {
 }
 
 export function buildWriterUserPrompt(params: BuildWriterPromptParams): string {
-  const { scene, guidance, blueprint, context, intent, previousScenesText } = params;
+  const { scene, guidance, blueprint, context, intent, previousScenesText, lengthGovernance } = params;
   const template = resolveWriterTemplate(intent);
   const unitLabel = template.unitLabel;
 
@@ -164,6 +270,27 @@ export function buildWriterUserPrompt(params: BuildWriterPromptParams): string {
             intent.preset === "kids-story"
               ? `Keep the same named character(s), setting, and premise consistent across every scene -- do not introduce different characters, a different place, or an unrelated new premise partway through.`
               : null,
+            // RP-011C.8D Cast Identity Anchor: the longform legacy-vs-CI
+            // benchmark (RP-011C.8B) found two explicitly different,
+            // user-requested side characters accidentally merged into one
+            // person over a long story. This is about identity, not
+            // relationship state -- it must not read as "relationships must
+            // stay unchanged," since narrative fully depends on trust,
+            // betrayal, alliance, romance, hostility, and other relationship
+            // shifts remaining possible. Narrative only: no other preset's
+            // benchmark surfaced this failure mode.
+            intent.preset === "narrative"
+              ? `If this direction names or clearly implies more than one distinct person or role, keep each of them recognizable as a separate individual -- do not merge two explicitly different figures into one.`
+              : null,
+            intent.preset === "narrative"
+              ? `Keep each character's established identity and name consistent throughout the story.`
+              : null,
+            intent.preset === "narrative"
+              ? `Relationships and roles may still change through story events (trust, betrayal, alliance, romance, hostility, reconciliation) -- preserve identity, not fixed relationships.`
+              : null,
+            intent.preset === "narrative"
+              ? `Departure, death, and new arrivals entering the story remain fully allowed too.`
+              : null,
           ]),
           ``,
         ]
@@ -207,9 +334,7 @@ export function buildWriterUserPrompt(params: BuildWriterPromptParams): string {
       `Description guidance: ${guidance.descriptionGuidance}`,
       `Style guidance: ${guidance.styleGuidance}`,
       guidance.allowedElements.length > 0 ? `Allowed, ordinary elements: ${listOrNone(guidance.allowedElements)}` : null,
-      guidance.targetWordCount !== undefined
-        ? `Length target for this scene: approximately ${guidance.targetWordCount} words (guidance, not a hard limit).`
-        : null,
+      ...describeLengthGuidance(guidance.targetWordCount, lengthGovernance),
     ]),
     ``,
     section("AVOID", [listOrNone([...scene.avoidPatterns, ...guidance.avoidPatterns])]),

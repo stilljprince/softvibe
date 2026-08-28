@@ -69,10 +69,11 @@ const CASES: CaseDef[] = [
     expectedEngine: "creative-intelligence",
   },
   {
+    // RP-011C.8J: narrative now routes to Creative Intelligence.
     preset: "narrative",
     prompt: "Write a short mystery story about a locked room and a missing letter.",
     language: "en",
-    expectedEngine: "legacy",
+    expectedEngine: "creative-intelligence",
   },
 ];
 

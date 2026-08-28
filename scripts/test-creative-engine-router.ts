@@ -1,10 +1,12 @@
 // scripts/test-creative-engine-router.ts
 //
-// RP-011C.7D.1 — Tests for the central Creative Engine Router
-// (lib/creative-engine-router.ts). Verifies the first production cutover's
-// routing decision, the exact-one-engine-per-request invariant, the
-// writerMode:"provider" guard, input/output mapping, no-fallback failure
-// behavior, and downstream (chunking/prosody) compatibility.
+// RP-011C.7D.1 / RP-011C.8J — Tests for the central Creative Engine Router
+// (lib/creative-engine-router.ts). Verifies the production cutover's
+// routing decision (all five presets, including narrative as of 8J, now
+// resolve to Creative Intelligence), the exact-one-engine-per-request
+// invariant, the writerMode:"provider" guard, input/output mapping,
+// no-fallback failure behavior, and downstream (chunking/prosody)
+// compatibility.
 //
 // No live OpenAI / ElevenLabs calls -- the Creative Intelligence and Legacy
 // engines are both replaced with fakes via generateCreativeScript()'s
@@ -73,14 +75,16 @@ async function main() {
   const { generateCreativeScript, engineForPreset } = await import("../lib/creative-engine-router");
 
   // ─── A. Preset routing test ────────────────────────────────────────────
+  // RP-011C.8J: all five production presets now route to Creative
+  // Intelligence. No productive preset remains routed to Legacy.
   check("classic-asmr routes to CI", engineForPreset("classic-asmr"), "creative-intelligence");
   check("meditation routes to CI", engineForPreset("meditation"), "creative-intelligence");
   check("kids-story routes to CI", engineForPreset("kids-story"), "creative-intelligence");
   check("sleep-story routes to CI", engineForPreset("sleep-story"), "creative-intelligence");
-  check("narrative routes to Legacy", engineForPreset("narrative"), "legacy");
+  check("narrative routes to CI", engineForPreset("narrative"), "creative-intelligence");
 
   // ─── B. Exact-one-engine invariant ──────────────────────────────────────
-  for (const preset of ["classic-asmr", "sleep-story", "meditation", "kids-story"] as const) {
+  for (const preset of ["classic-asmr", "sleep-story", "meditation", "kids-story", "narrative"] as const) {
     let ciCalls = 0;
     let legacyCalls = 0;
     await generateCreativeScript(
@@ -103,26 +107,6 @@ async function main() {
     );
     check(`${preset}: CI called exactly once`, ciCalls, 1);
     check(`${preset}: Legacy called zero times`, legacyCalls, 0);
-  }
-
-  {
-    let ciCalls = 0;
-    let legacyCalls = 0;
-    await generateCreativeScript(
-      { preset: "narrative", userPrompt: "test prompt", language: "de" },
-      {
-        runCreativeIntelligencePipeline: async () => {
-          ciCalls++;
-          return fakePipelineResult(["scene text"]);
-        },
-        runLegacyScriptBuilder: async () => {
-          legacyCalls++;
-          return { finalText: "legacy text" };
-        },
-      }
-    );
-    check("narrative: Legacy called exactly once", legacyCalls, 1);
-    check("narrative: CI called zero times", ciCalls, 0);
   }
 
   // ─── C. Provider mode guard ─────────────────────────────────────────────
@@ -169,8 +153,12 @@ async function main() {
     );
   }
 
+  // RP-011C.8J: narrative now routes to Creative Intelligence, so its input
+  // mapping is verified through the same CI branch as the other four
+  // presets (not through runLegacyScriptBuilder, which narrative no longer
+  // reaches in production).
   {
-    let capturedInput: unknown;
+    let capturedRequest: unknown;
     await generateCreativeScript(
       {
         preset: "narrative",
@@ -182,18 +170,21 @@ async function main() {
         preferenceContext: "prefs",
       },
       {
-        runLegacyScriptBuilder: async (input) => {
-          capturedInput = input;
-          return { finalText: "legacy text" };
+        runCreativeIntelligencePipeline: async (req) => {
+          capturedRequest = req;
+          return fakePipelineResult(["scene text"]);
         },
       }
     );
-    check("Legacy input: preset unchanged", (capturedInput as { preset: string }).preset, "narrative");
-    check("Legacy input: targetDurationSec unchanged (no minute conversion)", (capturedInput as { targetDurationSec: number }).targetDurationSec, 120);
-    check("Legacy input: voiceStyle passed through", (capturedInput as { voiceStyle: string }).voiceStyle, "whisper");
-    check("Legacy input: narrativeMode passed through", (capturedInput as { narrativeMode: string }).narrativeMode, "quiet-knowledge");
-    check("Legacy input: language passed through", (capturedInput as { language: string }).language, "de");
-    check("Legacy input: preferenceContext passed through", (capturedInput as { preferenceContext: string }).preferenceContext, "prefs");
+    check("CI input: narrative preset mapped to presetHint 'narrative'", (capturedRequest as { preset: string }).preset, "narrative");
+    check("CI input: narrative prompt passed through", (capturedRequest as { prompt: string }).prompt, "a quiet knowledge piece about the sea");
+    check("CI input: narrative durationSec 120 -> durationMinutes 2", (capturedRequest as { durationMinutes: number }).durationMinutes, 2);
+    check("CI input: narrative language passed through structurally", (capturedRequest as { language: string }).language, "de");
+    check(
+      "CI input: narrative preferenceContext passed through structurally",
+      (capturedRequest as { preferenceContext: string }).preferenceContext,
+      "prefs"
+    );
   }
 
   // ─── E. Final text join / empty scenes ──────────────────────────────────
@@ -277,10 +268,11 @@ async function main() {
     check("CI failure never falls back to Legacy", legacyCalls, 0);
   }
 
-  // ─── I. Narrative regression: unchanged Legacy args shape ──────────────
+  // ─── I. Narrative cutover regression (RP-011C.8J): CI result used
+  // verbatim, Legacy never touched ────────────────────────────────────────
   {
-    let ciCalls = 0;
-    let capturedInput: unknown;
+    let legacyCalls = 0;
+    let capturedRequest: unknown;
     const result = await generateCreativeScript(
       {
         preset: "narrative",
@@ -291,29 +283,26 @@ async function main() {
         language: "en",
       },
       {
-        runCreativeIntelligencePipeline: async () => {
-          ciCalls++;
-          return fakePipelineResult(["should not be used"]);
+        runCreativeIntelligencePipeline: async (req) => {
+          capturedRequest = req;
+          return fakePipelineResult(["narrative CI scene text"]);
         },
-        runLegacyScriptBuilder: async (input) => {
-          capturedInput = input;
-          return { finalText: "legacy narrative text" };
+        runLegacyScriptBuilder: async () => {
+          legacyCalls++;
+          return { finalText: "should not be used" };
         },
       }
     );
-    check("Narrative uses Legacy result verbatim", result.finalText, "legacy narrative text");
-    check("Narrative never touches CI", ciCalls, 0);
+    check("Narrative uses CI result verbatim", result.finalText, "narrative CI scene text");
+    check("Narrative never touches Legacy", legacyCalls, 0);
     check(
-      "Narrative Legacy call keeps full arg shape (no dropped fields)",
-      capturedInput,
+      "Narrative CI call keeps full arg shape (no dropped fields)",
+      capturedRequest,
       {
+        prompt: "a longform story",
         preset: "narrative",
-        userPrompt: "a longform story",
-        targetDurationSec: 2700,
-        voiceStyle: "soft",
-        narrativeMode: "story",
+        durationMinutes: 45,
         language: "en",
-        preferenceContext: undefined,
       }
     );
   }
