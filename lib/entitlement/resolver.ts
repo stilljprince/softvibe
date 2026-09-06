@@ -37,6 +37,14 @@ export type ResolvedEntitlements = {
     used: number;
     reserved: number;
     remaining: number;
+    /**
+     * F-017 — Admin operative override. True when the user carries
+     * isAdmin=true: Custom Minutes are unlimited in practice regardless of
+     * the numeric allowance/used/reserved/remaining fields above, which
+     * keep reporting the real underlying accounting. Orthogonal to `plan`
+     * — admin is not a billing plan and never changes the plan label.
+     */
+    unlimited: boolean;
   };
   billingPeriod: {
     start: Date | null;
@@ -63,6 +71,11 @@ export type ResolveEntitlementsResult =
 // runtime types so the calculation can be unit-tested without a database.
 export type ResolverInput = {
   plan: Plan;
+  /**
+   * F-017 — operative admin override, orthogonal to `plan`. Never changes
+   * the effective plan calculation; only sets `monthlyMinutes.unlimited`.
+   */
+  isAdmin: boolean;
   planPeriodStart: Date | null;
   planPeriodEnd: Date | null;
   probeGenerationsUsed: number;
@@ -121,7 +134,7 @@ export function calculateResolvedEntitlements(
   input: ResolverInput,
   now: Date = new Date()
 ): ResolvedEntitlements {
-  const { plan, planPeriodStart, planPeriodEnd, probeGenerationsUsed, periodUsage } = input;
+  const { plan, isAdmin, planPeriodStart, planPeriodEnd, probeGenerationsUsed, periodUsage } = input;
 
   const effectivePlan = resolveEffectivePlan(plan, planPeriodEnd, now);
 
@@ -148,6 +161,7 @@ export function calculateResolvedEntitlements(
       used,
       reserved,
       remaining,
+      unlimited: isAdmin,
     },
     billingPeriod: {
       start: planPeriodStart,
@@ -177,6 +191,7 @@ export async function resolveEntitlements(
     where: { id: userId },
     select: {
       plan: true,
+      isAdmin: true,
       planPeriodStart: true,
       planPeriodEnd: true,
       probeGenerationsUsed: true,
@@ -209,6 +224,7 @@ export async function resolveEntitlements(
     ok: true,
     data: calculateResolvedEntitlements({
       plan: user.plan,
+      isAdmin: user.isAdmin,
       planPeriodStart: user.planPeriodStart,
       planPeriodEnd: user.planPeriodEnd,
       probeGenerationsUsed: user.probeGenerationsUsed,

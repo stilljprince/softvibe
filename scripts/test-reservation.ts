@@ -591,7 +591,7 @@ async function runReservationTests(): Promise<void> {
   const r = await reserveAndCreateJob(
     {
       userId: "u-free",
-      isAdmin: true,
+      isAdmin: false,
       requestedMinutes: 10,
       jobData: jobData("u-free"),
       now: insidePeriod,
@@ -622,7 +622,7 @@ async function runReservationTests(): Promise<void> {
   const r = await reserveAndCreateJob(
     {
       userId: "u-starter",
-      isAdmin: true,
+      isAdmin: false,
       requestedMinutes: 12,
       jobData: jobData("u-starter"),
       now: insidePeriod,
@@ -676,7 +676,7 @@ async function runReservationTests(): Promise<void> {
   const r = await reserveAndCreateJob(
     {
       userId: "u-premium",
-      isAdmin: true,
+      isAdmin: false,
       requestedMinutes: 45,
       jobData: jobData("u-premium"),
       now: insidePeriod,
@@ -716,7 +716,7 @@ async function runReservationTests(): Promise<void> {
   await reserveAndCreateJob(
     {
       userId: "u-reuse",
-      isAdmin: true,
+      isAdmin: false,
       requestedMinutes: 10,
       jobData: jobData("u-reuse"),
       now: insidePeriod,
@@ -726,7 +726,7 @@ async function runReservationTests(): Promise<void> {
   await reserveAndCreateJob(
     {
       userId: "u-reuse",
-      isAdmin: true,
+      isAdmin: false,
       requestedMinutes: 7,
       jobData: jobData("u-reuse"),
       now: insidePeriod,
@@ -771,7 +771,7 @@ async function runReservationTests(): Promise<void> {
   const r = await reserveAndCreateJob(
     {
       userId: "u-expired",
-      isAdmin: true,
+      isAdmin: false,
       requestedMinutes: 15,
       jobData: jobData("u-expired"),
       now: pastPeriod,
@@ -798,7 +798,7 @@ async function runReservationTests(): Promise<void> {
   const r = await reserveAndCreateJob(
     {
       userId: "u-legacy",
-      isAdmin: true,
+      isAdmin: false,
       requestedMinutes: 15,
       jobData: jobData("u-legacy"),
       now: insidePeriod,
@@ -828,7 +828,7 @@ async function runReservationTests(): Promise<void> {
   const r = await reserveAndCreateJob(
     {
       userId: "u-zero",
-      isAdmin: true,
+      isAdmin: false,
       requestedMinutes: 0,
       jobData: jobData("u-zero"),
       now: insidePeriod,
@@ -864,7 +864,7 @@ async function runReservationTests(): Promise<void> {
   await reserveAndCreateJob(
     {
       userId: "u-x1",
-      isAdmin: true,
+      isAdmin: false,
       requestedMinutes: 8,
       jobData: jobData("u-x1"),
       now: insidePeriod,
@@ -874,7 +874,7 @@ async function runReservationTests(): Promise<void> {
   await reserveAndCreateJob(
     {
       userId: "u-x2",
-      isAdmin: true,
+      isAdmin: false,
       requestedMinutes: 6,
       jobData: jobData("u-x2"),
       now: insidePeriod,
@@ -912,7 +912,7 @@ async function runReservationTests(): Promise<void> {
   const r = await reserveAndCreateJob(
     {
       userId: "u-s79",
-      isAdmin: true,
+      isAdmin: false,
       requestedMinutes: 1,
       jobData: jobData("u-s79"),
       now: insidePeriod,
@@ -952,7 +952,7 @@ async function runReservationTests(): Promise<void> {
   const r = await reserveAndCreateJob(
     {
       userId: "u-s79r",
-      isAdmin: true,
+      isAdmin: false,
       requestedMinutes: 2,
       jobData: jobData("u-s79r"),
       now: insidePeriod,
@@ -992,7 +992,7 @@ async function runReservationTests(): Promise<void> {
   const r = await reserveAndCreateJob(
     {
       userId: "u-p199",
-      isAdmin: true,
+      isAdmin: false,
       requestedMinutes: 1,
       jobData: jobData("u-p199"),
       now: insidePeriod,
@@ -1031,7 +1031,7 @@ async function runReservationTests(): Promise<void> {
   const r = await reserveAndCreateJob(
     {
       userId: "u-p199r",
-      isAdmin: true,
+      isAdmin: false,
       requestedMinutes: 2,
       jobData: jobData("u-p199r"),
       now: insidePeriod,
@@ -1067,7 +1067,7 @@ async function runReservationTests(): Promise<void> {
   const r = await reserveAndCreateJob(
     {
       userId: "u-s-huge",
-      isAdmin: true,
+      isAdmin: false,
       requestedMinutes: 81,
       jobData: jobData("u-s-huge"),
       now: insidePeriod,
@@ -1094,7 +1094,7 @@ async function runReservationTests(): Promise<void> {
   const r = await reserveAndCreateJob(
     {
       userId: "u-p-huge",
-      isAdmin: true,
+      isAdmin: false,
       requestedMinutes: 201,
       jobData: jobData("u-p-huge"),
       now: insidePeriod,
@@ -1129,7 +1129,7 @@ async function runReservationTests(): Promise<void> {
   const r = await reserveAndCreateJob(
     {
       userId: "u-s80",
-      isAdmin: true,
+      isAdmin: false,
       requestedMinutes: 1,
       jobData: jobData("u-s80"),
       now: insidePeriod,
@@ -1170,7 +1170,7 @@ async function runReservationTests(): Promise<void> {
     reserveAndCreateJob(
       {
         userId: "u-conc",
-        isAdmin: true,
+        isAdmin: false,
         requestedMinutes: 150,
         jobData: jobData("u-conc"),
         now: insidePeriod,
@@ -1180,7 +1180,7 @@ async function runReservationTests(): Promise<void> {
     reserveAndCreateJob(
       {
         userId: "u-conc",
-        isAdmin: true,
+        isAdmin: false,
         requestedMinutes: 150,
         jobData: jobData("u-conc"),
         now: insidePeriod,
@@ -1230,7 +1230,7 @@ async function runReservationTests(): Promise<void> {
     reserveAndCreateJob(
       {
         userId: "u-both",
-        isAdmin: true,
+        isAdmin: false,
         requestedMinutes: 90,
         jobData: jobData("u-both"),
         now: insidePeriod,
@@ -1240,7 +1240,7 @@ async function runReservationTests(): Promise<void> {
     reserveAndCreateJob(
       {
         userId: "u-both",
-        isAdmin: true,
+        isAdmin: false,
         requestedMinutes: 60,
         jobData: jobData("u-both"),
         now: insidePeriod,
@@ -1284,7 +1284,7 @@ async function runReservationTests(): Promise<void> {
   const r = await reserveAndCreateJob(
     {
       userId: "u-rb",
-      isAdmin: true,
+      isAdmin: false,
       requestedMinutes: 10,
       jobData: jobData("u-rb"),
       now: insidePeriod,
@@ -1955,6 +1955,266 @@ async function runReservationTests(): Promise<void> {
     store.users.get("u-cc")?.credits,
     5
   );
+}
+
+// ---------------------------------------------------------------------------
+// F-017 — Admin operative override (write-side bypass)
+// ---------------------------------------------------------------------------
+//
+// Admin is an operative override layer, not a billing plan. isAdmin=true
+// must take unconditional priority over the stored plan: no PLAN_MINUTES
+// reservation, no PeriodUsage read/write, no credit debit, no
+// INSUFFICIENT_MINUTES — regardless of whether the underlying plan has
+// minutes remaining or is fully exhausted.
+
+// (30) admin=true + PREMIUM with minutes available → success, no reservation
+{
+  const store = seedStore();
+  seedUser(store, {
+    id: "u-admin-premium",
+    plan: "PREMIUM",
+    planPeriodStart: periodStart,
+    planPeriodEnd: periodEnd,
+  });
+  const client = buildStubClient(store);
+  const r = await reserveAndCreateJob(
+    {
+      userId: "u-admin-premium",
+      isAdmin: true,
+      requestedMinutes: 45,
+      jobData: jobData("u-admin-premium"),
+      now: insidePeriod,
+    },
+    client
+  );
+  check("Admin+PREMIUM available: ok=true", r.ok, true);
+  if (r.ok)
+    check(
+      "Admin+PREMIUM available: reservation=skipped_admin",
+      r.reservation,
+      "skipped_admin"
+    );
+  check(
+    "Admin+PREMIUM available: no PeriodUsage row created",
+    store.periodUsages.size,
+    0
+  );
+  check("Admin+PREMIUM available: one Job created", store.jobs.size, 1);
+  const job = Array.from(store.jobs.values())[0];
+  check(
+    "Admin+PREMIUM available: Job.entitlementKind is null",
+    job.entitlementKind,
+    null
+  );
+  check(
+    "Admin+PREMIUM available: Job.reservedMinutes is null",
+    job.reservedMinutes,
+    null
+  );
+}
+
+// (31) admin=true + PREMIUM fully exhausted (200/200) → still success,
+// never INSUFFICIENT_MINUTES, PeriodUsage left untouched.
+{
+  const store = seedStore();
+  seedUser(store, {
+    id: "u-admin-premium-x",
+    plan: "PREMIUM",
+    planPeriodStart: periodStart,
+    planPeriodEnd: periodEnd,
+  });
+  store.periodUsages.set(pukey("u-admin-premium-x", periodStart), {
+    userId: "u-admin-premium-x",
+    periodStart,
+    periodEnd,
+    minutesReserved: 0,
+    minutesUsed: 200,
+  });
+  const before = {
+    ...store.periodUsages.get(pukey("u-admin-premium-x", periodStart))!,
+  };
+  const client = buildStubClient(store);
+  const r = await reserveAndCreateJob(
+    {
+      userId: "u-admin-premium-x",
+      isAdmin: true,
+      requestedMinutes: 30,
+      jobData: jobData("u-admin-premium-x"),
+      now: insidePeriod,
+    },
+    client
+  );
+  check("Admin+PREMIUM exhausted: ok=true (never INSUFFICIENT_MINUTES)", r.ok, true);
+  if (r.ok)
+    check(
+      "Admin+PREMIUM exhausted: reservation=skipped_admin",
+      r.reservation,
+      "skipped_admin"
+    );
+  const after = store.periodUsages.get(pukey("u-admin-premium-x", periodStart));
+  check(
+    "Admin+PREMIUM exhausted: minutesReserved unchanged",
+    after?.minutesReserved,
+    before.minutesReserved
+  );
+  check(
+    "Admin+PREMIUM exhausted: minutesUsed unchanged",
+    after?.minutesUsed,
+    before.minutesUsed
+  );
+  check("Admin+PREMIUM exhausted: one Job created", store.jobs.size, 1);
+  const job = Array.from(store.jobs.values())[0];
+  check(
+    "Admin+PREMIUM exhausted: Job.entitlementKind is null",
+    job.entitlementKind,
+    null
+  );
+  check(
+    "Admin+PREMIUM exhausted: Job.reservedMinutes is null",
+    job.reservedMinutes,
+    null
+  );
+}
+
+// (32) admin=true + STARTER with minutes available → success, no reservation
+{
+  const store = seedStore();
+  seedUser(store, {
+    id: "u-admin-starter",
+    plan: "STARTER",
+    planPeriodStart: periodStart,
+    planPeriodEnd: periodEnd,
+  });
+  const client = buildStubClient(store);
+  const r = await reserveAndCreateJob(
+    {
+      userId: "u-admin-starter",
+      isAdmin: true,
+      requestedMinutes: 20,
+      jobData: jobData("u-admin-starter"),
+      now: insidePeriod,
+    },
+    client
+  );
+  check("Admin+STARTER available: ok=true", r.ok, true);
+  if (r.ok)
+    check(
+      "Admin+STARTER available: reservation=skipped_admin",
+      r.reservation,
+      "skipped_admin"
+    );
+  check(
+    "Admin+STARTER available: no PeriodUsage row created",
+    store.periodUsages.size,
+    0
+  );
+  const job = Array.from(store.jobs.values())[0];
+  check(
+    "Admin+STARTER available: Job.entitlementKind is null",
+    job.entitlementKind,
+    null
+  );
+  check(
+    "Admin+STARTER available: Job.reservedMinutes is null",
+    job.reservedMinutes,
+    null
+  );
+}
+
+// (33) admin=true + STARTER fully exhausted (80/80) → still success, never
+// INSUFFICIENT_MINUTES, PeriodUsage left untouched.
+{
+  const store = seedStore();
+  seedUser(store, {
+    id: "u-admin-starter-x",
+    plan: "STARTER",
+    planPeriodStart: periodStart,
+    planPeriodEnd: periodEnd,
+  });
+  store.periodUsages.set(pukey("u-admin-starter-x", periodStart), {
+    userId: "u-admin-starter-x",
+    periodStart,
+    periodEnd,
+    minutesReserved: 0,
+    minutesUsed: 80,
+  });
+  const before = {
+    ...store.periodUsages.get(pukey("u-admin-starter-x", periodStart))!,
+  };
+  const client = buildStubClient(store);
+  const r = await reserveAndCreateJob(
+    {
+      userId: "u-admin-starter-x",
+      isAdmin: true,
+      requestedMinutes: 15,
+      jobData: jobData("u-admin-starter-x"),
+      now: insidePeriod,
+    },
+    client
+  );
+  check("Admin+STARTER exhausted: ok=true (never INSUFFICIENT_MINUTES)", r.ok, true);
+  if (r.ok)
+    check(
+      "Admin+STARTER exhausted: reservation=skipped_admin",
+      r.reservation,
+      "skipped_admin"
+    );
+  const after = store.periodUsages.get(pukey("u-admin-starter-x", periodStart));
+  check(
+    "Admin+STARTER exhausted: minutesReserved unchanged",
+    after?.minutesReserved,
+    before.minutesReserved
+  );
+  check(
+    "Admin+STARTER exhausted: minutesUsed unchanged",
+    after?.minutesUsed,
+    before.minutesUsed
+  );
+  const job = Array.from(store.jobs.values())[0];
+  check(
+    "Admin+STARTER exhausted: Job.entitlementKind is null",
+    job.entitlementKind,
+    null
+  );
+  check(
+    "Admin+STARTER exhausted: Job.reservedMinutes is null",
+    job.reservedMinutes,
+    null
+  );
+}
+
+// (34) admin=true + FREE — admin bypass still applies (plan is irrelevant to
+// the guard); no legacy credit debit either, since the admin branch returns
+// before the non-reserving credit-gate branch is reached.
+{
+  const store = seedStore();
+  seedUser(store, {
+    id: "u-admin-free",
+    plan: "FREE",
+    planPeriodStart: null,
+    planPeriodEnd: null,
+    credits: 0,
+  });
+  const client = buildStubClient(store);
+  const r = await reserveAndCreateJob(
+    {
+      userId: "u-admin-free",
+      isAdmin: true,
+      requestedMinutes: 5,
+      jobData: jobData("u-admin-free"),
+      now: insidePeriod,
+    },
+    client
+  );
+  check("Admin+FREE: ok=true", r.ok, true);
+  if (r.ok)
+    check("Admin+FREE: reservation=skipped_admin", r.reservation, "skipped_admin");
+  check(
+    "Admin+FREE: credits untouched at 0 (no legacy debit for admin)",
+    store.users.get("u-admin-free")?.credits,
+    0
+  );
+  check("Admin+FREE: no PeriodUsage row", store.periodUsages.size, 0);
 }
 
 }

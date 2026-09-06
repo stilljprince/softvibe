@@ -92,7 +92,8 @@ export type ReserveAndCreateJobResult =
         | "reserved"
         | "skipped_free"
         | "skipped_no_period"
-        | "skipped_zero_minutes";
+        | "skipped_zero_minutes"
+        | "skipped_admin";
       minutes?: number;
       periodStart?: Date;
     }
@@ -294,6 +295,37 @@ async function runReservationTx(
         },
       });
       if (!user) throw new ReservationRejectError("USER_NOT_FOUND");
+
+      // F-017 — Admin is an operative override layer, not a billing plan.
+      // This guard must sit ahead of the entire PLAN_MINUTES decision: an
+      // admin caller never reserves, never reads/writes PeriodUsage, and
+      // never debits credits, regardless of the stored plan (FREE/STARTER/
+      // PREMIUM) or its remaining allowance. The Job is created exactly
+      // like the existing non-reserving branch below, just without ever
+      // consulting decidePlanMinuteReservation.
+      if (params.isAdmin) {
+        const job = await tx.job.create({
+          data: {
+            userId: params.jobData.userId,
+            prompt: params.jobData.prompt,
+            preset: params.jobData.preset ?? null,
+            status: params.jobData.status,
+            durationSec: params.jobData.durationSec,
+            title: params.jobData.title,
+            language: params.jobData.language,
+            voiceGender: params.jobData.voiceGender,
+            voiceStyle: params.jobData.voiceStyle,
+            narrativeMode: params.jobData.narrativeMode,
+            scriptOverride: params.jobData.scriptOverride,
+          },
+          select: { id: true, status: true, title: true, prompt: true },
+        });
+        return {
+          ok: true,
+          job,
+          reservation: "skipped_admin",
+        } as ReserveAndCreateJobResult;
+      }
 
       const decision = decidePlanMinuteReservation({
         plan: user.plan,

@@ -54,6 +54,11 @@ type Case = {
     used: number;
     reserved: number;
     remaining: number;
+    /**
+     * F-017 — expected monthlyMinutes.unlimited. Optional; defaults to
+     * false when omitted, matching every pre-existing (non-admin) fixture.
+     */
+    unlimited?: boolean;
     probeUsed: number;
     probeRemaining: number;
     canUseProbe: boolean;
@@ -78,6 +83,7 @@ const cases: Case[] = [
     name: "FREE, no PeriodUsage, zero probes",
     input: {
       plan: "FREE",
+      isAdmin: false,
       planPeriodStart: null,
       planPeriodEnd: null,
       probeGenerationsUsed: 0,
@@ -100,6 +106,7 @@ const cases: Case[] = [
     name: "FREE, one probe used",
     input: {
       plan: "FREE",
+      isAdmin: false,
       planPeriodStart: null,
       planPeriodEnd: null,
       probeGenerationsUsed: 1,
@@ -122,6 +129,7 @@ const cases: Case[] = [
     name: "FREE, two probes used → canUse false",
     input: {
       plan: "FREE",
+      isAdmin: false,
       planPeriodStart: null,
       planPeriodEnd: null,
       probeGenerationsUsed: 2,
@@ -144,6 +152,7 @@ const cases: Case[] = [
     name: "FREE, three probes used (stale/invalid) → clamped to 0 remaining",
     input: {
       plan: "FREE",
+      isAdmin: false,
       planPeriodStart: null,
       planPeriodEnd: null,
       probeGenerationsUsed: 3,
@@ -166,6 +175,7 @@ const cases: Case[] = [
     name: "FREE ignores stale PeriodUsage minutes",
     input: {
       plan: "FREE",
+      isAdmin: false,
       planPeriodStart: nowStart,
       planPeriodEnd: nowEnd,
       probeGenerationsUsed: 0,
@@ -188,6 +198,7 @@ const cases: Case[] = [
     name: "STARTER, no PeriodUsage → full allowance remaining",
     input: {
       plan: "STARTER",
+      isAdmin: false,
       planPeriodStart: nowStart,
       planPeriodEnd: nowEnd,
       probeGenerationsUsed: 0,
@@ -210,6 +221,7 @@ const cases: Case[] = [
     name: "STARTER, used 30 reserved 10 → remaining 40",
     input: {
       plan: "STARTER",
+      isAdmin: false,
       planPeriodStart: nowStart,
       planPeriodEnd: nowEnd,
       probeGenerationsUsed: 0,
@@ -232,6 +244,7 @@ const cases: Case[] = [
     name: "PREMIUM, no PeriodUsage → 200 remaining",
     input: {
       plan: "PREMIUM",
+      isAdmin: false,
       planPeriodStart: nowStart,
       planPeriodEnd: nowEnd,
       probeGenerationsUsed: 0,
@@ -254,6 +267,7 @@ const cases: Case[] = [
     name: "PREMIUM at exact limit → remaining 0",
     input: {
       plan: "PREMIUM",
+      isAdmin: false,
       planPeriodStart: nowStart,
       planPeriodEnd: nowEnd,
       probeGenerationsUsed: 0,
@@ -276,6 +290,7 @@ const cases: Case[] = [
     name: "PREMIUM over-limit (used + reserved > allowance) → clamped to 0",
     input: {
       plan: "PREMIUM",
+      isAdmin: false,
       planPeriodStart: nowStart,
       planPeriodEnd: nowEnd,
       probeGenerationsUsed: 0,
@@ -298,6 +313,7 @@ const cases: Case[] = [
     name: "STARTER with negative stale minutes → clamped to 0",
     input: {
       plan: "STARTER",
+      isAdmin: false,
       planPeriodStart: nowStart,
       planPeriodEnd: nowEnd,
       probeGenerationsUsed: 0,
@@ -326,6 +342,7 @@ const cases: Case[] = [
     name: "STARTER, planPeriodEnd in the future → stays STARTER",
     input: {
       plan: "STARTER",
+      isAdmin: false,
       planPeriodStart: nowStart,
       planPeriodEnd: nowEnd,
       probeGenerationsUsed: 0,
@@ -352,6 +369,7 @@ const cases: Case[] = [
     name: "PREMIUM, planPeriodEnd in the future → stays PREMIUM",
     input: {
       plan: "PREMIUM",
+      isAdmin: false,
       planPeriodStart: nowStart,
       planPeriodEnd: nowEnd,
       probeGenerationsUsed: 0,
@@ -379,6 +397,7 @@ const cases: Case[] = [
     name: "STARTER, planPeriodEnd exactly at now → effective FREE",
     input: {
       plan: "STARTER",
+      isAdmin: false,
       planPeriodStart: nowStart,
       planPeriodEnd: nowEnd,
       probeGenerationsUsed: 0,
@@ -405,6 +424,7 @@ const cases: Case[] = [
     name: "PREMIUM, planPeriodEnd in the past → effective FREE",
     input: {
       plan: "PREMIUM",
+      isAdmin: false,
       planPeriodStart: nowStart,
       planPeriodEnd: nowEnd,
       probeGenerationsUsed: 0,
@@ -433,6 +453,7 @@ const cases: Case[] = [
     name: "STARTER expired → allowance/used/reserved/remaining all 0, no lib access",
     input: {
       plan: "STARTER",
+      isAdmin: false,
       planPeriodStart: nowStart,
       planPeriodEnd: nowEnd,
       probeGenerationsUsed: 0,
@@ -461,6 +482,7 @@ const cases: Case[] = [
     name: "PREMIUM expired, one probe already used → canUse true (1 left)",
     input: {
       plan: "PREMIUM",
+      isAdmin: false,
       planPeriodStart: nowStart,
       planPeriodEnd: nowEnd,
       probeGenerationsUsed: 1,
@@ -485,6 +507,7 @@ const cases: Case[] = [
     name: "PREMIUM expired, probe quota exhausted → canUse false",
     input: {
       plan: "PREMIUM",
+      isAdmin: false,
       planPeriodStart: nowStart,
       planPeriodEnd: nowEnd,
       probeGenerationsUsed: 2,
@@ -512,6 +535,7 @@ const cases: Case[] = [
     name: "FREE with future planPeriodEnd → stays FREE",
     input: {
       plan: "FREE",
+      isAdmin: false,
       planPeriodStart: nowStart,
       planPeriodEnd: nowEnd,
       probeGenerationsUsed: 0,
@@ -540,6 +564,7 @@ const cases: Case[] = [
     name: "STARTER, planPeriodEnd === null → stays STARTER (legacy)",
     input: {
       plan: "STARTER",
+      isAdmin: false,
       planPeriodStart: null,
       planPeriodEnd: null,
       probeGenerationsUsed: 0,
@@ -564,6 +589,7 @@ const cases: Case[] = [
     name: "PREMIUM, planPeriodEnd === null → stays PREMIUM (legacy)",
     input: {
       plan: "PREMIUM",
+      isAdmin: false,
       planPeriodStart: null,
       planPeriodEnd: null,
       probeGenerationsUsed: 0,
@@ -584,6 +610,149 @@ const cases: Case[] = [
       periodEnd: null,
     },
   },
+
+  // ------------------------------------------------------------------
+  // F-017 — Admin operative override (read-side)
+  // ------------------------------------------------------------------
+  //
+  // isAdmin=true must set monthlyMinutes.unlimited=true without ever
+  // changing the reported plan label, the effective-plan calculation, or
+  // any of the underlying numeric accounting fields (allowance/used/
+  // reserved/remaining), which continue to reflect the real stored state.
+
+  {
+    name: "isAdmin=true + FREE → plan stays FREE, unlimited=true",
+    input: {
+      plan: "FREE",
+      isAdmin: true,
+      planPeriodStart: null,
+      planPeriodEnd: null,
+      probeGenerationsUsed: 0,
+      periodUsage: null,
+    },
+    effectivePlan: "FREE",
+    expect: {
+      allowance: 0,
+      used: 0,
+      reserved: 0,
+      remaining: 0,
+      unlimited: true,
+      probeUsed: 0,
+      probeRemaining: 2,
+      canUseProbe: true,
+      directLibraryAccess: false,
+      periodStart: null,
+      periodEnd: null,
+    },
+  },
+  {
+    name: "isAdmin=true + STARTER active → plan stays STARTER, unlimited=true",
+    input: {
+      plan: "STARTER",
+      isAdmin: true,
+      planPeriodStart: nowStart,
+      planPeriodEnd: nowEnd,
+      probeGenerationsUsed: 0,
+      periodUsage: { minutesUsed: 80, minutesReserved: 0 },
+    },
+    now: defaultNow,
+    effectivePlan: "STARTER",
+    expect: {
+      allowance: 80,
+      used: 80,
+      reserved: 0,
+      remaining: 0,
+      unlimited: true,
+      probeUsed: 0,
+      probeRemaining: 2,
+      canUseProbe: false,
+      directLibraryAccess: true,
+      periodStart: nowStart,
+      periodEnd: nowEnd,
+    },
+  },
+  {
+    name: "isAdmin=true + PREMIUM active → plan stays PREMIUM, unlimited=true",
+    input: {
+      plan: "PREMIUM",
+      isAdmin: true,
+      planPeriodStart: nowStart,
+      planPeriodEnd: nowEnd,
+      probeGenerationsUsed: 0,
+      periodUsage: { minutesUsed: 200, minutesReserved: 0 },
+    },
+    now: defaultNow,
+    effectivePlan: "PREMIUM",
+    expect: {
+      allowance: 200,
+      used: 200,
+      reserved: 0,
+      remaining: 0,
+      unlimited: true,
+      probeUsed: 0,
+      probeRemaining: 2,
+      canUseProbe: false,
+      directLibraryAccess: true,
+      periodStart: nowStart,
+      periodEnd: nowEnd,
+    },
+  },
+  {
+    // Expired paid plan: the stored-plan/effective-plan semantics are NOT
+    // changed for admin — the plan still downgrades to FREE via the
+    // existing resolveEffectivePlan rule. Admin's unlimited=true rides on
+    // top of that, orthogonal to the plan calculation.
+    name: "isAdmin=true + expired STARTER → effective FREE unchanged, unlimited=true",
+    input: {
+      plan: "STARTER",
+      isAdmin: true,
+      planPeriodStart: nowStart,
+      planPeriodEnd: nowEnd,
+      probeGenerationsUsed: 0,
+      periodUsage: { minutesUsed: 60, minutesReserved: 10 },
+    },
+    now: laterNow,
+    effectivePlan: "FREE",
+    expect: {
+      allowance: 0,
+      used: 0,
+      reserved: 0,
+      remaining: 0,
+      unlimited: true,
+      probeUsed: 0,
+      probeRemaining: 2,
+      canUseProbe: true,
+      directLibraryAccess: false,
+      periodStart: nowStart,
+      periodEnd: nowEnd,
+    },
+  },
+  {
+    name: "isAdmin=true + expired PREMIUM → effective FREE unchanged, unlimited=true",
+    input: {
+      plan: "PREMIUM",
+      isAdmin: true,
+      planPeriodStart: nowStart,
+      planPeriodEnd: nowEnd,
+      probeGenerationsUsed: 0,
+      periodUsage: { minutesUsed: 150, minutesReserved: 20 },
+    },
+    now: laterNow,
+    effectivePlan: "FREE",
+    expect: {
+      allowance: 0,
+      used: 0,
+      reserved: 0,
+      remaining: 0,
+      unlimited: true,
+      probeUsed: 0,
+      probeRemaining: 2,
+      canUseProbe: true,
+      directLibraryAccess: false,
+      periodStart: nowStart,
+      periodEnd: nowEnd,
+    },
+  },
 ];
 
 let passed = 0;
@@ -599,6 +768,7 @@ for (const c of cases) {
     ["used", r.monthlyMinutes.used, c.expect.used],
     ["reserved", r.monthlyMinutes.reserved, c.expect.reserved],
     ["remaining", r.monthlyMinutes.remaining, c.expect.remaining],
+    ["monthlyMinutes.unlimited", r.monthlyMinutes.unlimited, c.expect.unlimited ?? false],
     ["periodStart", r.billingPeriod.start, c.expect.periodStart],
     ["periodEnd", r.billingPeriod.end, c.expect.periodEnd],
     ["probes.lifetimeLimit", r.probes.lifetimeLimit, PROBE_LIFETIME_LIMIT],
@@ -700,6 +870,7 @@ checkEffective(
 {
   const input: ResolverInput = {
     plan: "STARTER",
+    isAdmin: false,
     planPeriodStart: nowStart,
     planPeriodEnd: nowEnd,
     probeGenerationsUsed: 0,
