@@ -1,8 +1,15 @@
 // app/library/SponsoredUnlockInterstitial.tsx
 //
-// RP-004E1 — Simulated Sponsored Unlock interstitial modal.
+// RP-004E1 / F-003 Slice 1 — Sponsored Unlock interstitial modal.
 //
-// Presentation shell for the server-owned event lifecycle:
+// Presentation shell for the server-owned event lifecycle. Two provider
+// backends share this one component (selected once via
+// NEXT_PUBLIC_SPONSORED_GAM_WEB_MODE — see lib/ads/google-ad-manager-rewarded.ts):
+//
+//   * disabled (default) — SIMULATED_SOFTWARE, unchanged from RP-004E1.
+//   * test / live        — GOOGLE_AD_MANAGER_WEB (F-003 Slice 1).
+//
+// Simulated flow:
 //
 //   1. On mount, POST /api/library/sponsored/simulated/start.
 //   2. Show a calm SoftVibe Early Access acknowledgement, driven by
@@ -15,6 +22,12 @@
 //      unlock duration is discoverable before playback begins.
 //   6. On the user's [Abspielen] click, hand back to the caller which
 //      refetches session state and starts playback.
+//
+// GAM Web flow (same steps 5/6): POST .../gam-web/start instead of step 1;
+// the button in step 3 is enabled by an explicit test trigger (test mode)
+// or a real GPT rewardedSlotGranted event (live mode) instead of a timer;
+// step 4 posts to .../gam-web/complete. See lib/entitlement/sponsored-gam-web.ts
+// for the full server-side contract and security model.
 //
 // Non-goals:
 //
@@ -32,6 +45,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSVTheme } from "@/app/components/sv-kit";
 import { formatUnlockExpiryHint } from "./format-unlock-expiry";
+import {
+  getClientSponsoredGamWebMode,
+  getConfiguredRewardedAdUnit,
+  initRewardedSlot,
+  type RewardedSlotHandle,
+} from "@/lib/ads/google-ad-manager-rewarded";
 
 type StartResp =
   | {
@@ -50,7 +69,9 @@ type StartResp =
       librarySessionId: string;
       eligibleAt: string;
       expiresAt: string;
-      minimumDurationSeconds: number;
+      // Present for the SIMULATED_SOFTWARE provider only — GAM Web has no
+      // artificial watch delay (see lib/entitlement/sponsored-gam-web.ts).
+      minimumDurationSeconds?: number;
     };
 
 type CompleteResp =
@@ -110,6 +131,15 @@ function messageForError(code: string): string {
       return "Bitte versuche es kurz noch einmal.";
     case "RATE_LIMITED":
       return "Bitte warte einen Moment und versuche es erneut.";
+    case "PROVIDER_UNAVAILABLE":
+      return "Die kostenlose Freischaltung ist momentan nicht verfügbar.";
+    case "PROVIDER_MISMATCH":
+      return "Diese Freischaltung ist nicht mehr gültig. Bitte starte sie erneut.";
+    // Client-only pseudo codes — never sent to or received from the
+    // server. Raised locally when the GPT script/slot fails.
+    case "GPT_UNAVAILABLE":
+    case "AD_NOT_REWARDED":
+      return "Die Anzeige konnte nicht geladen werden. Bitte versuche es erneut.";
     default:
       return "Die Verbindung wurde unterbrochen. Bitte versuche es erneut.";
   }
@@ -140,6 +170,25 @@ export default function SponsoredUnlockInterstitial({
   const { themeCfg, themeKey } = useSVTheme();
   const isDark = themeKey === "dark";
 
+  // Provider selection is a build-time/env decision, not per-render
+  // state: "disabled" (default) keeps using the existing regression
+  // harness (SIMULATED_SOFTWARE); "test"/"live" route through the GAM
+  // Web backend lifecycle end-to-end (see lib/entitlement/sponsored-gam-web.ts).
+  const gamMode = useMemo(() => getClientSponsoredGamWebMode(), []);
+  const useGamWeb = gamMode !== "disabled";
+  const startEndpoint = useGamWeb
+    ? "/api/library/sponsored/gam-web/start"
+    : "/api/library/sponsored/simulated/start";
+  const completeEndpoint = useGamWeb
+    ? "/api/library/sponsored/gam-web/complete"
+    : "/api/library/sponsored/simulated/complete";
+
+  // Live-mode GPT rewarded slot handle + granted flag. A ref (not state)
+  // because it is only read from event callbacks / cleanup, never
+  // rendered.
+  const rewardedHandleRef = useRef<RewardedSlotHandle | null>(null);
+  const adRewardGrantedRef = useRef(false);
+
   const [phase, setPhase] = useState<Phase>("starting");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [eventId, setEventId] = useState<string | null>(null);
@@ -155,13 +204,56 @@ export default function SponsoredUnlockInterstitial({
   const openButtonRef = useRef<HTMLButtonElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
 
+  // ── Live-mode GPT rewarded ad ─────────────────────────────────────────
+  //
+  // Only reached when gamMode === "live". No real Ad Unit ID is
+  // configured in this slice, so this path currently ends in the calm
+  // "no unlock" error state — it exists so live activation later needs
+  // no architecture change (F-003 Slice 1 scope).
+  const startLiveRewardedAd = useCallback(async () => {
+    const adUnit = getConfiguredRewardedAdUnit();
+    if (!adUnit) {
+      setErrorMsg(messageForError("PROVIDER_UNAVAILABLE"));
+      setPhase("error");
+      return;
+    }
+    try {
+      const handle = await initRewardedSlot(adUnit, {
+        onReady: (event) => event.makeRewardedVisible?.(),
+        onGranted: () => {
+          adRewardGrantedRef.current = true;
+          setPhase("ready");
+        },
+        onClosed: () => {
+          if (!adRewardGrantedRef.current) {
+            setErrorMsg(messageForError("AD_NOT_REWARDED"));
+            setPhase("error");
+          }
+        },
+      });
+      rewardedHandleRef.current = handle;
+    } catch {
+      setErrorMsg(messageForError("GPT_UNAVAILABLE"));
+      setPhase("error");
+    }
+  }, []);
+
+  // Clean up the GPT slot regardless of how the modal exits.
+  useEffect(() => {
+    return () => {
+      rewardedHandleRef.current?.destroy();
+      rewardedHandleRef.current = null;
+    };
+  }, []);
+
   // ── Start the event on mount ─────────────────────────────────────────
 
   const startCall = useCallback(async () => {
     setPhase("starting");
     setErrorMsg(null);
+    adRewardGrantedRef.current = false;
     try {
-      const res = await fetch("/api/library/sponsored/simulated/start", {
+      const res = await fetch(startEndpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ librarySessionId }),
@@ -195,14 +287,26 @@ export default function SponsoredUnlockInterstitial({
       setEventId(d.eventId);
       const eligibleMs = Date.parse(d.eligibleAt);
       setEligibleAtMs(Number.isFinite(eligibleMs) ? eligibleMs : Date.now());
-      setPhase("watching");
+      if (!useGamWeb) {
+        // Simulated provider — timed watch phase, unchanged.
+        setPhase("watching");
+      } else if (gamMode === "test") {
+        // GAM test mode: no ad, no timer. The user's own explicit click
+        // on the existing primary button IS the test reward trigger.
+        setPhase("ready");
+      } else {
+        // GAM live mode: wait for a real GPT rewardedSlotGranted event
+        // before the primary button becomes available.
+        setPhase("watching");
+        void startLiveRewardedAd();
+      }
     } catch {
       setErrorMsg(
         "Die Verbindung wurde unterbrochen. Bitte versuche es erneut."
       );
       setPhase("error");
     }
-  }, [librarySessionId, onSuccess]);
+  }, [librarySessionId, onSuccess, startEndpoint, useGamWeb, gamMode, startLiveRewardedAd]);
 
   useEffect(() => {
     void startCall();
@@ -215,21 +319,29 @@ export default function SponsoredUnlockInterstitial({
     return () => window.clearInterval(id);
   }, [phase]);
 
-  // Promote watching → ready when eligibleAt is reached.
+  // Promote watching → ready when eligibleAt is reached. GAM Web's
+  // readiness comes from the test-mode trigger or a live ad-reward
+  // event (both set above), never from this timer — its eligibleAt is
+  // always `now` and would otherwise flip "ready" before any reward.
   useEffect(() => {
+    if (useGamWeb) return;
     if (phase !== "watching") return;
     if (eligibleAtMs === null) return;
     if (nowMs >= eligibleAtMs) setPhase("ready");
-  }, [phase, eligibleAtMs, nowMs]);
+  }, [phase, eligibleAtMs, nowMs, useGamWeb]);
 
   // ── Complete on user action ─────────────────────────────────────────
 
   const onCompleteClicked = useCallback(async () => {
     if (!eventId) return;
+    // Live mode: the button only reaches "ready" after rewardedSlotGranted
+    // (see startLiveRewardedAd), but guard here too — reward granted must
+    // precede complete regardless of how "ready" was reached.
+    if (useGamWeb && gamMode === "live" && !adRewardGrantedRef.current) return;
     setPhase("completing");
     setErrorMsg(null);
     try {
-      const res = await fetch("/api/library/sponsored/simulated/complete", {
+      const res = await fetch(completeEndpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ eventId }),
@@ -261,7 +373,7 @@ export default function SponsoredUnlockInterstitial({
       );
       setPhase("error");
     }
-  }, [eventId, onSuccess]);
+  }, [eventId, onSuccess, completeEndpoint, useGamWeb, gamMode]);
 
   // ── Keyboard: Escape closes (never counts as completion) ─────────────
 
@@ -316,7 +428,10 @@ export default function SponsoredUnlockInterstitial({
   // ── Derived progress (for the calm progress bar) ─────────────────────
 
   const progress = useMemo(() => {
-    if (phase !== "watching" || eligibleAtMs === null) return null;
+    // GAM Web's "watching" phase waits on an ad-reward event, not a
+    // fixed server timer — the countdown bar is only meaningful for the
+    // simulated provider's real eligibleAt delay.
+    if (useGamWeb || phase !== "watching" || eligibleAtMs === null) return null;
     // We compute the total duration from the difference between the
     // server-issued eligibleAt and mount time (approximated by first
     // observation); this is a display aid only — the server still owns
@@ -325,7 +440,7 @@ export default function SponsoredUnlockInterstitial({
     const remaining = Math.max(0, eligibleAtMs - nowMs);
     const done = Math.max(0, Math.min(1, 1 - remaining / totalMs));
     return { done, remaining };
-  }, [phase, eligibleAtMs, nowMs]);
+  }, [phase, eligibleAtMs, nowMs, useGamWeb]);
 
   // ── Styles ──────────────────────────────────────────────────────────
 

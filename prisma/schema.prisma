@@ -357,13 +357,15 @@ model LibraryUnlock {
   @@index([userId, librarySessionId, expiresAt])
 }
 
-// Source / provider kind of a SponsoredUnlockEvent (RP-004E1).
+// Source / provider kind of a SponsoredUnlockEvent (RP-004E1 / F-003).
 // SIMULATED_SOFTVIBE denotes the first-party Early Access simulation used
-// while a real advertising provider is being selected. RP-004E2 will add
-// real provider values (e.g. AD_MANAGER_X, VUNGLE_Y) without touching the
-// central Library unlock logic.
+// while a real advertising provider is being selected. GOOGLE_AD_MANAGER_WEB
+// (F-003 Slice 1) is the Google Ad Manager Rewarded Web provider-ready path,
+// still scoped to Curated Library sponsored unlocks — added as a purely
+// additive enum value; it does not touch the central Library unlock logic.
 enum SponsoredUnlockProvider {
   SIMULATED_SOFTVIBE
+  GOOGLE_AD_MANAGER_WEB
 }
 
 // Lifecycle status of a SponsoredUnlockEvent (RP-004E1).
