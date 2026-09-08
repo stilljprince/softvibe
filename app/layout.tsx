@@ -24,6 +24,9 @@ export const metadata: Metadata = {
     title: "SoftVibe — Persönliche Audioerlebnisse",
     description: SITE_DESCRIPTION,
   },
+  other: {
+    "google-adsense-account": "ca-pub-9918975492574277",
+  },
 };
 
 export const viewport: Viewport = {
