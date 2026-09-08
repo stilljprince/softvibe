@@ -20,6 +20,7 @@ import {
 } from "../lib/entitlement/sponsored-gam-web";
 import { initRewardedSlot } from "../lib/ads/google-ad-manager-rewarded";
 import type { Plan, PrismaClient } from "@prisma/client";
+import type { LibraryEffectiveAccess } from "../lib/entitlement/library-effective-access";
 
 let passed = 0;
 let failed = 0;
@@ -366,6 +367,21 @@ function seedUser(store: Store, id: string, plan: Plan = "FREE", timezone: strin
 
 function seedSession(store: Store, id: string, isActive: boolean = true): void {
   store.sessions.set(id, { id, isActive });
+}
+
+function makeEffectiveAccess(
+  mode: "FREE" | "STARTER" | "PREMIUM" | "ADMIN"
+): LibraryEffectiveAccess {
+  return {
+    databasePlan: mode === "ADMIN" ? "FREE" : (mode as Plan),
+    isAdmin: mode === "ADMIN",
+    defaultMode: mode,
+    qaOverride: null,
+    effectiveMode: mode,
+    qaFeatureAvailable: false,
+    hasDirectAccess: mode !== "FREE",
+    requiresSponsoredUnlockPath: mode === "FREE",
+  };
 }
 
 const testEnv: Record<string, string | undefined> = { SPONSORED_GAM_WEB_MODE: "test" };
@@ -748,7 +764,9 @@ async function runTests(): Promise<void> {
   check("start: two independent event rows now exist", store.events.size, 2);
 }
 
-// ─── (11) Daily 3-unlock limit reached -> blocked server-side ────────
+// ─── (11) Daily 3-unlock limit reached -> blocked at START, before any ──
+// ad is shown (read-only precheck), AND still enforced authoritatively
+// at COMPLETE (the precheck never replaces the atomic claim check).
 
 {
   const store = freshStore();
@@ -759,18 +777,71 @@ async function runTests(): Promise<void> {
   seedSession(store, "s4");
   const client = makeOps(store, []);
   const day = new Date("2026-09-01T10:00:00Z");
+
+  // 0/3, 1/3, 2/3 — GAM start allowed and completes normally each time.
   for (const sid of ["s1", "s2", "s3"]) {
     const s = await startGamWebSponsoredEvent({ userId: "u1", librarySessionId: sid, env: testEnv, now: day }, client);
+    check(`daily-limit: start allowed for ${sid}`, (s as { outcome?: string }).outcome, "event_created");
     const eventId = (s as { eventId?: string }).eventId!;
     const c = await completeGamWebSponsoredEvent({ userId: "u1", eventId, env: testEnv, now: day }, client);
     check(`daily-limit: unlock ${sid} created`, (c as { outcome?: string }).outcome, "created");
   }
+  check("daily-limit: three unlocks recorded", store.unlocks.size, 3);
+  const eventsBeforeFourthStart = store.events.size;
+
+  // 3/3, new locked session -> START itself rejects, before any event
+  // is created and before any ad would be shown.
   const s4 = await startGamWebSponsoredEvent({ userId: "u1", librarySessionId: "s4", env: testEnv, now: day }, client);
-  const eventId4 = (s4 as { eventId?: string }).eventId!;
-  const c4 = await completeGamWebSponsoredEvent({ userId: "u1", eventId: eventId4, env: testEnv, now: day }, client);
-  check("daily-limit: 4th unlock rejected", c4.ok, false);
-  if (!c4.ok) check("daily-limit: error code", c4.error, "DAILY_UNLOCK_LIMIT_REACHED");
-  check("daily-limit: exactly three unlocks total", store.unlocks.size, 3);
+  check("daily-limit: 4th start rejected pre-ad", s4.ok, false);
+  if (!s4.ok) check("daily-limit: 4th start error code", s4.error, "DAILY_UNLOCK_LIMIT_REACHED");
+  check("daily-limit: no new PENDING event created for the rejected start", store.events.size, eventsBeforeFourthStart);
+  check("daily-limit: still exactly three unlocks", store.unlocks.size, 3);
+
+  // 3/3, but the SAME session already holds an active 8h unlock ->
+  // active_unlock reuse still works; the precheck must not sit ahead of
+  // the active-unlock check.
+  const reopen = await startGamWebSponsoredEvent({ userId: "u1", librarySessionId: "s1", env: testEnv, now: day }, client);
+  check("daily-limit: active-unlock reuse still works at 3/3", (reopen as { outcome?: string }).outcome, "active_unlock");
+
+  // 3/3, but a paid/admin effectiveAccess override still gets direct
+  // access unconditionally — the precheck must never block a non-FREE
+  // caller regardless of their FREE-plan historical count.
+  for (const mode of ["STARTER", "PREMIUM", "ADMIN"] as const) {
+    const r = await startGamWebSponsoredEvent(
+      { userId: "u1", librarySessionId: "s4", env: testEnv, now: day, effectiveAccess: makeEffectiveAccess(mode) },
+      client
+    );
+    check(`daily-limit: ${mode} bypasses precheck via direct_plan_access`, (r as { outcome?: string }).outcome, "direct_plan_access");
+  }
+  check("daily-limit: direct-access probes created no event", store.events.size, eventsBeforeFourthStart);
+
+  // Race safety net: a start that observed count=2 (precheck passed)
+  // races another tab's completion that pushes the count to 3 before
+  // this one completes. The precheck cannot see that — it is read-only
+  // UX, not a reservation — but the authoritative claim inside
+  // completeGamWebSponsoredEvent must still block it.
+  const raceEventId = "event-race-1";
+  store.events.set(raceEventId, {
+    id: raceEventId,
+    userId: "u1",
+    librarySessionId: "s4",
+    provider: "GOOGLE_AD_MANAGER_WEB",
+    status: "PENDING",
+    providerEventId: "gam_race_1",
+    createdAt: day,
+    eligibleAt: day,
+    expiresAt: new Date(day.getTime() + 300_000),
+    completedAt: null,
+    consumedAt: null,
+    cancelledAt: null,
+  });
+  const raceComplete = await completeGamWebSponsoredEvent(
+    { userId: "u1", eventId: raceEventId, env: testEnv, now: day },
+    client
+  );
+  check("daily-limit: authoritative complete still enforces the limit despite a stale PENDING event", raceComplete.ok, false);
+  if (!raceComplete.ok) check("daily-limit: race complete error code", raceComplete.error, "DAILY_UNLOCK_LIMIT_REACHED");
+  check("daily-limit: race attempt created no extra unlock", store.unlocks.size, 3);
 }
 
 // ─── (12) Concurrent duplicate completion -> at most one effective unlock ──

@@ -55,6 +55,8 @@ function httpForStartError(code: StartGamWebEventErrorCode): number {
       return 404;
     case "SESSION_INACTIVE":
       return 409;
+    case "DAILY_UNLOCK_LIMIT_REACHED":
+      return 429;
     case "CONCURRENCY_CONFLICT":
       return 409;
   }

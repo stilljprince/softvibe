@@ -385,6 +385,17 @@ export default function CuratedLibrarySection({
     setInterstitialSessionId(null);
   }, []);
 
+  // Stable per modal-open: interstitialSessionId only changes when the
+  // modal opens/closes, and onInterstitialSuccess is itself stable
+  // (see its deps), so this reference stays stable across the parent
+  // rerenders that happen while the interstitial is open (e.g. player
+  // currentTime ticks) — see SponsoredUnlockInterstitial's startCall
+  // effect, which reruns whenever this identity changes.
+  const handleInterstitialSuccess = useCallback(() => {
+    if (!interstitialSessionId) return;
+    void onInterstitialSuccess(interstitialSessionId);
+  }, [interstitialSessionId, onInterstitialSuccess]);
+
   // ── Admin-only QA-mode plumbing ──────────────────────────────────────
   //
   // The server independently enforces every guard (real admin, dev
@@ -804,7 +815,7 @@ export default function CuratedLibrarySection({
           sessionTitle={interstitialTitle}
           sessionDescription={interstitialDescription}
           timezone={viewer?.timezone ?? null}
-          onSuccess={() => void onInterstitialSuccess(interstitialSessionId)}
+          onSuccess={handleInterstitialSuccess}
           onClose={onInterstitialClose}
         />
       )}

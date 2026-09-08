@@ -199,6 +199,15 @@ export default function SponsoredUnlockInterstitial({
   // HH:MM Uhr" line rendered in the "unlocked" phase.
   const [unlockExpiresAt, setUnlockExpiresAt] = useState<string | null>(null);
 
+  // One-start / in-flight / stale-response guard. `startSeqRef` is bumped
+  // on every startCall invocation (auto-mount + explicit retry); each call
+  // captures its own sequence number and only applies its response if it
+  // is still the latest one issued — this caps concurrent starts at one
+  // and stops an old response (e.g. from a superseded retry) from
+  // clobbering the UI state of a newer in-flight/completed call.
+  const startSeqRef = useRef(0);
+  const startInFlightRef = useRef(false);
+
   // Focus trap: keep focus inside the modal while it's mounted.
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const openButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -249,6 +258,14 @@ export default function SponsoredUnlockInterstitial({
   // ── Start the event on mount ─────────────────────────────────────────
 
   const startCall = useCallback(async () => {
+    // One-start guard: an automatic re-trigger (or a duplicate effect
+    // fire) while a start request is already in flight is dropped
+    // silently — only a deliberate retry (called once the previous
+    // attempt has already settled into "error") is expected to reach
+    // this function again.
+    if (startInFlightRef.current) return;
+    const mySeq = ++startSeqRef.current;
+    startInFlightRef.current = true;
     setPhase("starting");
     setErrorMsg(null);
     adRewardGrantedRef.current = false;
@@ -260,6 +277,9 @@ export default function SponsoredUnlockInterstitial({
         cache: "no-store",
       });
       const body = await res.json();
+      // Stale response: a newer startCall was issued after this one —
+      // never let this response touch UI state.
+      if (mySeq !== startSeqRef.current) return;
       const parsed = parseEnvelope<StartResp>(body);
       if (!parsed.ok) {
         setErrorMsg(messageForError(parsed.error));
@@ -301,10 +321,15 @@ export default function SponsoredUnlockInterstitial({
         void startLiveRewardedAd();
       }
     } catch {
+      if (mySeq !== startSeqRef.current) return;
       setErrorMsg(
         "Die Verbindung wurde unterbrochen. Bitte versuche es erneut."
       );
       setPhase("error");
+    } finally {
+      if (mySeq === startSeqRef.current) {
+        startInFlightRef.current = false;
+      }
     }
   }, [librarySessionId, onSuccess, startEndpoint, useGamWeb, gamMode, startLiveRewardedAd]);
 

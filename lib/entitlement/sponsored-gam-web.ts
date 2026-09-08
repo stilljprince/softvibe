@@ -72,8 +72,10 @@ import { prisma as defaultPrisma } from "@/lib/prisma";
 import { resolveEffectivePlan } from "@/lib/entitlement/resolver";
 import {
   claimLibrarySessionUnlock,
+  DAILY_UNLOCK_LIMIT,
   type ClaimLibrarySessionUnlockErrorCode,
 } from "@/lib/entitlement/library-unlock";
+import { localDayBoundsUtc } from "@/lib/entitlement/timezone";
 import type { LibraryEffectiveAccess } from "@/lib/entitlement/library-effective-access";
 
 /**
@@ -120,6 +122,7 @@ export type StartGamWebEventErrorCode =
   | "USER_NOT_FOUND"
   | "SESSION_NOT_FOUND"
   | "SESSION_INACTIVE"
+  | "DAILY_UNLOCK_LIMIT_REACHED"
   | "CONCURRENCY_CONFLICT";
 
 export type StartGamWebEventResult =
@@ -236,7 +239,7 @@ export async function startGamWebSponsoredEvent(
 
   const user = await client.user.findUnique({
     where: { id: params.userId },
-    select: { plan: true, planPeriodEnd: true },
+    select: { plan: true, planPeriodEnd: true, timezone: true },
   });
   if (!user) return { ok: false, error: "USER_NOT_FOUND" };
 
@@ -280,6 +283,29 @@ export async function startGamWebSponsoredEvent(
       librarySessionId: session.id,
       unlockExpiresAt: activeUnlock.expiresAt,
     };
+  }
+
+  // Read-only daily-limit UX precheck. This is NOT the authoritative
+  // enforcement — that remains solely inside `claimLibrarySessionUnlock`'s
+  // advisory-locked transaction (see completeGamWebSponsoredEvent). This
+  // check only avoids starting a new ad for a Free user who has already
+  // exhausted today's new-unlock quota, so they aren't asked to watch an
+  // ad that the Complete step would reject anyway. It reuses the exact
+  // same day-boundary/timezone semantics as the authoritative check
+  // (`localDayBoundsUtc` + `DAILY_UNLOCK_LIMIT`) so the two never disagree
+  // on what "today" means. A concurrent claim from another tab/session can
+  // still change the count between this read and a later Complete call —
+  // that race is accepted; the atomic check in claimLibrarySessionUnlock
+  // is what actually protects the limit.
+  const { start: dayStart, end: dayEnd } = localDayBoundsUtc(now, user.timezone);
+  const todayCount = await client.libraryUnlock.count({
+    where: {
+      userId: params.userId,
+      unlockedAt: { gte: dayStart, lt: dayEnd },
+    },
+  });
+  if (todayCount >= DAILY_UNLOCK_LIMIT) {
+    return { ok: false, error: "DAILY_UNLOCK_LIMIT_REACHED" };
   }
 
   // Free locked session — create OR reuse a PENDING GAM Web event.
