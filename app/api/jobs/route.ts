@@ -303,7 +303,9 @@ export async function POST(req: Request) {
 
     // P0 Safety Gate — shape check + local safety + OpenAI moderation.
     // Runs before any credit/rate-limit work so a rejected prompt costs nothing.
-    const gate = await runPromptGate(normalized.prompt ?? "");
+    const gate = await runPromptGate(normalized.prompt ?? "", {
+      preset: normalized.preset ?? undefined,
+    });
     if (!gate.ok) {
       addDebugLog({
         ts: new Date().toISOString(),

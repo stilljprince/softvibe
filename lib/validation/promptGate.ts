@@ -32,6 +32,12 @@ export type PromptGateOutcome =
   | { ok: true; normalized: string }
   | { ok: false; code: PromptGateCode; message: string; httpStatus: 400 | 422 };
 
+// F-015 Candidate C — structured preset context, additive/optional. Passing
+// no options (or omitting preset) preserves pre-F-015 behavior exactly.
+export type PromptGateOptions = { preset?: string };
+
+const NARRATIVE_PRESET = "narrative";
+
 // Calm copy. Tone calibrated to the brief: non-accusatory, non-technical,
 // emotionally soft, still clear. German first (primary user base); English
 // kept short because the iOS app currently surfaces these as-is.
@@ -284,7 +290,7 @@ const STRICT_THRESHOLDS: Record<string, number> = {
 // We are preventing glorification, propaganda, hate speech, procedural
 // harm instructions, and sexualisation of minors — not crime stories,
 // horror, war stories, tragedies, or historical fiction.
-const FICTION_THRESHOLDS: Record<string, number> = {
+export const FICTION_THRESHOLDS: Record<string, number> = {
   // Genre fiction openness — violence stays bookstore-open
   "violence": 0.95,
   "violence/graphic": 0.85,
@@ -305,6 +311,92 @@ const FICTION_THRESHOLDS: Record<string, number> = {
   "self-harm/instructions": 0.30,
   "illicit/violent": 0.40,
 };
+
+// F-015 Candidate C compliance policy — ONLY used when preset === "narrative"
+// AND the OpenAI moderation result is already flagged=true. Whitelist
+// principle: a category not listed in either set below is treated as
+// unmapped and fails closed (see evaluateFlaggedModerationResult).
+//
+// Narrative-differentiable — existing FICTION_THRESHOLDS may still apply.
+const NARRATIVE_ALLOWLIST_CATEGORIES: ReadonlySet<string> = new Set([
+  "violence",
+  "violence/graphic",
+  "hate",
+  "harassment",
+  "harassment/threatening",
+  "illicit",
+]);
+
+// Always fail-closed, even for preset === "narrative". Listed explicitly
+// (rather than derived as "everything else") so the hard-block set reads
+// as a policy document, matching the compliance sign-off.
+const NARRATIVE_HARD_BLOCK_CATEGORIES: ReadonlySet<string> = new Set([
+  "hate/threatening",
+  "sexual",
+  "sexual/minors",
+  "self-harm",
+  "self-harm/intent",
+  "self-harm/instructions",
+  "illicit/violent",
+]);
+
+export type ModerationActiveCategories = Record<string, boolean | null | undefined>;
+export type ModerationCategoryScores = Record<string, number | undefined>;
+
+// Pure, side-effect-free decision for the moderation "flagged=true" branch.
+// Exported so scripts/test-prompt-gate.ts can exercise Candidate C
+// deterministically without a real OpenAI Moderation call.
+//
+// preset !== "narrative" (including undefined): unconditional block —
+// identical to pre-F-015 behavior.
+//
+// preset === "narrative": whitelist-principle category walk. Any active
+// category outside NARRATIVE_ALLOWLIST_CATEGORIES (hard-block or unmapped)
+// blocks immediately. If every active category is allowlisted, the existing
+// FICTION_THRESHOLDS decide per-category; a threshold hit blocks, otherwise
+// the flagged result is allowed through.
+export function evaluateFlaggedModerationResult(
+  preset: string | undefined,
+  categories: ModerationActiveCategories | undefined | null,
+  categoryScores: ModerationCategoryScores | undefined | null,
+): { blocked: boolean; reason: string } {
+  if (preset !== NARRATIVE_PRESET) {
+    return { blocked: true, reason: "non-narrative-flagged" };
+  }
+
+  const activeCategories = Object.entries(categories ?? {})
+    .filter(([, active]) => active === true)
+    .map(([cat]) => cat);
+
+  // A flagged=true result with no reliably-active category cannot be
+  // evaluated against the allowlist — fail closed rather than falling
+  // through to an implicit allow.
+  if (activeCategories.length === 0) {
+    return { blocked: true, reason: "no-active-category" };
+  }
+
+  for (const cat of activeCategories) {
+    if (!NARRATIVE_ALLOWLIST_CATEGORIES.has(cat)) {
+      return {
+        blocked: true,
+        reason: NARRATIVE_HARD_BLOCK_CATEGORIES.has(cat) ? `hard-block:${cat}` : `unmapped:${cat}`,
+      };
+    }
+  }
+
+  for (const cat of activeCategories) {
+    const score = categoryScores?.[cat];
+    const threshold = FICTION_THRESHOLDS[cat];
+    if (!Number.isFinite(score)) {
+      return { blocked: true, reason: `invalid-score:${cat}` };
+    }
+    if (typeof threshold === "number" && (score as number) >= threshold) {
+      return { blocked: true, reason: `threshold:${cat}` };
+    }
+  }
+
+  return { blocked: false, reason: "narrative-allowlist-pass" };
+}
 
 // Fiction-genre markers. Presence indicates the prompt is a creative brief,
 // not advocacy. Kept conservative — must be a real genre/story word.
@@ -347,7 +439,10 @@ function exceedsThreshold(
   return null;
 }
 
-export async function moderatePromptContent(input: string): Promise<PromptGateOutcome> {
+export async function moderatePromptContent(
+  input: string,
+  options?: PromptGateOptions,
+): Promise<PromptGateOutcome> {
   const text = input.trim();
 
   // If the OpenAI key isn't configured we cannot moderate. Fail open with a
@@ -381,11 +476,25 @@ export async function moderatePromptContent(input: string): Promise<PromptGateOu
     // as flagged is blocked regardless of genre framing. Category thresholds
     // below add a second, stricter layer for borderline scores.
     if (result?.flagged) {
+      // F-015 Candidate C: preset === "narrative" gets a category-aware
+      // decision instead of the unconditional block below. Any other preset
+      // (including undefined) falls through to the pre-F-015 behavior.
+      const categories = result.categories as unknown as ModerationActiveCategories | undefined;
+      const decision = evaluateFlaggedModerationResult(options?.preset, categories, scores);
+
+      if (!decision.blocked) {
+        // Narrative + every active category within the compliance allowlist
+        // + all under FICTION_THRESHOLDS — final ALLOW for this flagged result.
+        return { ok: true, normalized: text };
+      }
+
       // Diagnostic — record which category scores accompanied the flag, so
       // we can tune thresholds without shipping full prompt content.
       const s = scores ?? {};
       console.warn("[promptGate] moderation blocked: flagged=true", {
         fictionalContext,
+        preset: options?.preset,
+        reason: decision.reason,
         "hate": s["hate"],
         "hate/threatening": s["hate/threatening"],
         "harassment": s["harassment"],
@@ -456,10 +565,13 @@ export function looksLikeRefusal(text: string): boolean {
 
 // Convenience wrapper: shape → local safety → moderation. Stops at the
 // first failing layer. Used by both /api/jobs and /api/prompt-improve.
-export async function runPromptGate(input: string): Promise<PromptGateOutcome> {
+export async function runPromptGate(
+  input: string,
+  options?: PromptGateOptions,
+): Promise<PromptGateOutcome> {
   const shape = validatePromptShape(input);
   if (!shape.ok) return shape;
   const local = localSafetyCheck(shape.normalized);
   if (!local.ok) return local;
-  return moderatePromptContent(shape.normalized);
+  return moderatePromptContent(shape.normalized, options);
 }

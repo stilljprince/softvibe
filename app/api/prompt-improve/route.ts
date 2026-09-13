@@ -55,7 +55,7 @@ export async function POST(req: Request) {
 
   // P0 Safety Gate — same gate as /api/jobs so "Verbessern" cannot silently
   // soften gibberish or unsafe input. Runs before any OpenAI call.
-  const gate = await runPromptGate(prompt);
+  const gate = await runPromptGate(prompt, { preset });
   if (!gate.ok) {
     return jsonError(gate.code, gate.httpStatus, { message: gate.message });
   }
@@ -114,7 +114,7 @@ export async function POST(req: Request) {
 
     // Re-moderate the output: defense-in-depth in case the model rewrote a
     // borderline input into something the input gate could not catch.
-    const outputModeration = await moderatePromptContent(improvedPrompt);
+    const outputModeration = await moderatePromptContent(improvedPrompt, { preset });
     if (!outputModeration.ok) {
       return jsonError(outputModeration.code, outputModeration.httpStatus, {
         message: outputModeration.message,

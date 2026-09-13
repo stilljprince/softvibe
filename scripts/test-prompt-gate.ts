@@ -17,8 +17,11 @@
 //                      moderation and would reject).
 //
 import {
+  evaluateFlaggedModerationResult,
   localSafetyCheck,
   validatePromptShape,
+  type ModerationActiveCategories,
+  type ModerationCategoryScores,
 } from "../lib/validation/promptGate";
 
 type Expectation =
@@ -176,7 +179,89 @@ function run() {
 
   console.log("");
   console.log(`Total: ${passed + failed}   Passed: ${passed}   Failed: ${failed}`);
-  if (failed > 0) process.exit(1);
+  return failed;
 }
 
-run();
+// F-015 Candidate C — deterministic, offline coverage of the narrative
+// flagged-branch decision (evaluateFlaggedModerationResult). No OpenAI
+// network call: `categories`/`categoryScores` are synthetic stand-ins for
+// what moderatePromptContent() would read off a real moderation result.
+interface CandidateCCase {
+  label: string;
+  preset?: string;
+  categories: ModerationActiveCategories;
+  scores?: ModerationCategoryScores;
+  expectBlocked: boolean;
+}
+
+const candidateCCases: CandidateCCase[] = [
+  // Non-narrative — unconditional block, unchanged pre-F-015 behavior.
+  { label: "non-narrative preset, flagged", preset: "sleep-story", categories: { violence: true }, scores: { violence: 0.2 }, expectBlocked: true },
+  { label: "missing preset, flagged", categories: { violence: true }, scores: { violence: 0.2 }, expectBlocked: true },
+
+  // Narrative — allowlist categories, under/over FICTION_THRESHOLDS.
+  { label: "narrative violence under threshold", preset: "narrative", categories: { violence: true }, scores: { violence: 0.5 }, expectBlocked: false },
+  { label: "narrative violence at threshold", preset: "narrative", categories: { violence: true }, scores: { violence: 0.95 }, expectBlocked: true },
+  { label: "narrative violence/graphic under threshold", preset: "narrative", categories: { "violence/graphic": true }, scores: { "violence/graphic": 0.5 }, expectBlocked: false },
+  { label: "narrative violence/graphic at threshold", preset: "narrative", categories: { "violence/graphic": true }, scores: { "violence/graphic": 0.85 }, expectBlocked: true },
+  { label: "narrative hate under threshold", preset: "narrative", categories: { hate: true }, scores: { hate: 0.3 }, expectBlocked: false },
+  { label: "narrative harassment under threshold", preset: "narrative", categories: { harassment: true }, scores: { harassment: 0.3 }, expectBlocked: false },
+  { label: "narrative harassment/threatening under threshold", preset: "narrative", categories: { "harassment/threatening": true }, scores: { "harassment/threatening": 0.3 }, expectBlocked: false },
+  { label: "narrative illicit under threshold", preset: "narrative", categories: { illicit: true }, scores: { illicit: 0.3 }, expectBlocked: false },
+  { label: "narrative illicit at threshold", preset: "narrative", categories: { illicit: true }, scores: { illicit: 0.55 }, expectBlocked: true },
+
+  // Narrative — hard-block categories, never relaxable.
+  { label: "narrative hate/threatening always blocks", preset: "narrative", categories: { "hate/threatening": true }, scores: { "hate/threatening": 0.01 }, expectBlocked: true },
+  { label: "narrative sexual always blocks", preset: "narrative", categories: { sexual: true }, scores: { sexual: 0.01 }, expectBlocked: true },
+  { label: "narrative sexual/minors always blocks", preset: "narrative", categories: { "sexual/minors": true }, scores: { "sexual/minors": 0.01 }, expectBlocked: true },
+  { label: "narrative self-harm always blocks", preset: "narrative", categories: { "self-harm": true }, scores: { "self-harm": 0.01 }, expectBlocked: true },
+  { label: "narrative self-harm/intent always blocks", preset: "narrative", categories: { "self-harm/intent": true }, scores: { "self-harm/intent": 0.01 }, expectBlocked: true },
+  { label: "narrative self-harm/instructions always blocks", preset: "narrative", categories: { "self-harm/instructions": true }, scores: { "self-harm/instructions": 0.01 }, expectBlocked: true },
+  { label: "narrative illicit/violent always blocks", preset: "narrative", categories: { "illicit/violent": true }, scores: { "illicit/violent": 0.01 }, expectBlocked: true },
+
+  // Narrative — multi-category precedence (hard-block wins over allowlist).
+  { label: "narrative violence+harassment both under threshold", preset: "narrative", categories: { violence: true, harassment: true }, scores: { violence: 0.5, harassment: 0.3 }, expectBlocked: false },
+  { label: "narrative violence+sexual/minors blocks", preset: "narrative", categories: { violence: true, "sexual/minors": true }, scores: { violence: 0.1, "sexual/minors": 0.01 }, expectBlocked: true },
+  { label: "narrative illicit+illicit/violent blocks", preset: "narrative", categories: { illicit: true, "illicit/violent": true }, scores: { illicit: 0.1, "illicit/violent": 0.01 }, expectBlocked: true },
+  { label: "narrative hate+hate/threatening blocks", preset: "narrative", categories: { hate: true, "hate/threatening": true }, scores: { hate: 0.1, "hate/threatening": 0.01 }, expectBlocked: true },
+
+  // Narrative — unknown/unmapped active category fails closed.
+  { label: "narrative unknown active category blocks", preset: "narrative", categories: { weapons: true } as ModerationActiveCategories, scores: { weapons: 0.01 }, expectBlocked: true },
+
+  // Raw-text fiction framing must not drive this decision — the helper never
+  // sees prompt text, only the structured preset. Non-narrative still blocks
+  // regardless of how "fictional" the categories look.
+  { label: "non-narrative + flagged blocks regardless of category shape", preset: "classic-asmr", categories: { violence: true }, scores: { violence: 0.1 }, expectBlocked: true },
+
+  // Candidate C fail-closed edge cases — no reliably-active category.
+  { label: "narrative flagged, categories undefined blocks", preset: "narrative", categories: undefined as unknown as ModerationActiveCategories, scores: undefined, expectBlocked: true },
+  { label: "narrative flagged, categories empty object blocks", preset: "narrative", categories: {}, scores: undefined, expectBlocked: true },
+
+  // Candidate C fail-closed edge cases — active allowlist category, invalid score.
+  { label: "narrative violence active, scores empty object blocks", preset: "narrative", categories: { violence: true }, scores: {}, expectBlocked: true },
+  { label: "narrative violence active, score NaN blocks", preset: "narrative", categories: { violence: true }, scores: { violence: NaN }, expectBlocked: true },
+  { label: "narrative violence active, scores undefined blocks", preset: "narrative", categories: { violence: true }, scores: undefined, expectBlocked: true },
+  { label: "narrative violence active, score -Infinity blocks", preset: "narrative", categories: { violence: true }, scores: { violence: -Infinity }, expectBlocked: true },
+  { label: "narrative violence active, score +Infinity blocks", preset: "narrative", categories: { violence: true }, scores: { violence: Infinity }, expectBlocked: true },
+];
+
+function runCandidateC(): number {
+  let passed = 0;
+  let failed = 0;
+  for (const c of candidateCCases) {
+    const decision = evaluateFlaggedModerationResult(c.preset, c.categories, c.scores);
+    const ok = decision.blocked === c.expectBlocked;
+    const status = ok ? "PASS" : "FAIL";
+    console.log(
+      `[${status}] expectBlocked=${String(c.expectBlocked).padEnd(5)} actual=${String(decision.blocked).padEnd(5)} reason=${decision.reason.padEnd(28)} ${c.label}`
+    );
+    if (ok) passed++; else failed++;
+  }
+  console.log("");
+  console.log(`Candidate C total: ${passed + failed}   Passed: ${passed}   Failed: ${failed}`);
+  return failed;
+}
+
+const localFailed = run();
+const candidateCFailed = runCandidateC();
+if (localFailed > 0 || candidateCFailed > 0) process.exit(1);
