@@ -26,11 +26,16 @@ export type PromptGateCode =
   | "VALIDATION_TOO_SHORT"
   | "VALIDATION_TOO_LONG"
   | "VALIDATION_GIBBERISH"
-  | "SAFETY_BLOCKED";
+  | "SAFETY_BLOCKED"
+  // F-020 — technical moderation failure codes. Never evidence of a content
+  // policy violation; must never be represented as SAFETY_BLOCKED and must
+  // never resolve to `ok: true`.
+  | "MODERATION_CONFIGURATION_ERROR"
+  | "MODERATION_UNAVAILABLE";
 
 export type PromptGateOutcome =
   | { ok: true; normalized: string }
-  | { ok: false; code: PromptGateCode; message: string; httpStatus: 400 | 422 };
+  | { ok: false; code: PromptGateCode; message: string; httpStatus: 400 | 422 | 500 | 503 };
 
 // F-015 Candidate C — structured preset context, additive/optional. Passing
 // no options (or omitting preset) preserves pre-F-015 behavior exactly.
@@ -50,6 +55,11 @@ export const PROMPT_GATE_COPY: Record<PromptGateCode, string> = {
     "Damit daraus etwas Schönes entstehen kann, braucht der Prompt noch etwas mehr Richtung.",
   SAFETY_BLOCKED:
     "Diese Art von Inhalt unterstützen wir nicht. Magst du ein anderes Thema wählen?",
+  // F-020 — technical failures. Must not read as a content-policy verdict.
+  MODERATION_CONFIGURATION_ERROR:
+    "Die Inhaltsprüfung ist derzeit nicht verfügbar. Bitte versuche es später erneut.",
+  MODERATION_UNAVAILABLE:
+    "Die Inhaltsprüfung ist momentan nicht erreichbar. Bitte versuche es in Kürze erneut.",
 };
 
 const MIN_LENGTH = 4;       // hard floor — anything shorter cannot carry meaning
@@ -439,102 +449,169 @@ function exceedsThreshold(
   return null;
 }
 
+// F-020 — shape a moderation response must have before the existing
+// decision logic (flagged branch / threshold branch) is allowed to run.
+// A response that fails this check is technical moderation unavailability,
+// never an implicit ALLOW. Pure and side-effect-free so it can be unit
+// tested with synthetic malformed responses — no OpenAI network call.
+export type ValidatedModerationResult = {
+  flagged: boolean;
+  categories?: ModerationActiveCategories;
+  category_scores?: ModerationCategoryScores;
+};
+
+export function validateModerationResult(
+  resp: unknown
+): { ok: true; result: ValidatedModerationResult } | { ok: false } {
+  if (!resp || typeof resp !== "object") return { ok: false };
+  const results = (resp as { results?: unknown }).results;
+  if (!Array.isArray(results) || results.length === 0) return { ok: false };
+  const first = results[0];
+  if (!first || typeof first !== "object") return { ok: false };
+  const flagged = (first as { flagged?: unknown }).flagged;
+  if (typeof flagged !== "boolean") return { ok: false };
+  return { ok: true, result: first as ValidatedModerationResult };
+}
+
+// F-020 — terminal provider/SDK failure classification. Extracted as a
+// named function so tests can exercise the catch-path outcome
+// deterministically (a thrown Error) without making a real network call.
+// The existing OpenAI SDK retry behavior already ran before this throw
+// reaches here; no additional application-level retry is added.
+export function moderationUnavailableOutcome(err: unknown): PromptGateOutcome {
+  const msg = err instanceof Error ? err.message : "unknown";
+  console.error("[promptGate] moderation provider call failed:", msg);
+  return {
+    ok: false,
+    code: "MODERATION_UNAVAILABLE",
+    message: PROMPT_GATE_COPY.MODERATION_UNAVAILABLE,
+    httpStatus: 503,
+  };
+}
+
+// F-020 — test-only seam. Optional, defaults to the real OpenAI moderation
+// call, so production behavior is unchanged when omitted (every existing
+// caller omits it). Exists solely so scripts/test-prompt-gate.ts can force
+// the real try/catch below to throw deterministically, without a network
+// call or a generalized provider abstraction.
+export type ModerationCaller = (client: OpenAI, text: string) => Promise<unknown>;
+
 export async function moderatePromptContent(
   input: string,
   options?: PromptGateOptions,
+  __testModerationCall?: ModerationCaller,
 ): Promise<PromptGateOutcome> {
   const text = input.trim();
 
-  // If the OpenAI key isn't configured we cannot moderate. Fail open with a
-  // log warning rather than blocking legitimate users in dev environments.
+  // F-020 — missing configuration is a server config failure, not
+  // permission to bypass moderation. Never ok:true.
   if (!process.env.OPENAI_API_KEY) {
-    console.warn("[promptGate] moderation skipped: OPENAI_API_KEY missing");
-    return { ok: true, normalized: text };
+    console.error("[promptGate] moderation configuration error: OPENAI_API_KEY missing");
+    return {
+      ok: false,
+      code: "MODERATION_CONFIGURATION_ERROR",
+      message: PROMPT_GATE_COPY.MODERATION_CONFIGURATION_ERROR,
+      httpStatus: 500,
+    };
   }
 
+  let resp: unknown;
   try {
     const client = getOpenAI();
-    const resp = await client.moderations.create(
-      { model: MODERATION_MODEL, input: text },
-      { timeout: MODERATION_TIMEOUT_MS }
-    );
-
-    const result = resp.results?.[0];
-    const scores = result?.category_scores as unknown as Record<string, number> | undefined;
-
-    // Context-aware threshold selection. Fictional/historical framing without
-    // any extremist subject switches to the Narrative-Story "bookstore"
-    // thresholds: violence is relaxed for genre fiction, while sexual,
-    // self-harm, illicit, and threatening categories remain tightened. Fiction
-    // framing is only a *context signal* — it is not a safety bypass.
-    const hasExtremistSubject = EXTREMIST_SUBJECT_RE.test(text);
-    const fictionalContext = !hasExtremistSubject && looksLikeFictionOrHistorical(text);
-    const thresholds = fictionalContext ? FICTION_THRESHOLDS : STRICT_THRESHOLDS;
-
-    // OpenAI's own `flagged` verdict is always honoured. Fiction framing is
-    // context, not a bypass — a prompt that OpenAI's moderation model marks
-    // as flagged is blocked regardless of genre framing. Category thresholds
-    // below add a second, stricter layer for borderline scores.
-    if (result?.flagged) {
-      // F-015 Candidate C: preset === "narrative" gets a category-aware
-      // decision instead of the unconditional block below. Any other preset
-      // (including undefined) falls through to the pre-F-015 behavior.
-      const categories = result.categories as unknown as ModerationActiveCategories | undefined;
-      const decision = evaluateFlaggedModerationResult(options?.preset, categories, scores);
-
-      if (!decision.blocked) {
-        // Narrative + every active category within the compliance allowlist
-        // + all under FICTION_THRESHOLDS — final ALLOW for this flagged result.
-        return { ok: true, normalized: text };
-      }
-
-      // Diagnostic — record which category scores accompanied the flag, so
-      // we can tune thresholds without shipping full prompt content.
-      const s = scores ?? {};
-      console.warn("[promptGate] moderation blocked: flagged=true", {
-        fictionalContext,
-        preset: options?.preset,
-        reason: decision.reason,
-        "hate": s["hate"],
-        "hate/threatening": s["hate/threatening"],
-        "harassment": s["harassment"],
-        "harassment/threatening": s["harassment/threatening"],
-        "violence": s["violence"],
-        "violence/graphic": s["violence/graphic"],
-        "self-harm": s["self-harm"],
-        "self-harm/instructions": s["self-harm/instructions"],
-        "sexual": s["sexual"],
-        "sexual/minors": s["sexual/minors"],
-        "illicit": s["illicit"],
-        "illicit/violent": s["illicit/violent"],
-      });
-      return {
-        ok: false,
-        code: "SAFETY_BLOCKED",
-        message: PROMPT_GATE_COPY.SAFETY_BLOCKED,
-        httpStatus: 422,
-      };
-    }
-    const hit = exceedsThreshold(scores, thresholds);
-    if (hit) {
-      console.warn("[promptGate] moderation blocked: threshold hit", {
-        category: hit.category,
-        score: hit.score,
-        fictionalContext,
-      });
-      return {
-        ok: false,
-        code: "SAFETY_BLOCKED",
-        message: PROMPT_GATE_COPY.SAFETY_BLOCKED,
-        httpStatus: 422,
-      };
-    }
-    return { ok: true, normalized: text };
+    resp = __testModerationCall
+      ? await __testModerationCall(client, text)
+      : await client.moderations.create(
+          { model: MODERATION_MODEL, input: text },
+          { timeout: MODERATION_TIMEOUT_MS }
+        );
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "unknown";
-    console.warn("[promptGate] moderation call failed, failing open:", msg);
-    return { ok: true, normalized: text };
+    return moderationUnavailableOutcome(err);
   }
+
+  const validated = validateModerationResult(resp);
+  if (!validated.ok) {
+    // Do not dump the raw provider response (may carry user content) — just
+    // identify the failure class for debugging.
+    console.error("[promptGate] moderation response malformed: missing/invalid results or flagged");
+    return {
+      ok: false,
+      code: "MODERATION_UNAVAILABLE",
+      message: PROMPT_GATE_COPY.MODERATION_UNAVAILABLE,
+      httpStatus: 503,
+    };
+  }
+
+  const result = validated.result;
+  const scores = result.category_scores as unknown as Record<string, number> | undefined;
+
+  // Context-aware threshold selection. Fictional/historical framing without
+  // any extremist subject switches to the Narrative-Story "bookstore"
+  // thresholds: violence is relaxed for genre fiction, while sexual,
+  // self-harm, illicit, and threatening categories remain tightened. Fiction
+  // framing is only a *context signal* — it is not a safety bypass.
+  const hasExtremistSubject = EXTREMIST_SUBJECT_RE.test(text);
+  const fictionalContext = !hasExtremistSubject && looksLikeFictionOrHistorical(text);
+  const thresholds = fictionalContext ? FICTION_THRESHOLDS : STRICT_THRESHOLDS;
+
+  // OpenAI's own `flagged` verdict is always honoured. Fiction framing is
+  // context, not a bypass — a prompt that OpenAI's moderation model marks
+  // as flagged is blocked regardless of genre framing. Category thresholds
+  // below add a second, stricter layer for borderline scores.
+  if (result?.flagged) {
+    // F-015 Candidate C: preset === "narrative" gets a category-aware
+    // decision instead of the unconditional block below. Any other preset
+    // (including undefined) falls through to the pre-F-015 behavior.
+    const categories = result.categories as unknown as ModerationActiveCategories | undefined;
+    const decision = evaluateFlaggedModerationResult(options?.preset, categories, scores);
+
+    if (!decision.blocked) {
+      // Narrative + every active category within the compliance allowlist
+      // + all under FICTION_THRESHOLDS — final ALLOW for this flagged result.
+      return { ok: true, normalized: text };
+    }
+
+    // Diagnostic — record which category scores accompanied the flag, so
+    // we can tune thresholds without shipping full prompt content.
+    const s = scores ?? {};
+    console.warn("[promptGate] moderation blocked: flagged=true", {
+      fictionalContext,
+      preset: options?.preset,
+      reason: decision.reason,
+      "hate": s["hate"],
+      "hate/threatening": s["hate/threatening"],
+      "harassment": s["harassment"],
+      "harassment/threatening": s["harassment/threatening"],
+      "violence": s["violence"],
+      "violence/graphic": s["violence/graphic"],
+      "self-harm": s["self-harm"],
+      "self-harm/instructions": s["self-harm/instructions"],
+      "sexual": s["sexual"],
+      "sexual/minors": s["sexual/minors"],
+      "illicit": s["illicit"],
+      "illicit/violent": s["illicit/violent"],
+    });
+    return {
+      ok: false,
+      code: "SAFETY_BLOCKED",
+      message: PROMPT_GATE_COPY.SAFETY_BLOCKED,
+      httpStatus: 422,
+    };
+  }
+  const hit = exceedsThreshold(scores, thresholds);
+  if (hit) {
+    console.warn("[promptGate] moderation blocked: threshold hit", {
+      category: hit.category,
+      score: hit.score,
+      fictionalContext,
+    });
+    return {
+      ok: false,
+      code: "SAFETY_BLOCKED",
+      message: PROMPT_GATE_COPY.SAFETY_BLOCKED,
+      httpStatus: 422,
+    };
+  }
+  return { ok: true, normalized: text };
 }
 
 // Refusal-text detection for prompt-improve.
