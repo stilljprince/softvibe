@@ -13,13 +13,6 @@ const DEFAULT_VOICE =
 
 // Optional: spezielle Voices pro Preset (kannst du in .env setzen)
 
-
-const VOICE_SLEEP_STORY =
-  process.env.ELEVENLABS_VOICE_SLEEP_STORY_ID || DEFAULT_VOICE;
-
-const VOICE_MEDITATION =
-  process.env.ELEVENLABS_VOICE_MEDITATION_ID || DEFAULT_VOICE;
-
 // Read at call time so deployments that set the env after module init still work.
 // One slot per distinct fallback path so each path warns at most once.
 const kidsStoryWarned = new Set<string>();
@@ -103,9 +96,14 @@ export function resolveVoiceId(
     return explicitVoiceId.trim();
   }
 
-  // ✅ SLEEP STORY: immer feste Erzählerstimme (male), Style/Gender ignorieren
+  // ✅ SLEEP STORY: gendered voices, falling back to the generic Sleep Story
+  // voice (and then the global default) if the gendered env is missing.
   if (preset === "sleep-story") {
-    return VOICE_SLEEP_STORY;
+    const femaleVoice = process.env.ELEVENLABS_VOICE_SLEEP_STORY_FEMALE_ID?.trim();
+    const maleVoice = process.env.ELEVENLABS_VOICE_SLEEP_STORY_MALE_ID?.trim();
+    const genericVoice = process.env.ELEVENLABS_VOICE_SLEEP_STORY_ID?.trim();
+    const genderVoice = voiceGender === "male" ? maleVoice : femaleVoice;
+    return genderVoice || genericVoice || DEFAULT_VOICE;
   }
 
   // ✅ CLASSIC ASMR: abhängig von Style + Gender
@@ -120,9 +118,14 @@ export function resolveVoiceId(
       : VOICE_ASMR_SOFT_FEMALE;
   }
 
-  // ✅ MEDITATION & Fallback
+  // ✅ MEDITATION: gendered voices, falling back to the generic Meditation
+  // voice (and then the global default) if the gendered env is missing.
   if (preset === "meditation") {
-    return VOICE_MEDITATION;
+    const femaleVoice = process.env.ELEVENLABS_VOICE_MEDITATION_FEMALE_ID?.trim();
+    const maleVoice = process.env.ELEVENLABS_VOICE_MEDITATION_MALE_ID?.trim();
+    const genericVoice = process.env.ELEVENLABS_VOICE_MEDITATION_ID?.trim();
+    const genderVoice = voiceGender === "male" ? maleVoice : femaleVoice;
+    return genderVoice || genericVoice || DEFAULT_VOICE;
   }
 
   // ✅ KIDS STORY: gendered voices (Lumen V2 / Atlas V5) with layered fallbacks.

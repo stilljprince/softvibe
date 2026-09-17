@@ -67,6 +67,24 @@ function setNarrativeEnv(female?: string, male?: string) {
   else delete process.env.ELEVENLABS_VOICE_NARRATIVE_MALE_ID;
 }
 
+function setSleepStoryEnv(female?: string, male?: string, generic?: string) {
+  if (female) process.env.ELEVENLABS_VOICE_SLEEP_STORY_FEMALE_ID = female;
+  else delete process.env.ELEVENLABS_VOICE_SLEEP_STORY_FEMALE_ID;
+  if (male) process.env.ELEVENLABS_VOICE_SLEEP_STORY_MALE_ID = male;
+  else delete process.env.ELEVENLABS_VOICE_SLEEP_STORY_MALE_ID;
+  if (generic) process.env.ELEVENLABS_VOICE_SLEEP_STORY_ID = generic;
+  else delete process.env.ELEVENLABS_VOICE_SLEEP_STORY_ID;
+}
+
+function setMeditationEnv(female?: string, male?: string, generic?: string) {
+  if (female) process.env.ELEVENLABS_VOICE_MEDITATION_FEMALE_ID = female;
+  else delete process.env.ELEVENLABS_VOICE_MEDITATION_FEMALE_ID;
+  if (male) process.env.ELEVENLABS_VOICE_MEDITATION_MALE_ID = male;
+  else delete process.env.ELEVENLABS_VOICE_MEDITATION_MALE_ID;
+  if (generic) process.env.ELEVENLABS_VOICE_MEDITATION_ID = generic;
+  else delete process.env.ELEVENLABS_VOICE_MEDITATION_ID;
+}
+
 async function runCases(
   resolveVoiceId: ResolveFn,
   __resetKidsStoryWarnedForTests: ResetFn,
@@ -250,26 +268,127 @@ async function runCases(
     },
   },
   {
-    name: "sleep-story unchanged (env-driven, ready for future Atlas V6 swap)",
+    name: "sleep-story + female resolves to FEMALE env when set",
     run: () => {
-      assertEqual(resolveVoiceId("sleep-story"), "SLEEP_VOICE_ID", "sleep-story voice");
-      // gender/style ignored for sleep-story
+      setSleepStoryEnv("SLEEP_F_ID", "SLEEP_M_ID", "SLEEP_VOICE_ID");
       assertEqual(
-        resolveVoiceId("sleep-story", "whisper", "female"),
-        "SLEEP_VOICE_ID",
-        "sleep-story ignores style/gender"
-      );
-      assertEqual(
-        resolveVoiceId("sleep-story", "soft", "male"),
-        "SLEEP_VOICE_ID",
-        "sleep-story ignores male gender"
+        resolveVoiceId("sleep-story", "soft", "female"),
+        "SLEEP_F_ID",
+        "sleep-story female voice"
       );
     },
   },
   {
-    name: "meditation unchanged",
+    name: "sleep-story + male resolves to MALE env when set",
     run: () => {
-      assertEqual(resolveVoiceId("meditation"), "MEDITATION_VOICE_ID", "meditation voice");
+      setSleepStoryEnv("SLEEP_F_ID", "SLEEP_M_ID", "SLEEP_VOICE_ID");
+      assertEqual(
+        resolveVoiceId("sleep-story", "whisper", "male"),
+        "SLEEP_M_ID",
+        "sleep-story male voice (style ignored)"
+      );
+    },
+  },
+  {
+    name: "sleep-story female-specific missing → falls back to generic Sleep Story ID",
+    run: () => {
+      setSleepStoryEnv(undefined, "SLEEP_M_ID", "SLEEP_VOICE_ID");
+      assertEqual(
+        resolveVoiceId("sleep-story", "soft", "female"),
+        "SLEEP_VOICE_ID",
+        "sleep-story female falls back to generic"
+      );
+    },
+  },
+  {
+    name: "sleep-story male-specific missing → falls back to generic Sleep Story ID",
+    run: () => {
+      setSleepStoryEnv("SLEEP_F_ID", undefined, "SLEEP_VOICE_ID");
+      assertEqual(
+        resolveVoiceId("sleep-story", "soft", "male"),
+        "SLEEP_VOICE_ID",
+        "sleep-story male falls back to generic"
+      );
+    },
+  },
+  {
+    name: "sleep-story all sleep-story-specific vars missing → global default fallback",
+    run: () => {
+      setSleepStoryEnv(undefined, undefined, undefined);
+      assertEqual(
+        resolveVoiceId("sleep-story", "soft", "female"),
+        "DEFAULT_VOICE_ID",
+        "sleep-story female global fallback"
+      );
+      assertEqual(
+        resolveVoiceId("sleep-story", "soft", "male"),
+        "DEFAULT_VOICE_ID",
+        "sleep-story male global fallback"
+      );
+      // restore for any later cases that assume the original generic setup
+      setSleepStoryEnv(undefined, undefined, "SLEEP_VOICE_ID");
+    },
+  },
+  {
+    name: "meditation + female resolves to FEMALE env when set",
+    run: () => {
+      setMeditationEnv("MEDITATION_F_ID", "MEDITATION_M_ID", "MEDITATION_VOICE_ID");
+      assertEqual(
+        resolveVoiceId("meditation", "soft", "female"),
+        "MEDITATION_F_ID",
+        "meditation female voice"
+      );
+    },
+  },
+  {
+    name: "meditation + male resolves to MALE env when set",
+    run: () => {
+      setMeditationEnv("MEDITATION_F_ID", "MEDITATION_M_ID", "MEDITATION_VOICE_ID");
+      assertEqual(
+        resolveVoiceId("meditation", "soft", "male"),
+        "MEDITATION_M_ID",
+        "meditation male voice"
+      );
+    },
+  },
+  {
+    name: "meditation female-specific missing → falls back to generic Meditation ID",
+    run: () => {
+      setMeditationEnv(undefined, "MEDITATION_M_ID", "MEDITATION_VOICE_ID");
+      assertEqual(
+        resolveVoiceId("meditation", "soft", "female"),
+        "MEDITATION_VOICE_ID",
+        "meditation female falls back to generic"
+      );
+    },
+  },
+  {
+    name: "meditation male-specific missing → falls back to generic Meditation ID",
+    run: () => {
+      setMeditationEnv("MEDITATION_F_ID", undefined, "MEDITATION_VOICE_ID");
+      assertEqual(
+        resolveVoiceId("meditation", "soft", "male"),
+        "MEDITATION_VOICE_ID",
+        "meditation male falls back to generic"
+      );
+    },
+  },
+  {
+    name: "meditation all meditation-specific vars missing → global default fallback",
+    run: () => {
+      setMeditationEnv(undefined, undefined, undefined);
+      assertEqual(
+        resolveVoiceId("meditation", "soft", "female"),
+        "DEFAULT_VOICE_ID",
+        "meditation female global fallback"
+      );
+      assertEqual(
+        resolveVoiceId("meditation", "soft", "male"),
+        "DEFAULT_VOICE_ID",
+        "meditation male global fallback"
+      );
+      // restore for any later cases that assume the original generic setup
+      setMeditationEnv(undefined, undefined, "MEDITATION_VOICE_ID");
     },
   },
   {
